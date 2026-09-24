@@ -68,22 +68,15 @@ pub const Folded = struct {
     pub inline fn reach(self: *Folded, address: u32, comptime n: usize, comptime kind: contract.Kind, host: anytype, comptime describe: anytype) []u8 {
         const bytes = self.span(address, n, kind);
         if (bytes.len != 0) return bytes;
+        const refused_block = self.refused[comptime lane(kind)];
+        if (@as(u64, address -% refused_block.base) < refused_block.len) return &.{};
         @call(.never_inline, refold, .{ self, address, kind, host, describe });
         return self.span(address, n, kind);
     }
 
     noinline fn refold(self: *Folded, address: u32, kind: contract.Kind, host: anytype, comptime describe: anytype) void {
-        if (self.holds(address, kind)) return;
         const block = describe(host, address, kind);
         if (block.host == null) self.refuse(kind, block) else self.publish(kind, block);
-    }
-
-    /// Whether the lane has already answered for this address, as a block or as a refusal.
-    pub fn holds(self: *const Folded, address: u32, kind: contract.Kind) bool {
-        const at = lane(kind);
-        if (@as(u64, address -% self.refused[at].base) < self.refused[at].len) return true;
-        const block = self.blocks[at];
-        return @as(u64, address -% block.base) < block.len;
     }
 
     /// Remembers a run nothing answers, so the next access to it goes straight to the slow lane.
