@@ -351,8 +351,9 @@ pub const Scb = struct {
     /// The word a register read answers; a register the core lacks answers null, and debug reads zero.
     pub fn readRegister(self: *Self, offset: u32) ?u32 {
         if (self.answers(offset)) return 0;
-        const i = slot(offset) orelse return null;
-        return if (self.has(i)) self.words[i] else null;
+        const i = index(offset);
+        if (i == absent or !self.has(i)) return null;
+        return self.words[i];
     }
 
     /// Takes a register write, keeping the writable bits; a status register is cleared by what it is written.
@@ -365,9 +366,13 @@ pub const Scb = struct {
         return true;
     }
 
+    fn index(offset: u32) u8 {
+        if (offset >= size or offset & 3 != 0) return absent;
+        return map[offset / 4];
+    }
+
     fn slot(offset: u32) ?u8 {
-        if (offset >= size or offset & 3 != 0) return null;
-        const i = map[offset / 4];
+        const i = index(offset);
         return if (i == absent) null else i;
     }
 
