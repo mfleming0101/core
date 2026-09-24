@@ -1,0 +1,41 @@
+# The probe lines whose two sides disagree, with the section of the ARMv7-M Architecture Reference
+# Manual that decides each and the side it decides for. mkprobe.sh reports these, takes them out of
+# the diff, and fails if one of them ever stops disagreeing, so this file describes the baseline as
+# it is rather than as it was.
+# Every bare section number below is v7-M, Arm DDI 0403E.e; see the manual table in DESIGN.md.
+#
+# SysTick, B3.3. QEMU's mps2-an385 advertises a reference clock that its SysTick never counts on: a
+# run with CLKSOURCE clear leaves SYST_CVR at zero. SYST_CALIB.NOREF and SYST_CSR.CLKSOURCE follow
+# from that, and the baseline's pair is the one that agrees with its own timer. How fast the counter
+# runs is not compared here; QEMU drives it from the host clock and this layer from retired cycles,
+# so the probe would race. The tier-two lockstep traces compare that model.
+syst_calib qemu=0000270f core=80000000 verdict=B3.3.4: core, NOREF says whether the machine drives the reference clock and this one does not.
+syst_calib.w qemu=0000270f core=80000000 verdict=B3.3.4: core, for the reason syst_calib gives; the register is read-only on both.
+syst_csr qemu=00000000 core=00000004 verdict=B3.3.3: core, CLKSOURCE reads as one wherever NOREF is set.
+# Debug, C1.6.
+demcr.w qemu=00000000 core=01000000 verdict=C1.6.5: core on TRCENA, the bit DWT_CTRL needs; neither implements the MON_ or VC_ fields and QEMU reads the whole register as zero.
+# The System Control Block, B3.2.
+scr.w qemu=fffffff3 core=00000016 verdict=B3.2.7: core, SCR holds SEVONPEND, SLEEPDEEP and SLEEPONEXIT and nothing else; QEMU keeps every reserved bit and drops SLEEPDEEP.
+shpr3.w qemu=ffff00ff core=f0f00000 fixed=f0f000f0 verdict=B3.2.10: QEMU on the low lane, PRI_12 is DebugMonitor and Armv7-M implements it; the width differs as shpr1.w does, so a core that holds PRI_12 in four bits reads back the fixed value.
+# The priority field width, B1.5.4 and B3.4.9: IMPLEMENTATION DEFINED between three and eight bits.
+# QEMU's Cortex-M3 implements eight, this layer's spec four, and neither is the architecture's
+# business. Every priority register carries the difference.
+shpr1.w qemu=00ffffff core=00f0f0f0 verdict=B1.5.4: neither, eight implemented priority bits against four.
+shpr2.w qemu=ff000000 core=f0000000 verdict=B1.5.4: neither, as shpr1.w; PRI_11 is the only lane either implements.
+nvic_ipr0.w qemu=ffffffff core=f0f0f0f0 verdict=B3.4.9: neither, eight implemented priority bits against four.
+nvic_ipr1.w qemu=ffffffff core=f0f0f0f0 verdict=B3.4.9: neither, as nvic_ipr0.w.
+nvic_ipr2.w qemu=ffffffff core=f0f0f0f0 verdict=B3.4.9: neither, as nvic_ipr0.w.
+nvic_ipr3.w qemu=ffffffff core=f0f0f0f0 verdict=B3.4.9: neither, as nvic_ipr0.w.
+nvic_ipr4.w qemu=ffffffff core=f0f0f0f0 verdict=B3.4.9: neither, as nvic_ipr0.w.
+nvic_ipr5.w qemu=ffffffff core=f0f0f0f0 verdict=B3.4.9: neither, as nvic_ipr0.w.
+nvic_ipr6.w qemu=ffffffff core=f0f0f0f0 verdict=B3.4.9: neither, as nvic_ipr0.w.
+nvic_ipr7.w qemu=ffffffff core=f0f0f0f0 verdict=B3.4.9: neither, as nvic_ipr0.w.
+# The memory protection unit, B3.5.
+mpu_rnr.w qemu=00000000 core=00000007 verdict=B3.5.5: core, the reserved bits of REGION are RAZ/WI and the three implemented ones still take the write; QEMU discards the write whole.
+mpu_rasr.w qemu=173fff3f core=ffffffff verdict=B3.5.9: QEMU, bits 31:29, 27, 23:22 and 7:6 are reserved and the baseline stores MPU_RASR unmasked.
+# The data watchpoint and trace unit, C1.8. QEMU implements none of it on this machine and reads the
+# whole block as zero, which also reads DWT_CTRL.NOCYCCNT as zero: it denies having a cycle counter
+# and claims one in the same word. The baseline models the Cortex-M3's block.
+dwt_ctrl qemu=00000000 core=0d000000 verdict=C1.8.7: core, the m3 has no trace packets, external trigger or profile counters and does have CYCCNT.
+dwt_ctrl.w qemu=00000000 core=0d000001 verdict=C1.8.7: core, CYCCNTENA is the one writable bit of the block the m3 implements.
+dwt.cyccnt.rises qemu=00000000 core=00000001 verdict=C1.8.8: core, DWT_CYCCNT counts while DEMCR.TRCENA and DWT_CTRL.CYCCNTENA are set.

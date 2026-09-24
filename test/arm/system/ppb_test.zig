@@ -1,0 +1,57 @@
+const std = @import("std");
+const bus = @import("../../../src/arm/system/ppb.zig");
+
+test "addresses outside the private peripheral bus belong to the memory of the part" {
+    try std.testing.expectEqual(.memory, bus.region(0x0000_0000));
+    try std.testing.expectEqual(.memory, bus.region(0x2000_0000));
+    try std.testing.expectEqual(.memory, bus.region(0xdfff_fffc));
+    try std.testing.expectEqual(.memory, bus.region(0xe010_0000));
+    try std.testing.expectEqual(.memory, bus.region(0xffff_fffc));
+}
+
+test "the sixteen bytes from 0xE000E010 are the SysTick, B3.3.2" {
+    try std.testing.expectEqual(.systick, bus.region(0xe000_e010));
+    try std.testing.expectEqual(.systick, bus.region(0xe000_e01c));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_e020));
+}
+
+test "the sixteen bytes from 0xE000E000 hold ICTR and ACTLR, B3.2.24 B3.2.25" {
+    try std.testing.expectEqual(.control, bus.region(0xe000_e000));
+    try std.testing.expectEqual(.control, bus.region(0xe000_e00c));
+    try std.testing.expectEqual(.systick, bus.region(0xe000_e010));
+}
+
+test "the 592 bytes from 0xE000ED00 are the System Control Block, B3.2.2" {
+    try std.testing.expectEqual(.scb, bus.region(0xe000_ed00));
+    try std.testing.expectEqual(.scb, bus.region(0xe000_ed1c));
+    try std.testing.expectEqual(.scb, bus.region(0xe000_ed3f));
+    try std.testing.expectEqual(.scb, bus.region(0xe000_ed88));
+    try std.testing.expectEqual(.scb, bus.region(0xe000_ed90));
+    try std.testing.expectEqual(.scb, bus.region(0xe000_ef00));
+    try std.testing.expectEqual(.scb, bus.region(0xe000_ef3c));
+    try std.testing.expectEqual(.scb, bus.region(0xe000_ef48));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_ef50));
+}
+
+test "the 4KB from 0xE0000000 are the ITM and the 4KB from 0xE0001000 the DWT, C1.7 C1.8" {
+    try std.testing.expectEqual(.itm, bus.region(0xe000_0000));
+    try std.testing.expectEqual(.itm, bus.region(0xe000_0ffc));
+    try std.testing.expectEqual(.dwt, bus.region(0xe000_1000));
+    try std.testing.expectEqual(.dwt, bus.region(0xe000_1ffc));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_2000));
+}
+
+test "the rest of the private peripheral bus is unmapped in this core" {
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_dffc));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_ecfc));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe004_0000));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe00f_fffc));
+}
+
+test "the NVIC occupies 0xE000E100 to 0xE000E5EF, the whole architectural window, B3.4.1" {
+    try std.testing.expectEqual(bus.Region.nvic, bus.region(0xe000_e100));
+    try std.testing.expectEqual(bus.Region.nvic, bus.region(0xe000_e41c));
+    try std.testing.expectEqual(bus.Region.nvic, bus.region(0xe000_e5ec));
+    try std.testing.expectEqual(bus.Region.ppb_unmapped, bus.region(0xe000_e5f0));
+    try std.testing.expectEqual(bus.Region.ppb_unmapped, bus.region(0xe000_e0fc));
+}

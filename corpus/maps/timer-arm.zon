@@ -1,0 +1,10 @@
+.{
+    .core = .m3,
+    .regions = .{
+        .{ .base = 0x00000000, .size = 0x100000, .writable = false },
+        .{ .base = 0x00200000, .size = 0x100000, .writable = true },
+    },
+    .devices = .{
+        .{ .model = "probe-timer", .base = 0x40010000, .size = 0x100 },
+    },
+}

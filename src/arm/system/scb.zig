@@ -1,0 +1,383 @@
+//! The System Control Block: the identity, vector table, control, priority and fault status
+//! registers. Which registers a core has, what each resets to and which of its bits a program
+//! may write are a Profile built from the core's spec at compile time, so the block itself is
+//! one word per register and a pointer to that profile. A core with the Security Extension
+//! keeps two blocks, the processor choosing by the state the access is made in.
+const core = @import("core.zig");
+const Stop = @import("isa").arm.Stop;
+
+/// Where the System Control Block begins.
+pub const base: u32 = 0xe000_ed00;
+/// How wide the block is, the STIR and floating-point registers included.
+pub const size: u32 = 0x250;
+
+/// CPUID, at an offset from the base.
+pub const cpuid: u32 = 0x00;
+/// ICSR, which the processor answers from its own pending and active sets.
+pub const icsr: u32 = 0x04;
+/// VTOR, the base of the vector table.
+pub const vtor: u32 = 0x08;
+/// AIRCR, which carries the priority grouping, the reset request and the banking bits.
+pub const aircr: u32 = 0x0c;
+/// SCR, the sleep and SEVONPEND control.
+pub const scr: u32 = 0x10;
+/// CCR, whose reset value is a core property.
+pub const ccr: u32 = 0x14;
+/// SHPR1, the priorities of MemManage, BusFault and UsageFault.
+pub const shpr1: u32 = 0x18;
+/// SHPR2, the priority of SVCall.
+pub const shpr2: u32 = 0x1c;
+/// SHPR3, the priorities of PendSV and SysTick.
+pub const shpr3: u32 = 0x20;
+/// SHCSR, the enables of the configurable faults and the active bits beside them.
+pub const shcsr: u32 = 0x24;
+/// CFSR, the configurable fault status register.
+pub const cfsr: u32 = 0x28;
+/// HFSR, the hard fault status register.
+pub const hfsr: u32 = 0x2c;
+/// DFSR, the debug fault status register.
+pub const dfsr: u32 = 0x30;
+/// MMFAR, the address a MemManage fault reached.
+pub const mmfar: u32 = 0x34;
+/// BFAR, the address a BusFault reached.
+pub const bfar: u32 = 0x38;
+/// AFSR, the auxiliary fault status register.
+pub const afsr: u32 = 0x3c;
+/// CPACR, which enables the coprocessors.
+pub const cpacr: u32 = 0x88;
+/// Where the MPU registers begin within this window.
+pub const mpu_type: u32 = 0x90;
+/// Where the MPU registers end.
+pub const mpu_end: u32 = 0xc8;
+/// Where the debug registers begin, which the block swallows rather than models.
+pub const dhcsr: u32 = 0xf0;
+/// DEMCR, of which only TRCENA is kept.
+pub const demcr: u32 = 0xfc;
+/// STIR, which pends an interrupt by number.
+pub const stir: u32 = 0x200;
+/// FPCCR, the floating-point context control register.
+pub const fpccr: u32 = 0x234;
+/// FPCAR, the address a lazy floating-point frame was reserved at.
+pub const fpcar: u32 = 0x238;
+/// FPDSCR, the FPSCR a new context starts from.
+pub const fpdscr: u32 = 0x23c;
+/// MVFR0, a core property read back.
+pub const mvfr0: u32 = 0x240;
+/// MVFR1, a core property read back.
+pub const mvfr1: u32 = 0x244;
+/// MVFR2, a core property read back.
+pub const mvfr2: u32 = 0x248;
+/// The CPACR field that enables the floating-point coprocessor.
+pub const cp10: u32 = 0x3 << 20;
+/// The FPCCR bit that saves floating-point state automatically on exception entry.
+pub const aspen: u32 = 1 << 31;
+/// The FPCCR bit that makes that saving lazy.
+pub const lspen: u32 = 1 << 30;
+/// The FPCCR bit that makes a lazy frame carry the callee-saved registers too.
+pub const treat_as_secure: u32 = 1 << 26;
+/// The FPCCR bit recording that the lazy frame was reserved in Thread mode.
+pub const fp_thread: u32 = 1 << 3;
+/// The FPCCR bit recording that it was reserved in the Secure state.
+pub const fp_secure: u32 = 1 << 2;
+/// The FPCCR bit recording that it was reserved unprivileged.
+pub const fp_user: u32 = 1 << 1;
+/// The FPCCR bit saying a lazy frame is reserved and not yet filled.
+pub const lspact: u32 = 1 << 0;
+/// The FPCCR bit recording that UsageFault could be taken when the frame was reserved.
+pub const ufrdy: u32 = 1 << 10;
+/// The same for SecureFault.
+pub const sfrdy: u32 = 1 << 7;
+/// The same for BusFault.
+pub const bfrdy: u32 = 1 << 6;
+/// The same for HardFault.
+pub const hfrdy: u32 = 1 << 4;
+/// The same for MemManage.
+pub const mmrdy: u32 = 1 << 5;
+
+/// The AIRCR bit a program resets the core with.
+pub const sysresetreq: u32 = 1 << 2;
+/// The AIRCR bit that hands BusFault, HardFault and NMI to the Non-secure state.
+pub const bfhfnmins: u32 = 1 << 13;
+/// The AIRCR bit that halves the Non-secure priority range.
+pub const pris: u32 = 1 << 14;
+/// The ICSR bit that routes SysTick to the Non-secure exception.
+pub const sttns: u32 = 1 << 24;
+
+/// The SCR bit that wakes a core waiting for an event when any interrupt pends.
+pub const sevonpend: u32 = 1 << 4;
+
+/// The key an AIRCR write must carry to take effect.
+pub const vectkey: u32 = 0x05fa;
+/// What AIRCR reads back in place of that key.
+pub const vectkeystat: u32 = 0xfa05_0000;
+
+/// The HFSR bit for a fault reading the vector table.
+pub const vecttbl: u32 = 1 << 1;
+/// The HFSR bit for a fault escalated to HardFault.
+pub const forced: u32 = 1 << 30;
+
+const iaccviol: u32 = 1 << 0;
+const daccviol: u32 = 1 << 1;
+const mstkerr: u32 = 1 << 4;
+const mmarvalid: u32 = 1 << 7;
+const ibuserr: u32 = 1 << 8;
+const preciserr: u32 = 1 << 9;
+const stkerr: u32 = 1 << 12;
+const bfarvalid: u32 = 1 << 15;
+const undefinstr: u32 = 1 << 16;
+const invstate: u32 = 1 << 17;
+const invpc: u32 = 1 << 18;
+const nocp: u32 = 1 << 19;
+const unaligned: u32 = 1 << 24;
+const divbyzero: u32 = 1 << 25;
+
+/// The CFSR bits and the names explain prints them by.
+pub const recorded = [_]struct { bit: u32, name: []const u8 }{
+    .{ .bit = iaccviol, .name = "IACCVIOL" },
+    .{ .bit = daccviol, .name = "DACCVIOL" },
+    .{ .bit = mstkerr, .name = "MSTKERR" },
+    .{ .bit = mmarvalid, .name = "MMARVALID" },
+    .{ .bit = ibuserr, .name = "IBUSERR" },
+    .{ .bit = preciserr, .name = "PRECISERR" },
+    .{ .bit = stkerr, .name = "STKERR" },
+    .{ .bit = bfarvalid, .name = "BFARVALID" },
+    .{ .bit = undefinstr, .name = "UNDEFINSTR" },
+    .{ .bit = invstate, .name = "INVSTATE" },
+    .{ .bit = invpc, .name = "INVPC" },
+    .{ .bit = nocp, .name = "NOCP" },
+    .{ .bit = unaligned, .name = "UNALIGNED" },
+    .{ .bit = divbyzero, .name = "DIVBYZERO" },
+};
+
+/// The CCR bit that lets a handler return to Thread mode with exceptions still active.
+pub const nonbasethrdena: u32 = 1 << 0;
+/// The CCR bit that makes a negative-priority handler ignore a data fault.
+pub const bfhfnmign: u32 = 1 << 8;
+/// The CCR bit that aligns the exception frame to eight bytes.
+pub const stkalign: u32 = 1 << 9;
+/// The CCR bit that lets unprivileged code write STIR.
+pub const usersetmpend: u32 = 1 << 1;
+/// The CCR bit that traps an unaligned access.
+pub const unalign_trp: u32 = 1 << 3;
+/// The CCR bit that traps a divide by zero.
+pub const div_0_trp: u32 = 1 << 4;
+
+/// The SHCSR bit saying the debug monitor is active.
+pub const monitoract: u32 = 1 << 8;
+/// The SHCSR bit that enables MemManage.
+pub const memfaultena: u32 = 1 << 16;
+/// The SHCSR bit that enables BusFault.
+pub const busfaultena: u32 = 1 << 17;
+/// The SHCSR bit that enables UsageFault.
+pub const usgfaultena: u32 = 1 << 18;
+/// The SHCSR bit that enables SecureFault.
+pub const secureflt_ena: u32 = 1 << 19;
+
+/// The DEMCR bit that runs the DWT.
+pub const trcena: u32 = 1 << 24;
+
+const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating } };
+
+/// Every register the block holds, with the offset and the group that decides whether a core has it.
+pub const layout = [_]Slot{
+    .{ .name = "CPUID", .offset = cpuid, .group = .shared },
+    .{ .name = "VTOR", .offset = vtor, .group = .shared },
+    .{ .name = "AIRCR", .offset = aircr, .group = .shared },
+    .{ .name = "CCR", .offset = ccr, .group = .shared },
+    .{ .name = "SHPR2", .offset = shpr2, .group = .shared },
+    .{ .name = "SHPR3", .offset = shpr3, .group = .shared },
+    .{ .name = "SHCSR", .offset = shcsr, .group = .shared },
+    .{ .name = "DFSR", .offset = dfsr, .group = .shared },
+    .{ .name = "DEMCR", .offset = demcr, .group = .shared },
+    .{ .name = "SCR", .offset = scr, .group = .main },
+    .{ .name = "SHPR1", .offset = shpr1, .group = .main },
+    .{ .name = "CFSR", .offset = cfsr, .group = .main },
+    .{ .name = "HFSR", .offset = hfsr, .group = .main },
+    .{ .name = "MMFAR", .offset = mmfar, .group = .main },
+    .{ .name = "BFAR", .offset = bfar, .group = .main },
+    .{ .name = "AFSR", .offset = afsr, .group = .main },
+    .{ .name = "CPACR", .offset = cpacr, .group = .main },
+    .{ .name = "STIR", .offset = stir, .group = .main },
+    .{ .name = "FPCCR", .offset = fpccr, .group = .floating },
+    .{ .name = "FPCAR", .offset = fpcar, .group = .floating },
+    .{ .name = "FPDSCR", .offset = fpdscr, .group = .floating },
+    .{ .name = "MVFR0", .offset = mvfr0, .group = .floating },
+    .{ .name = "MVFR1", .offset = mvfr1, .group = .floating },
+    .{ .name = "MVFR2", .offset = mvfr2, .group = .floating },
+};
+
+const absent: u8 = layout.len;
+
+const map = blk: {
+    var m: [size / 4]u8 = @splat(absent);
+    for (layout, 0..) |r, i| m[r.offset / 4] = i;
+    break :blk m;
+};
+
+/// Which registers one core has, and the reset value and writable mask of each.
+pub const Profile = struct {
+    present: u32,
+    main: bool,
+    floating_point: bool,
+    reset: [layout.len]u32,
+    write_mask: [layout.len]u32,
+};
+
+fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, write_mask: u32 } {
+    const main = spec.architecture.main();
+    const lane: u32 = (0xff << (8 - spec.priority_bits)) & 0xff;
+    const wide_default = spec.architecture == .armv8_1m_main;
+    return switch (slot.offset) {
+        cpuid => .{ .reset = spec.cpuid, .write_mask = 0 },
+        vtor => .{ .reset = 0, .write_mask = switch (spec.core) {
+            .m0, .m1 => 0,
+            else => 0xffff_ff80,
+        } },
+        aircr => .{ .reset = vectkeystat, .write_mask = (if (spec.security) 0x0000_6000 else 0) | (if (main) 0x0000_0700 else 0) },
+        ccr => .{ .reset = spec.ccr, .write_mask = switch (spec.architecture) {
+            .armv6m, .armv8m_base => 0,
+            .armv7m, .armv7em => 0x0000_031b,
+            .armv8m_main, .armv8_1m_main => 0x0000_051a,
+        } },
+        shpr1 => .{ .reset = 0, .write_mask = lane << 16 | lane << 8 | lane },
+        shpr2 => .{ .reset = 0, .write_mask = lane << 24 },
+        shpr3 => .{ .reset = 0, .write_mask = lane << 24 | lane << 16 | (if (main) lane else 0) },
+        shcsr => .{ .reset = 0, .write_mask = if (!main) 0 else monitoract | memfaultena | busfaultena | usgfaultena | (if (spec.security) secureflt_ena else 0) },
+        demcr => .{ .reset = 0, .write_mask = trcena },
+        scr => .{ .reset = 0, .write_mask = 0x0000_0016 },
+        mmfar, bfar => .{ .reset = 0, .write_mask = 0xffff_ffff },
+        cpacr => .{ .reset = 0, .write_mask = if (spec.floating_point) 0x00f0_0000 else 0 },
+        fpccr => .{ .reset = if (spec.security) 0xc000_0004 else 0xc000_0000, .write_mask = if (spec.security) 0xfc00_07ff else 0xc000_017b },
+        fpcar => .{ .reset = 0, .write_mask = 0xffff_fff8 },
+        fpdscr => .{ .reset = if (wide_default) 0x0004_0000 else 0, .write_mask = if (wide_default) 0x07c8_0000 else 0x07c0_0000 },
+        mvfr0 => .{ .reset = spec.mvfr[0], .write_mask = 0 },
+        mvfr1 => .{ .reset = spec.mvfr[1], .write_mask = 0 },
+        mvfr2 => .{ .reset = spec.mvfr[2], .write_mask = 0 },
+        else => .{ .reset = 0, .write_mask = 0 },
+    };
+}
+
+/// The profile of a core, built at compile time from its spec.
+pub fn profileOf(comptime c: core.Core) Profile {
+    @setEvalBranchQuota(200_000);
+    const spec = core.spec(c);
+    const main = spec.architecture.main();
+    var out: Profile = .{ .present = 0, .main = main, .floating_point = spec.floating_point, .reset = @splat(0), .write_mask = @splat(0) };
+    for (layout, 0..) |slot, i| {
+        const held = switch (slot.group) {
+            .shared => true,
+            .main => main,
+            .floating => spec.floating_point,
+        };
+        if (!held) continue;
+        const v = valuesOf(spec, slot);
+        out.present |= @as(u32, 1) << @intCast(i);
+        out.reset[i] = v.reset;
+        out.write_mask[i] = v.write_mask;
+    }
+    return out;
+}
+
+/// The block itself: a word per register the core has, over a profile shared by every instance.
+pub const Scb = struct {
+    const Self = @This();
+
+    profile: *const Profile,
+    words: [layout.len]u32,
+
+    /// A block at the reset values its profile gives.
+    pub fn init(profile: *const Profile) Self {
+        return .{ .profile = profile, .words = profile.reset };
+    }
+
+    /// Returns every register to its reset value.
+    pub fn reset(self: *Self) void {
+        self.words = self.profile.reset;
+    }
+
+    fn has(self: *const Self, i: u8) bool {
+        return self.profile.present & (@as(u32, 1) << @intCast(i)) != 0;
+    }
+
+    /// The word a register holds, by offset, resolved to a slot at compile time.
+    pub fn get(self: *const Self, comptime offset: u32) u32 {
+        return self.words[comptime slot(offset).?];
+    }
+
+    /// Puts a word into a register, by offset, without the masking a program write takes.
+    pub fn put(self: *Self, comptime offset: u32, value: u32) void {
+        self.words[comptime slot(offset).?] = value;
+    }
+
+    /// Records a fault in CFSR, and its address in MMFAR or BFAR where the fault has one.
+    pub fn fault(self: *Self, stop: Stop, address: u32) void {
+        if (!self.profile.main) return;
+        self.words[comptime slot(cfsr).?] |= switch (stop) {
+            .undefined_instruction => undefinstr,
+            .not_t32_state, .authentication_failure, .not_branch_target, .tail_predication => invstate,
+            .exception_return => invpc,
+            .no_coprocessor => nocp,
+            .unaligned_access => unaligned,
+            .divide_by_zero => divbyzero,
+            .fetch_violation => iaccviol,
+            .data_violation => blk: {
+                self.words[comptime slot(mmfar).?] = address;
+                break :blk daccviol | mmarvalid;
+            },
+            .fetch_fault => ibuserr,
+            .data_fault => blk: {
+                self.words[comptime slot(bfar).?] = address;
+                break :blk preciserr | bfarvalid;
+            },
+            else => return,
+        };
+    }
+
+    /// Records that the fault happened while stacking an exception frame.
+    pub fn stacking(self: *Self, stop: Stop) void {
+        if (!self.profile.main) return;
+        self.words[comptime slot(cfsr).?] |= switch (stop) {
+            .data_violation => mstkerr,
+            .data_fault => stkerr,
+            else => return,
+        };
+    }
+
+    /// Sets bits in HFSR.
+    pub fn hardFault(self: *Self, bits: u32) void {
+        if (self.profile.main) self.words[comptime slot(hfsr).?] |= bits;
+    }
+
+    /// The word a register read answers; a register the core lacks answers null, and debug reads zero.
+    pub fn readRegister(self: *Self, offset: u32) ?u32 {
+        if (self.answers(offset)) return 0;
+        const i = slot(offset) orelse return null;
+        return if (self.has(i)) self.words[i] else null;
+    }
+
+    /// Takes a register write, keeping the writable bits; a status register is cleared by what it is written.
+    pub fn writeRegister(self: *Self, offset: u32, value: u32) bool {
+        if (self.answers(offset)) return true;
+        const i = slot(offset) orelse return false;
+        if (!self.has(i)) return false;
+        if (offset == aircr and value >> 16 != vectkey) return true;
+        self.words[i] = if (clearedByWrite(offset)) self.words[i] & ~value else (value & self.profile.write_mask[i]) | (self.profile.reset[i] & ~self.profile.write_mask[i]);
+        return true;
+    }
+
+    fn slot(offset: u32) ?u8 {
+        if (offset >= size or offset & 3 != 0) return null;
+        const i = map[offset / 4];
+        return if (i == absent) null else i;
+    }
+
+    fn answers(self: *const Self, offset: u32) bool {
+        if (offset & 3 != 0) return false;
+        if (self.profile.main and !self.profile.floating_point and offset -% fpccr < size - fpccr) return true;
+        return offset -% dhcsr < demcr - dhcsr;
+    }
+
+    fn clearedByWrite(offset: u32) bool {
+        return offset == cfsr or offset == hfsr or offset == dfsr;
+    }
+};

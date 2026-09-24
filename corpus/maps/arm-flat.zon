@@ -1,0 +1,7 @@
+.{
+    .core = .m3,
+    .regions = .{
+        .{ .base = 0x00000000, .size = 0x100000, .writable = true },
+        .{ .base = 0x00200000, .size = 0x100000, .writable = true },
+    },
+}

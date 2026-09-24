@@ -1,0 +1,9 @@
+.zig-cache/
+zig-out/
+.worktrees/
+zig-pkg/
+*.DS_Store
+corpus/fw/
+corpus/out/
+bench/*.tsv
+!bench/release-metrics.tsv

@@ -1,0 +1,62 @@
+# The probe lines whose two sides disagree, with the section of the ESP32-C3 technical reference
+# manual that decides each and the side it decides for.  Every one of them is the baseline following
+# the TRM and Espressif's QEMU fork following the generic RISC-V core its esp32c3 machine is built
+# from, except where the verdict says neither.  mkprobe_riscv.sh reports these, takes them out of
+# the diff, and fails if one of them ever stops disagreeing, so this file describes the baseline as
+# it is rather than as it was.
+# Every bare section or Register number below is C3 TRM, and Privileged is the RISC-V privileged
+# specification; see the manual table in DESIGN.md.
+#
+# The identity and extension registers, TRM Registers 1.1 to 1.6.
+misa.value qemu=401411ad core=40101104 verdict=Register 1.6: core, the C3's misa is IMCU and QEMU's generic core reports IMAFDCSU.
+misa.written qemu=401411ad core=40101104 verdict=Register 1.6: core, as misa.value; the register is hardwired on both sides, so neither keeps the write.
+mvendorid.value qemu=00000000 core=00000612 verdict=Register 1.1: core, Espressif's JEDEC id, which QEMU's generic core does not carry.
+marchid.value qemu=00000000 core=80000001 verdict=Register 1.2: core, the architecture id the TRM gives the part.
+mimpid.value qemu=00000000 core=00000001 verdict=Register 1.3: core, the implementation id the TRM gives the part.
+# mstatus, TRM Register 1.5 and 1.5.2.  The part implements four fields and ties the higher bit of
+# MPP to the lower one; QEMU's core has supervisor mode, the FS and XS fields and the rest.
+mstatus.mpp1 qemu=00000800 core=00001800 verdict=Register 1.5: core, MPP written as supervisor reads back as machine on a part that has no supervisor mode.
+mstatus.all qemu=807e79aa core=00201888 verdict=Register 1.5: core, MIE, MPIE, MPP and TW are the fields the part has and every other bit reads zero.
+# The interrupt enable and pending registers, which are not CSRs on this part at all: an interrupt
+# is enabled in the controller's own registers, TRM 1.4.1 and 8.3.2.
+mie.value qemu=00000eee core=deadbeef verdict=1.4.1: core, the read is an illegal instruction here and the destination keeps the sentinel that says it never happened.
+mie.cause qemu=00000000 core=00000002 verdict=1.4.1: core, as mie.value; QEMU's core has the register and takes no trap.
+mip.value qemu=00000000 core=deadbeef verdict=1.4.1: core, as mie.value.
+mip.cause qemu=00000000 core=00000002 verdict=1.4.1: core, as mie.cause.
+# mtvec, TRM Register 1.7: MODE is read-only vectored and only the top 24 bits of BASE are writable.
+mtvec.direct qemu=00000000 core=00000001 verdict=Register 1.7: core, the mode bits written clear leave the part vectored; QEMU takes the write and goes direct.
+mtvec.unaligned qemu=00000005 core=00000001 verdict=Register 1.7: core, a base four bytes past the 256-byte alignment is masked off; QEMU keeps it.
+# mepc, TRM Register 1.9 and Privileged 3.1.14.
+mepc.low qemu=cafeba5f core=cafeba5e verdict=Register 1.9: core, bit 0 of mepc is always zero; QEMU keeps the bit that was written.
+# mcause, TRM Register 1.10: bits 30 to 5 are reserved and read zero.
+mcause.written qemu=ffffffff core=8000001f verdict=Register 1.10: core, the interrupt flag and the five-bit code are all the register keeps; QEMU keeps the whole word.
+# The counters, which this part does not have: it counts events in mpcer, mpcmr and mpccr, TRM
+# Registers 1.12 to 1.14, and its CSR list has neither mcycle and minstret nor their Zicntr shadows.
+mcycle.rises qemu=00000001 core=00000000 verdict=1.4: core, there is no counter to rise here.
+mcycle.cause qemu=00000000 core=00000002 verdict=1.4: core, the read is an illegal instruction here and an ordinary one in QEMU.
+minstret.rises qemu=00000001 core=00000000 verdict=1.4: core, as mcycle.rises.
+minstret.cause qemu=00000000 core=00000002 verdict=1.4: core, as mcycle.cause.
+cycle.cause qemu=00000000 core=00000002 verdict=1.4: core, as mcycle.cause; the part has no Zicntr shadow either.
+instret.cause qemu=00000000 core=00000002 verdict=1.4: core, as cycle.cause.
+# The protection unit, TRM 1.8 and Privileged 3.7.
+pmp.cfg.wx qemu=00000000 core=00000018 verdict=Privileged 3.7.1: neither, R clear with W set is reserved in a WARL field and TRM 1.8 decides nothing about it; this layer drops the write permission as Spike does and QEMU drops the byte whole.
+pmp.overlap.cause qemu=00000007 core=00000008 verdict=1.8.2: core, the unit does not implement static priority, so an address two enabled entries match is granted what either of them grants and the trap that comes back is the ECALL; QEMU lets the lower-numbered entry 3 refuse the store, which is Privileged 3.7.1.3.
+pmp.overlap.value qemu=11111111 core=44444444 verdict=1.8.2: core, the word the user-mode store wrote; QEMU's store never happened.
+# The misaligned access, which the data bus of this part does not do, TRM 3.3.1, and whose codes 4
+# and 6 are not in its mcause table, TRM Register 1.10.
+trap.mload.cause qemu=00000000 core=00000005 verdict=3.3.1: core, a misaligned load is reported as the load access fault it is here; QEMU's generic core performs the access.
+trap.mload.tval qemu=00000000 core=00000001 verdict=3.3.1: core, mtval holds the address of the access; QEMU took no trap.
+trap.mload.value qemu=55443322 core=deadbeef verdict=3.3.1: core, the load never happened, so the destination keeps its sentinel.
+trap.mstore.cause qemu=00000000 core=00000007 verdict=3.3.1: core, a misaligned store is the store access fault of code 7.
+trap.mstore.tval qemu=00000000 core=0000000a verdict=3.3.1: core, as trap.mload.tval.
+# The CPU interrupt controller and the interrupt matrix, TRM 1.5 and 8.5.  QEMU's esp32c3 machine
+# has the mapping registers, the enable register, thirty of the thirty-one priority registers and
+# the threshold, and drives the CPU through mip and a generic external interrupt; it has no type
+# register and no clear register, because it has no edge latch to hold or to flush.
+int.type.mask qemu=00000000 core=ffffffff verdict=1.5.2: core, the type register is what tells an edge source from a level one and QEMU does not have it.
+int.clear.mask qemu=00000000 core=ffffffff verdict=1.5.2: core, the clear register flushes that latch and QEMU does not have it.
+int.pri31 qemu=00000000 core=0000000f verdict=8.5: core, the summary lists CPU_INT_PRI_31 at 0x0190 and QEMU stops one register short of it.
+# The access rules of TRM 14.7.6 and Table 14.7-6: every peripheral is word aligned, a read of any
+# width gives back the lane its address names and a write narrower than a word does not happen.
+int.byte.read qemu=00000078 core=00000056 verdict=14.7.6: core, the byte the address names; QEMU takes the read as a word read at the aligned address.
+int.byte.write qemu=000000ff core=12345678 verdict=14.7.6: core, the write is dropped; QEMU replaces the whole register.

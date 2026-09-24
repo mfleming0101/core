@@ -1,0 +1,8 @@
+.{
+    .core = .esp32c3,
+    .elf = "out/probe_riscv.elf",
+    .regions = .{
+        .{ .base = 0x42000000, .size = 0x400000, .writable = false },
+        .{ .base = 0x3fc80000, .size = 0x60000, .writable = true },
+    },
+}

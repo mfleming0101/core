@@ -1,0 +1,13 @@
+.{
+    .{ .case = "unaligned", .arch = "arm", .expect = .{ "UsageFault", "CFSR", "UNALIGNED", "pc=000005ba", "00201009" } },
+    .{ .case = "stack_overflow", .arch = "arm", .expect = .{ "MemManage", "CFSR", "MSTKERR", "DACCVIOL", "MMFAR", "00201100", "pc=000005be" } },
+    .{ .case = "vector_thumb", .arch = "arm", .expect = .{ "HardFault", "CFSR", "INVSTATE", "VTOR", "SysTick", "0020113c", "pc=000005b8" } },
+    .{ .case = "exc_return", .arch = "arm", .expect = .{ "HardFault", "CFSR", "INVPC", "EXC_RETURN", "fffffff0", "pc=00000574" } },
+    .{ .case = "never_enabled", .arch = "arm", .expect = .{ "NVIC_ISPR0", "NVIC_ISER0", "IRQ 7", "pending" } },
+    .{ .case = "readonly", .arch = "arm", .map = "maps/readonly-arm.zon", .expect = .{ "BusFault", "CFSR", "PRECISERR", "BFAR", "00000100", "pc=00000578" } },
+    .{ .case = "m4_on_m3", .arch = "arm", .expect = .{ "UsageFault", "CFSR", "UNDEFINSTR", "fa81", "pc=00000574" } },
+    .{ .case = "readonly", .arch = "riscv", .map = "maps/readonly-riscv.zon", .expect = .{ "mcause", "store access fault", "mtval", "00000100", "pc=00000334" } },
+    .{ .case = "mtvec_loop", .arch = "riscv", .expect = .{ "mtvec", "mcause", "illegal instruction", "mepc", "pc=00201100" } },
+    .{ .case = "intc_unrouted", .arch = "riscv", .map = "maps/timer-riscv.zon", .expect = .{ "CPU_INT_ENABLE", "MAP_REG", "source 20", "routed nowhere" } },
+    .{ .case = "pmp_refused", .arch = "riscv", .expect = .{ "PMP", "pmpcfg0", "mcause", "load access fault", "mtval", "000003a4", "pc=0000038c" } },
+}
