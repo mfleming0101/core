@@ -1263,7 +1263,7 @@ pub fn Processor(comptime options: Options) type {
                 return if (self.unanswered(at)) 0 else error.DataFault;
             }
             const got: ?T = if (peripheral)
-                (if (a.bytes == 4) self.readPpb(at) else self.readLane(T, at))
+                (if (a.bytes == 4) self.wordPpb(at) else self.readLane(T, at))
             else
                 self.memory.peek(a.bytes, at);
             if (got) |word| return word;
@@ -1325,7 +1325,7 @@ pub fn Processor(comptime options: Options) type {
 
         fn readLane(self: *Self, comptime T: type, address: u32) ?T {
             if (!self.architecture().main() or address % @sizeOf(T) != 0 or lanes(address) == null) return null;
-            const word = self.readPpb(address & ~@as(u32, 3)) orelse return null;
+            const word = self.wordPpb(address & ~@as(u32, 3)) orelse return null;
             return @truncate(word >> @intCast((address & 3) * 8));
         }
 
@@ -1336,7 +1336,7 @@ pub fn Processor(comptime options: Options) type {
             const shift: u5 = @intCast((address & 3) * 8);
             const raised = @as(u32, value) << shift;
             if (kind == .cleared) return self.writePpb(aligned, raised);
-            const word = self.readPpb(aligned) orelse return null;
+            const word = self.wordPpb(aligned) orelse return null;
             const lane = @as(u32, std.math.maxInt(T)) << shift;
             return self.writePpb(aligned, (word & ~lane) | raised);
         }
@@ -1368,35 +1368,48 @@ pub fn Processor(comptime options: Options) type {
             return !self.spec.security or self.state.secure or self.flags.sttns;
         }
 
-        fn readPpb(self: *Self, address: u32) ?u32 {
+        fn answered(into: *u32, word: ?u32) bool {
+            into.* = word orelse return false;
+            return true;
+        }
+
+        noinline fn readPpb(self: *Self, address: u32, into: *u32) bool {
             if (self.cycles != self.serviced) self.service();
-            if (!self.addressable(address, false)) return null;
-            return switch (ppb.region(address)) {
+            if (!self.addressable(address, false)) return false;
+            switch (ppb.region(address)) {
                 .memory => unreachable,
-                .systick => if (self.ownsSysTick()) self.systick.readRegister(address - ppb.systick_base) else 0,
-                .itm => 0,
-                .dwt => self.dwt.readRegister(address - ppb.dwt_base, self.cycles),
-                .control => switch (address - ppb.control_base) {
+                .systick => return answered(into, if (self.ownsSysTick()) self.systick.readRegister(address - ppb.systick_base) else 0),
+                .itm => return answered(into, 0),
+                .dwt => return answered(into, self.dwt.readRegister(address - ppb.dwt_base, self.cycles)),
+                .control => return answered(into, switch (address - ppb.control_base) {
                     ppb.ictr => if (self.architecture().main()) (nvic_block.lines + 31) / 32 - 1 else 0,
                     ppb.actlr => 0,
                     else => null,
-                },
+                }),
                 .scb => switch (address - ppb.scb_base) {
-                    scb_block.icsr => self.readIcsr(self.spec.security and !self.state.secure),
-                    scb_block.shcsr => self.readShcsr(self.spec.security and !self.state.secure),
-                    sau_block.first...sau_block.last => |offset| if (self.spec.security and !self.state.secure) 0 else self.sau.readRegister(offset - sau_block.first),
-                    mpu_block.first...mpu_block.last => |offset| self.mpuOf(self.state.secure).readRegister(offset - mpu_block.first),
-                    else => |offset| self.scs().readRegister(offset),
+                    scb_block.icsr => return answered(into, self.readIcsr(self.spec.security and !self.state.secure)),
+                    scb_block.shcsr => return answered(into, self.readShcsr(self.spec.security and !self.state.secure)),
+                    sau_block.first...sau_block.last => |offset| return answered(into, if (self.spec.security and !self.state.secure) 0 else self.sau.readRegister(offset - sau_block.first)),
+                    mpu_block.first...mpu_block.last => |offset| return answered(into, self.mpuOf(self.state.secure).readRegister(offset - mpu_block.first)),
+                    else => |offset| return answered(into, self.scs().readRegister(offset)),
                 },
-                .scb_ns => if (!self.spec.security or !self.state.secure) null else switch (address - ppb.scb_base - ppb.alias) {
-                    scb_block.icsr => self.readIcsr(true),
-                    scb_block.shcsr => self.readShcsr(true),
-                    mpu_block.first...mpu_block.last => |offset| self.mpu_ns.readRegister(offset - mpu_block.first),
-                    else => |offset| self.scb_ns.readRegister(offset),
+                .scb_ns => {
+                    if (!self.spec.security or !self.state.secure) return false;
+                    return answered(into, switch (address - ppb.scb_base - ppb.alias) {
+                        scb_block.icsr => self.readIcsr(true),
+                        scb_block.shcsr => self.readShcsr(true),
+                        mpu_block.first...mpu_block.last => |offset| self.mpu_ns.readRegister(offset - mpu_block.first),
+                        else => |offset| self.scb_ns.readRegister(offset),
+                    });
                 },
-                .nvic => self.readNvic(address - ppb.nvic_base),
-                .ppb_unmapped => null,
-            };
+                .nvic => return answered(into, self.readNvic(address - ppb.nvic_base)),
+                .ppb_unmapped => return false,
+            }
+        }
+
+        fn wordPpb(self: *Self, address: u32) ?u32 {
+            var word: u32 = undefined;
+            return if (self.readPpb(address, &word)) word else null;
         }
 
         fn writePpb(self: *Self, address: u32, value: u32) ?void {
