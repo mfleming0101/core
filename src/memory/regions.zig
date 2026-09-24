@@ -319,7 +319,7 @@ pub const Regions = struct {
         return high;
     }
 
-    fn wake(self: *Regions) void {
+    noinline fn wake(self: *Regions) void {
         const elapsed = self.elapsed;
         self.elapsed = 0;
         var soonest: u32 = 0;
