@@ -322,10 +322,14 @@ pub fn Processor(comptime options: Options) type {
         noinline fn service(self: *Self) void {
             self.serviced = self.cycles;
             if (self.memory.interrupts()) |lines| self.pendAll(lines);
+            self.schedule();
+            if (self.cycles >= self.deadline) self.due |= bound_due;
+        }
+
+        fn schedule(self: *Self) void {
             self.memory.follow(&self.cycles, &self.attention);
             const next = self.serviced +| self.memory.untilDue();
             self.attention = if (self.cycles < self.deadline) @min(next, self.deadline) else next;
-            if (self.cycles >= self.deadline) self.due |= bound_due;
         }
 
         /// Raises one interrupt matrix source.
@@ -422,7 +426,7 @@ pub fn Processor(comptime options: Options) type {
             self.redirected = true;
             self.deadline = self.cycles +| limit.cycles;
             self.due &= ~bound_due;
-            self.attention = @min(self.attention, self.deadline);
+            self.schedule();
             if (self.cycles >= self.deadline) self.due |= bound_due;
             if (self.trace.recording()) return @call(.never_inline, loop, .{ self, limit, true });
             return loop(self, limit, false);
