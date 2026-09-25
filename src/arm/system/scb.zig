@@ -257,7 +257,7 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
         aircr => .{ .reset = vectkeystat, .write_mask = (if (spec.security) 0x0000_6000 else 0) | (if (main) 0x0000_0700 else 0) },
         ccr => .{ .reset = spec.ccr, .write_mask = switch (spec.architecture) {
             .armv6m, .armv8m_base => 0,
-            .armv7m, .armv7em => 0x0000_031b,
+            .armv7m, .armv7em => if (spec.core == .m7) 0x0000_011b else 0x0000_031b,
             .armv8m_main, .armv8_1m_main => 0x0000_051a,
         } },
         shpr1 => .{ .reset = 0, .write_mask = lane << 16 | lane << 8 | lane },

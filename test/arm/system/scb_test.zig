@@ -80,8 +80,8 @@ test "AIRCR reads back the key stat and takes PRIGROUP only from a write carryin
     try std.testing.expectEqual(scb.vectkeystat | 0x0000_0500, block.readRegister(scb.aircr).?);
 }
 
-test "CCR resets to the value of the core and keeps its reserved-as-one bits, v6-M and v7-M B3.2.8, v8-M D1.2.9" {
-    inline for (.{ .m0plus, .m4, .m23, .m33 }, .{ 0x208, 0x200, 0x209, 0x201 }) |core, at_reset| {
+test "CCR resets to the value of the core and keeps its reserved-as-one bits, the M7 STKALIGN among them, v6-M and v7-M B3.2.8, v8-M D1.2.9, M7 TRM 3.2" {
+    inline for (.{ .m0plus, .m4, .m7, .m23, .m33 }, .{ 0x208, 0x200, 0x0004_0200, 0x209, 0x201 }) |core, at_reset| {
         var block = of(core);
         try std.testing.expectEqual(@as(u32, at_reset), block.readRegister(scb.ccr).?);
         try std.testing.expect(block.writeRegister(scb.ccr, 0));
