@@ -164,13 +164,12 @@ const burst_span = "37";
 const class_budget = "2000000";
 const history_records = "65536";
 const event_records = "4096";
-const alt = "folded-tree";
 const optimize = "ReleaseFast";
 const runs: usize = 5;
 const summary_path = "bench/summary.tsv";
 const release_path = "bench/release-metrics.tsv";
 const detail_path = "bench/detail.tsv";
-const detail_header = "alt\ttier\timage\tarch\tns_per_instr\tretired\tstop\tchecksum\tok\n";
+const detail_header = "tier\timage\tarch\tns_per_instr\tretired\tstop\tchecksum\tok\n";
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.arena.allocator();
@@ -236,7 +235,6 @@ const Runner = struct {
         var row: metrics.Row = .{
             .date = try today(self.io, self.gpa),
             .commit = try self.commit(),
-            .alt = alt,
             .variant = if (self.options.cpu) |cpu|
                 try std.fmt.allocPrint(self.gpa, "history=ring;taskset={d}", .{cpu})
             else
@@ -741,8 +739,8 @@ const Runner = struct {
     }
 
     fn record(self: *Runner, tier: u8, image: Image, cost: f64, seen: Best, ok: bool) !void {
-        try self.detail.print(self.gpa, "{s}\t{d}\t{s}\t{s}\t{d:.4}\t{d}\t{s}\t{x:0>8}\t{d}\n", .{
-            alt, tier, image.name, image.arch, cost, seen.ran.retired, seen.ran.stop, seen.ran.checksum, @intFromBool(ok),
+        try self.detail.print(self.gpa, "{d}\t{s}\t{s}\t{d:.4}\t{d}\t{s}\t{x:0>8}\t{d}\n", .{
+            tier, image.name, image.arch, cost, seen.ran.retired, seen.ran.stop, seen.ran.checksum, @intFromBool(ok),
         });
         try self.say("{s:<6} {s:<18} {d:>8.3} ns/instr  {s}\n", .{
             image.arch, image.name, cost, if (!seen.steady) "UNSTEADY" else if (ok) "ok" else "MISMATCH",

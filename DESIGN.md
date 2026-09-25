@@ -278,7 +278,7 @@ on M3 and the ESP32-C3, the only cores a lockstep oracle exists for.
 | `link_delta_bytes_m0plus` and the rest | That class's machine minus the same machine linked against `bench/nullisa`: the decode tree its architecture keeps, the one size a class does change |
 | `build_s_*`, `rss_mb_*` | Wall time and memory of `zig build` for the library alone and for everything, at one and twelve jobs |
 | `isa_decls_required`, `isa_decls_optional` | The host contract entries the Arm processor answers |
-| `date`, `commit`, `alt`, `variant`, `target`, `optimize`, `zig`, `cpu_mhz` | Which tree was measured and where |
+| `date`, `commit`, `variant`, `target`, `optimize`, `zig`, `cpu_mhz` | Which tree was measured and where |
 | `status`, `oracle_arm_*`, `oracle_rv_*`, `probe_arm_*`, `probe_rv_*`, `corpus_*`, `diag_*`, `burst_equiv_pass`, `invariant_violations` | The gates above, each as what agreed out of what was checked; `status` is `pass` only when every one did |
 | `harness_sha`, `corpus_sha`, `oracle_sha` | Digests of the bench sources, the corpus with its images, and `oracle/` |
 

@@ -4,7 +4,6 @@ const metrics = @import("metrics.zig");
 const sample: metrics.Row = .{
     .date = "2026-09-15",
     .commit = "0000000",
-    .alt = "baseline",
     .variant = "cores=12;history=ring",
     .target = "aarch64-linux",
     .optimize = "ReleaseFast",
@@ -117,7 +116,6 @@ fn valueOf(name: []const u8) ![]const u8 {
 }
 
 test "a row reads back by column name" {
-    try std.testing.expectEqualStrings("baseline", try valueOf("alt"));
     try std.testing.expectEqualStrings("pass", try valueOf("status"));
     try std.testing.expectEqualStrings("8.100", try valueOf("fw_ns_per_instr"));
     try std.testing.expectEqualStrings("8.300", try valueOf("fw_ns_m33"));

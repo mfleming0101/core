@@ -13,7 +13,7 @@ both halves is linked twice, as [arm](src/arm/system/processor.zig) and
 | [Memory and the bus](#memory-and-the-bus) | Bus, Regions, Found, Folded, Span, Access, Touch, Peek and poke, Width, Host contract, Device, Line and lines, Raise word, Map, Image |
 | [System blocks](#system-blocks) | PPB, NVIC and SCB, SysTick, MPU, SAU, Interrupt matrix, PMP, Semihosting |
 | [Tracing](#tracing) | Trace, Ring, Record |
-| [Measurement](#measurement) | Machine, Stub host, Null ISA, Row, Gate, Tier, Alternative, Corpus, Oracle, Probe, Divergence register |
+| [Measurement](#measurement) | Machine, Stub host, Null ISA, Row, Gate, Tier, Corpus, Oracle, Probe, Divergence register |
 
 ## The processor
 
@@ -624,15 +624,6 @@ for each.
 
 - `tierOf`, [bench/run.zig](bench/run.zig).
 - The columns are `fw_ns_per_instr` for tier one and `sys_ns_per_instr` for tier two,
-  [bench/harness/metrics.zig](bench/harness/metrics.zig).
-
-### Alternative
-
-One measured implementation the bench drives, written into the `alt` column of a [row](#row)
-under its own name. Core has one, `folded-tree`, named for the [folded](#folded) cache in front
-of the generated decode tree.
-
-- `alt`, [bench/run.zig](bench/run.zig); the column is `Row.alt`,
   [bench/harness/metrics.zig](bench/harness/metrics.zig).
 
 ### Corpus

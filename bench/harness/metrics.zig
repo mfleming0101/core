@@ -22,7 +22,6 @@ pub const classes = [_]Class{
 pub const Row = struct {
     date: []const u8,
     commit: []const u8,
-    alt: []const u8,
     variant: []const u8,
     target: []const u8,
     optimize: []const u8,
