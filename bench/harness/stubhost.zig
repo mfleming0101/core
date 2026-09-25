@@ -243,7 +243,8 @@ pub const Arm = struct {
     }
 
     fn stopOf(result: arch_step.Result) ?Stop {
-        return switch (result.halt() orelse return null) {
+        if (!result.halted) return null;
+        return switch (result.stop) {
             .breakpoint => .breakpoint,
             .fetch_fault, .fetch_violation => .fetch_fault,
             .data_fault, .data_violation, .secure_fault, .unrecoverable_exception => .data_fault,
@@ -362,7 +363,8 @@ pub const Riscv = struct {
             .load_access_fault, .store_access_fault => .data_fault,
             .environment_call => .exited,
         };
-        return switch (result.halt() orelse return null) {
+        if (!result.halted) return null;
+        return switch (result.stop) {
             .breakpoint => .breakpoint,
             .unimplemented => .undefined_instruction,
             .unrecoverable_trap => .data_fault,
