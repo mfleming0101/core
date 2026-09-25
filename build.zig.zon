@@ -1,12 +1,12 @@
 .{
     .name = .core,
-    .version = "0.1.1",
+    .version = "0.2.0",
     .fingerprint = 0x6b8d854f0bb7c86b,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .isa = .{
-            .url = "git+https://github.com/mfleming0101/isa.git?ref=v0.3.0#d47d0a12fe403479a3efcfbc0f6283df6c1b6cf6",
-            .hash = "isa-0.3.0-0alfDGn6DwAutckl7HOpghqU4RMRkacYqyIsqebZD2rH",
+            .url = "git+https://github.com/mfleming0101/isa.git?ref=v0.3.1#b574ea9e8aefab3922dc49b73b3b7564dee714db",
+            .hash = "isa-0.3.1-0alfDAv4DwDR6rloOFe47ey0d_1vwE20_mZfJHkoavHL",
         },
     },
     .paths = .{
