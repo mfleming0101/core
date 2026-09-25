@@ -18,8 +18,8 @@ RUN case "$TARGETARCH" in \
     && ln -s "/opt/zig-$arch-linux-0.16.0/zig" /usr/local/bin/zig
 
 FROM zig AS tier1
-RUN git clone --depth 1 --branch v0.2.0 https://github.com/mfleming0101/isa.git /isa \
-    && test "$(git -C /isa rev-parse HEAD)" = 5f9eec2f0e9ae778aa1c732995c51404020b4cfd \
+RUN git clone --depth 1 --branch v0.3.0 https://github.com/mfleming0101/isa.git /isa \
+    && test "$(git -C /isa rev-parse HEAD)" = d47d0a12fe403479a3efcfbc0f6283df6c1b6cf6 \
     && sh /isa/corpus/build.sh
 
 FROM zig
