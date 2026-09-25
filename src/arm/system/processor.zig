@@ -249,8 +249,8 @@ pub fn Processor(comptime options: Options) type {
             unreachable;
         }
 
-        /// A core of that part over the bus, reset through the vector table, with the ring attached.
-        pub fn init(memory: *options.Bus, c: core.Core, ring: trace.Ring) Self {
+        /// A core of that part over the bus, with the caches the part was built with, reset through the vector table, with the ring attached.
+        pub fn init(memory: *options.Bus, c: core.Core, caches: core.Caches, ring: trace.Ring) Self {
             const at = slotOf(c);
             const spec = specs[at];
             var made: Self = .{
@@ -259,8 +259,8 @@ pub fn Processor(comptime options: Options) type {
                 .state = .{ .secure = spec.security, .fpscr = fp.fixedFields(spec.architecture, 0) },
                 .memory = memory,
                 .systick = .{},
-                .scb = .init(&profiles[at]),
-                .scb_ns = .init(&profiles[at]),
+                .scb = .init(&profiles[at], caches),
+                .scb_ns = .init(&profiles[at], caches),
                 .nvic = .init(spec.priority_bits),
                 .dwt = .init(spec.architecture.main()),
                 .sau = .init(spec.security, spec.architecture.main()),
@@ -354,7 +354,7 @@ pub fn Processor(comptime options: Options) type {
 
         /// Returns a running core to its reset state, which is also what SYSRESETREQ does.
         pub fn reset(self: *Self) void {
-            self.* = init(self.memory, self.spec.core, self.trace);
+            self.* = init(self.memory, self.spec.core, self.scb.caches, self.trace);
         }
 
         fn atReset(self: *Self) void {

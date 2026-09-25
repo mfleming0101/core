@@ -34,7 +34,7 @@ test "step runs one instruction at a time and reports what each one was, cost an
     word(0x20, 0x1234_5678);
 
     var memory = try core.memory.Regions.adopt(&entries);
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
 
     const first = cpu.step();
     try std.testing.expectEqual(@as(u32, 0x8), first.address);

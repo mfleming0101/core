@@ -26,7 +26,7 @@ pub const Machine = struct {
     pub fn init(loaded: Loaded) !Machine {
         const bus = try harness.consumer.bus(loaded);
         var self: Machine = .{
-            .cpu = Cpu.init(bus, which, try .init(try loaded.arena.alloc(core.arm.trace.Record, loaded.history))),
+            .cpu = Cpu.init(bus, which, .{}, try .init(try loaded.arena.alloc(core.arm.trace.Record, loaded.history))),
             .console = loaded.console,
         };
         self.cpu.state.msp = (bus.peek(4, 0) orelse 0) & ~@as(u32, 3);

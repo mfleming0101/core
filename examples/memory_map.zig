@@ -57,7 +57,7 @@ test "the core's stores land in the same bytes the host reads, and a store to re
     }, 0..) |h, i| std.mem.writeInt(u16, flash[0x8 + 2 * i ..][0..2], h, .little);
     std.mem.writeInt(u32, flash[0x18..0x1c], 0x2000_0020, .little);
     var memory = try Regions.adopt(&entries);
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
 
     const ran = cpu.run(.{ .instructions = 100 });
 

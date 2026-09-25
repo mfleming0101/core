@@ -47,7 +47,7 @@ test "a board described in .zon builds the same bus, with the timer looked up by
         return fault;
     };
     try core.memory.elf.load(firmware, &memory);
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
 
     const ran = cpu.run(.{ .instructions = 100_000 });
 

@@ -35,7 +35,7 @@ fn countdown() !core.memory.Regions {
 
 test "a run ends at its instruction budget, and the next run carries on where it left off" {
     var memory = try countdown();
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
 
     const first = cpu.run(.{ .instructions = 50 });
     try std.testing.expectEqual(@as(core.arm.Ended, .budget), first.ended);
@@ -51,7 +51,7 @@ test "a run ends at its instruction budget, and the next run carries on where it
 
 test "a run ends at its cycle deadline, which is what a caller pacing the core against real time uses" {
     var memory = try countdown();
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
 
     const paced = cpu.run(.{ .instructions = 1_000, .cycles = 60 });
     try std.testing.expectEqual(@as(core.arm.Ended, .deadline), paced.ended);
@@ -65,7 +65,7 @@ test "a run ends at its cycle deadline, which is what a caller pacing the core a
 
 test "a breakpoint stops the run, and the next run continues past it" {
     var memory = try countdown();
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
     code(0x8, &.{ 0xbe00, 0x2001, 0xbe00 });
 
     try std.testing.expectEqual(@as(?core.arm.Stop, .breakpoint), cpu.run(.{ .instructions = 100 }).stop);

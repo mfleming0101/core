@@ -22,7 +22,7 @@ fn code(at: u32, halfwords: []const u16) void {
 }
 
 fn cyclesOn(memory: *core.memory.Regions, which: core.arm.Core) u64 {
-    var cpu = Cpu.init(memory, which, .{});
+    var cpu = Cpu.init(memory, which, .{}, .{});
     return cpu.run(.{ .instructions = 100 }).cycles;
 }
 

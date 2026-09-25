@@ -8,8 +8,8 @@ const Stop = @import("isa").arm.Stop;
 
 /// Where the System Control Block begins.
 pub const base: u32 = 0xe000_ed00;
-/// How wide the block is, the STIR and floating-point registers included.
-pub const size: u32 = 0x250;
+/// How wide the block is, the STIR, floating-point and cache maintenance registers included.
+pub const size: u32 = 0x27c;
 
 /// CPUID, at an offset from the base.
 pub const cpuid: u32 = 0x00;
@@ -43,6 +43,14 @@ pub const mmfar: u32 = 0x34;
 pub const bfar: u32 = 0x38;
 /// AFSR, the auxiliary fault status register.
 pub const afsr: u32 = 0x3c;
+/// CLIDR, the cache levels a core with caches has.
+pub const clidr: u32 = 0x78;
+/// CTR, the cache type.
+pub const ctr: u32 = 0x7c;
+/// CCSIDR, the geometry of the cache CSSELR selects.
+pub const ccsidr: u32 = 0x80;
+/// CSSELR, which selects the data or the instruction cache.
+pub const csselr: u32 = 0x84;
 /// CPACR, which enables the coprocessors.
 pub const cpacr: u32 = 0x88;
 /// Where the MPU registers begin within this window.
@@ -67,6 +75,10 @@ pub const mvfr0: u32 = 0x240;
 pub const mvfr1: u32 = 0x244;
 /// MVFR2, a core property read back.
 pub const mvfr2: u32 = 0x248;
+/// ICIALLU, the first cache maintenance operation, which the block takes and ignores.
+pub const iciallu: u32 = 0x250;
+/// BPIALL, the last.
+pub const bpiall: u32 = 0x278;
 /// The CPACR field that enables the floating-point coprocessor.
 pub const cp10: u32 = 0x3 << 20;
 /// The FPCCR bit that saves floating-point state automatically on exception entry.
@@ -161,6 +173,8 @@ pub const usersetmpend: u32 = 1 << 1;
 pub const unalign_trp: u32 = 1 << 3;
 /// The CCR bit that traps a divide by zero.
 pub const div_0_trp: u32 = 1 << 4;
+const dc: u32 = 1 << 16;
+const ic: u32 = 1 << 17;
 
 /// The SHCSR bit saying the debug monitor is active.
 pub const monitoract: u32 = 1 << 8;
@@ -176,7 +190,7 @@ pub const secureflt_ena: u32 = 1 << 19;
 /// The DEMCR bit that runs the DWT.
 pub const trcena: u32 = 1 << 24;
 
-const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating } };
+const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache } };
 
 /// Every register the block holds, with the offset and the group that decides whether a core has it.
 pub const layout = [_]Slot{
@@ -204,6 +218,10 @@ pub const layout = [_]Slot{
     .{ .name = "MVFR0", .offset = mvfr0, .group = .floating },
     .{ .name = "MVFR1", .offset = mvfr1, .group = .floating },
     .{ .name = "MVFR2", .offset = mvfr2, .group = .floating },
+    .{ .name = "CLIDR", .offset = clidr, .group = .cache },
+    .{ .name = "CTR", .offset = ctr, .group = .cache },
+    .{ .name = "CCSIDR", .offset = ccsidr, .group = .cache },
+    .{ .name = "CSSELR", .offset = csselr, .group = .cache },
 };
 
 const absent: u8 = layout.len;
@@ -222,6 +240,9 @@ pub const Profile = struct {
     reset: [layout.len]u32,
     write_mask: [layout.len]u32,
 };
+
+const data_ccsidr = [_]u32{ 0, 0xf003_e019, 0xf007_e019, 0xf00f_e019, 0xf01f_e019, 0xf03f_e019 };
+const instruction_ccsidr = [_]u32{ 0, 0xf007_e009, 0xf00f_e009, 0xf01f_e009, 0xf03f_e009, 0xf07f_e009 };
 
 fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, write_mask: u32 } {
     const main = spec.architecture.main();
@@ -253,6 +274,8 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
         mvfr0 => .{ .reset = spec.mvfr[0], .write_mask = 0 },
         mvfr1 => .{ .reset = spec.mvfr[1], .write_mask = 0 },
         mvfr2 => .{ .reset = spec.mvfr[2], .write_mask = 0 },
+        ctr => .{ .reset = 0x8303_c003, .write_mask = 0 },
+        csselr => .{ .reset = 0, .write_mask = 1 },
         else => .{ .reset = 0, .write_mask = 0 },
     };
 }
@@ -268,6 +291,7 @@ pub fn profileOf(comptime c: core.Core) Profile {
             .shared => true,
             .main => main,
             .floating => spec.floating_point,
+            .cache => spec.caches,
         };
         if (!held) continue;
         const v = valuesOf(spec, slot);
@@ -278,21 +302,36 @@ pub fn profileOf(comptime c: core.Core) Profile {
     return out;
 }
 
-/// The block itself: a word per register the core has, over a profile shared by every instance.
+/// The block itself: a word per register the core has, over a profile shared by every instance, and the caches of this part.
 pub const Scb = struct {
     const Self = @This();
 
     profile: *const Profile,
     words: [layout.len]u32,
+    caches: core.Caches,
 
-    /// A block at the reset values its profile gives.
-    pub fn init(profile: *const Profile) Self {
-        return .{ .profile = profile, .words = profile.reset };
+    /// A block at the reset values its profile and its caches give; a core without the cache registers keeps no caches.
+    pub fn init(profile: *const Profile, caches: core.Caches) Self {
+        var out: Self = .{ .profile = profile, .words = undefined, .caches = .{} };
+        if (out.has(comptime slot(clidr).?)) out.caches = caches;
+        out.reset();
+        return out;
     }
 
     /// Returns every register to its reset value.
     pub fn reset(self: *Self) void {
         self.words = self.profile.reset;
+        const ctype = @as(u32, @intFromBool(self.caches.data != .none)) << 1 | @intFromBool(self.caches.instruction != .none);
+        self.words[comptime slot(clidr).?] = if (ctype == 0) 0 else 0x0900_0000 | ctype;
+        self.words[comptime slot(ccsidr).?] = self.selected(0);
+    }
+
+    fn selected(self: *const Self, instruction: u32) u32 {
+        return if (instruction == 0) data_ccsidr[@intFromEnum(self.caches.data)] else instruction_ccsidr[@intFromEnum(self.caches.instruction)];
+    }
+
+    fn enables(self: *const Self) u32 {
+        return (if (self.caches.data != .none) dc else 0) | (if (self.caches.instruction != .none) ic else 0);
     }
 
     fn has(self: *const Self, i: u8) bool {
@@ -348,21 +387,22 @@ pub const Scb = struct {
         if (self.profile.main) self.words[comptime slot(hfsr).?] |= bits;
     }
 
-    /// The word a register read answers; a register the core lacks answers null, and debug reads zero.
+    /// The word a register read answers; a register the core lacks answers null, and debug and cache maintenance read zero.
     pub fn readRegister(self: *Self, offset: u32) ?u32 {
-        if (self.answers(offset)) return 0;
         const i = index(offset);
-        if (i == absent or !self.has(i)) return null;
-        return self.words[i];
+        if (i != absent and self.has(i)) return self.words[i];
+        return if (self.answers(offset)) 0 else null;
     }
 
     /// Takes a register write, keeping the writable bits; a status register is cleared by what it is written.
     pub fn writeRegister(self: *Self, offset: u32, value: u32) bool {
-        if (self.answers(offset)) return true;
-        const i = slot(offset) orelse return false;
-        if (!self.has(i)) return false;
+        const i = index(offset);
+        if (i == absent or !self.has(i)) return self.answers(offset);
         if (offset == aircr and value >> 16 != vectkey) return true;
-        self.words[i] = if (clearedByWrite(offset)) self.words[i] & ~value else (value & self.profile.write_mask[i]) | (self.profile.reset[i] & ~self.profile.write_mask[i]);
+        if (offset == clidr or offset == ccsidr) return true;
+        if (offset == csselr) self.words[comptime slot(ccsidr).?] = self.selected(value & 1);
+        const mask = self.profile.write_mask[i] | (if (offset == ccr) self.enables() else 0);
+        self.words[i] = if (clearedByWrite(offset)) self.words[i] & ~value else (value & mask) | (self.profile.reset[i] & ~mask);
         return true;
     }
 
@@ -378,7 +418,8 @@ pub const Scb = struct {
 
     fn answers(self: *const Self, offset: u32) bool {
         if (offset & 3 != 0) return false;
-        if (self.profile.main and !self.profile.floating_point and offset -% fpccr < size - fpccr) return true;
+        if (self.profile.main and !self.profile.floating_point and offset -% fpccr < iciallu - fpccr) return true;
+        if (self.has(comptime slot(clidr).?) and offset -% iciallu <= bpiall - iciallu and offset != iciallu + 4) return true;
         return offset -% dhcsr < demcr - dhcsr;
     }
 

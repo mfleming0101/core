@@ -57,7 +57,7 @@ instruction path. See [Tracing](#tracing).
 
 ```zig
 const Cpu = core.arm.Processor(.{ .cores = &.{.m0plus}, .Bus = core.memory.Regions });
-var cpu = Cpu.init(&board.memory, .m0plus, .{});
+var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
 ```
 
 - `cores` lists every core the type must run as. The decode tree holds only the rows those
@@ -65,6 +65,9 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{});
 - `init` takes the bus, the core and the trace ring, and leaves the core at reset. On Arm the
   stack pointer and entry come from the vector table at address 0, so memory must be loaded
   first. On RISC-V the PC is the part's reset address.
+- On Arm, `init` also takes the part's caches after the core. Cache sizes belong to the part,
+  not the core: an M7 given `.{ .data = .kb32, .instruction = .kb32 }` reports those sizes,
+  `.{}` is a part without caches, and a core with no cache registers ignores them.
 - `reset()` returns a running core to that state, as an Arm SYSRESETREQ does.
 
 ### Running
@@ -250,7 +253,7 @@ the entry's number and latency.
 
 ```zig
 var records: [16]core.arm.trace.Record = undefined;
-var cpu = Cpu.init(&board.memory, .m0plus, try .init(&records));
+var cpu = Cpu.init(&board.memory, .m0plus, .{}, try .init(&records));
 _ = cpu.run(.{ .instructions = 10_000 });
 try core.arm.trace.writeLast(&out, &cpu.trace, 2, cpu.groups());
 ```

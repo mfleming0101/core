@@ -32,7 +32,7 @@ const Profile = struct {
 test "stepping the CRC-32 firmware attributes every cycle to an instruction class and finds the address that ran most" {
     var memory = try core.memory.Regions.adopt(&entries);
     try core.memory.elf.load(firmware, &memory);
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
 
     var profile: Profile = .{};
     while (true) {

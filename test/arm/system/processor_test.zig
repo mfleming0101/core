@@ -104,11 +104,11 @@ const CpuFetching = arm.Processor(.{ .cores = every, .Bus = Fetching });
 var ring: [256]arm.trace.Record = undefined;
 
 fn fast(core: arm.Core, memory: *Memory) Cpu {
-    return Cpu.init(memory, core, .{});
+    return Cpu.init(memory, core, .{}, .{});
 }
 
 fn traced(core: arm.Core, memory: *Memory) Cpu {
-    return Cpu.init(memory, core, arm.trace.Ring.init(&ring) catch unreachable);
+    return Cpu.init(memory, core, .{}, arm.trace.Ring.init(&ring) catch unreachable);
 }
 
 fn loaded() Memory {
@@ -373,7 +373,7 @@ test "the trace records belong to the caller, so a processor costs the same whet
     var m: Memory = .{};
     var quiet = fast(.m0plus, &m);
     var deep: [1024]arm.trace.Record = undefined;
-    var loud = Cpu.init(&m, .m0plus, try .init(&deep));
+    var loud = Cpu.init(&m, .m0plus, .{}, try .init(&deep));
     try std.testing.expectEqual(@sizeOf(Cpu), @sizeOf(@TypeOf(quiet)));
     try std.testing.expectEqual(@sizeOf(Cpu), @sizeOf(@TypeOf(loud)));
     try std.testing.expect(!quiet.trace.recording());
@@ -447,13 +447,38 @@ test "a reset with no memory at the vector table locks the core up with a fetch 
         }
     };
     var nothing: Nothing = .{};
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Nothing }).init(&nothing, .m0plus, try .init(&ring));
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Nothing }).init(&nothing, .m0plus, .{}, try .init(&ring));
     try std.testing.expect(cpu.state.lockup);
     try std.testing.expectEqual(@as(?arm.Stop, .fetch_fault), cpu.stop);
     var buffer: [256]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buffer);
     try cpu.explain(&w, 8);
     try std.testing.expect(std.mem.startsWith(u8, w.buffered(), "No memory answered the vector fetch from 00000000."));
+}
+
+test "two M7 parts of one processor type carry the caches each was built with, and keep them through a reset, M7 TRM 3.3.3 3.3.4 Table 3-7" {
+    var m = loaded();
+    var h723 = Cpu.init(&m, .m7, .{ .data = .kb32, .instruction = .kb32 }, .{});
+    var f750 = Cpu.init(&m, .m7, .{ .data = .kb4, .instruction = .kb4 }, .{});
+    var bare = Cpu.init(&m, .m7, .{}, .{});
+    try std.testing.expectEqual(@as(?u32, 0xf01f_e019), h723.peek(4, 0xe000_ed80));
+    try std.testing.expectEqual(@as(?u32, 0xf003_e019), f750.peek(4, 0xe000_ed80));
+    try std.testing.expectEqual(@as(?u32, 0), bare.peek(4, 0xe000_ed80));
+    try std.testing.expectEqual(@as(?u32, 0x0900_0003), f750.peek(4, 0xe000_ed78));
+    try std.testing.expectEqual(@as(?u32, 0), bare.peek(4, 0xe000_ed78));
+    try std.testing.expectEqual(@as(?void, {}), f750.poke(4, 0xe000_ed84, 1));
+    try std.testing.expectEqual(@as(?u32, 0xf007_e009), f750.peek(4, 0xe000_ed80));
+    try std.testing.expectEqual(@as(?void, {}), f750.poke(4, 0xe000_ed14, 0x0007_0200));
+    try std.testing.expectEqual(@as(?void, {}), bare.poke(4, 0xe000_ed14, 0x0007_0200));
+    try std.testing.expectEqual(@as(?u32, 0x0007_0200), f750.peek(4, 0xe000_ed14));
+    try std.testing.expectEqual(@as(?u32, 0x0004_0200), bare.peek(4, 0xe000_ed14));
+    try std.testing.expectEqual(@as(?void, {}), bare.poke(4, 0xe000_ef50, 0));
+    f750.reset();
+    try std.testing.expectEqual(@as(?u32, 0xf003_e019), f750.peek(4, 0xe000_ed80));
+    try std.testing.expectEqual(@as(?u32, 0xf01f_e019), h723.peek(4, 0xe000_ed80));
+    var four = Cpu.init(&m, .m4, .{ .data = .kb32, .instruction = .kb32 }, .{});
+    try std.testing.expectEqual(@as(?u32, null), four.peek(4, 0xe000_ed78));
+    try std.testing.expectEqual(@as(?void, null), four.poke(4, 0xe000_ef50, 0));
 }
 
 test "the processor answers SysTick at 0xE000E010 itself and faults the rest of the private peripheral bus" {
@@ -709,7 +734,7 @@ test "the core does not fetch from the execute-never regions of the default memo
             .{ .memory = .{ .base = base, .bytes = &code, .writable = false } },
         };
         var regions = try Regions.adopt(&entries);
-        var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m0plus, .{});
+        var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m0plus, .{}, .{});
         cpu.reset();
         const ran = cpu.run(.{ .instructions = 10 });
         try std.testing.expectEqual(@as(u64, 0), ran.instructions);
@@ -742,7 +767,7 @@ test "a run that continues past a BKPT inside an IT block advances ITSTATE with 
     std.mem.writeInt(u32, m.bytes[0..4], 0x1000, .little);
     std.mem.writeInt(u32, m.bytes[4..8], 9, .little);
     for ([_]u16{ 0x2000, 0xbf0c, 0xbe00, 0x2001, 0xbe01 }, 0..) |code, i| std.mem.writeInt(u16, m.bytes[8 + i * 2 ..][0..2], code, .little);
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m3, .{});
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m3, .{}, .{});
     cpu.reset();
     try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 100 }).stop);
     try std.testing.expectEqual(@as(u32, 0xc), cpu.state.pc);
@@ -760,7 +785,7 @@ test "MRS, MSR, and a barrier cost three cycles each on the M0+ and one each on 
     m0.reset();
     try std.testing.expectEqual(arm.Run{ .instructions = 3, .cycles = 9, .latency = 0, .stop = .breakpoint, .ended = .stopped }, m0.run(.{ .instructions = 100 }));
     try std.testing.expectEqual(@as(u32, 0x1000), m0.state.r[0]);
-    var m4 = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m4, .{});
+    var m4 = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m4, .{}, .{});
     m4.reset();
     try std.testing.expectEqual(arm.Run{ .instructions = 3, .cycles = 3, .latency = 0, .stop = .breakpoint, .ended = .stopped }, m4.run(.{ .instructions = 100 }));
 }
@@ -891,7 +916,7 @@ test "the M4 charges 12 cycles to enter an exception and 10 to return, M4 TRM 3.
         &.{ 0xdf00, 0xbe00 },
         &.{0x4770},
     });
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m4, .{});
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m4, .{}, .{});
     cpu.reset();
     try std.testing.expectEqual(arm.Run{ .instructions = 2, .cycles = 1 + 12 + 3 + 10, .latency = 12 + 10, .stop = .breakpoint, .ended = .stopped }, cpu.run(.{ .instructions = 100 }));
 }
@@ -901,7 +926,7 @@ test "the M3 charges 12 cycles to enter an exception and 12 to return, M3 TRM 3.
         &.{ 0xdf00, 0xbe00 },
         &.{0x4770},
     });
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m3, .{});
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m3, .{}, .{});
     cpu.reset();
     try std.testing.expectEqual(arm.Run{ .instructions = 2, .cycles = 1 + 12 + 3 + 12, .latency = 12 + 12, .stop = .breakpoint, .ended = .stopped }, cpu.run(.{ .instructions = 100 }));
 }
@@ -911,7 +936,7 @@ test "the step that enters an exception retires no instruction and reports the e
         &.{ 0xdf00, 0xbe00 },
         &.{0x4770},
     });
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m4, .{});
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m4, .{}, .{});
     cpu.reset();
     const call = cpu.step();
     try std.testing.expectEqual(@as(?Class, .system), call.class);
@@ -1836,7 +1861,7 @@ test "the core fetches through the memory's own fetch path, so code and data end
         .{ .memory = .{ .base = 0x2000_0000, .bytes = &ram, .writable = true } },
     };
     var regions = try Regions.adopt(&entries);
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{});
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{}, .{});
     cpu.reset();
     try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
     try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, ram[0x18..][0..4], .little));
@@ -2154,7 +2179,7 @@ test "a device model raises an interrupt through the word it is handed, and the 
         .{ .device = .{ .base = 0x4000_0000, .size = 0x10, .device = .{ .context = @ptrCast(&doorbell), .read = Doorbell.read, .write = Doorbell.write } } },
     };
     var regions = try Regions.adopt(&entries);
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{});
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{}, .{});
     cpu.reset();
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 1));
     try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 20 }).stop);
@@ -2191,7 +2216,7 @@ test "a line in the top enable word reaches its handler with its number in IPSR,
         .{ .device = .{ .base = 0x4000_0000, .size = 0x10, .device = .{ .context = @ptrCast(&context), .read = HighDoorbell.read, .write = HighDoorbell.write } } },
     };
     var regions = try Regions.adopt(&entries);
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{});
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{}, .{});
     cpu.reset();
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e118, 1 << 8));
     try std.testing.expectEqual(@as(?u32, 1 << 8), cpu.peek(4, 0xe000_e118));
@@ -2238,7 +2263,7 @@ test "a device that keeps time raises an interrupt the core takes without ever b
         .{ .device = .{ .base = 0x4000_0000, .size = 0x10, .device = .{ .context = @ptrCast(&context), .read = Metronome.read, .write = Metronome.write, .tick = Metronome.tick } } },
     };
     var regions = try Regions.adopt(&entries);
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{});
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{}, .{});
     cpu.reset();
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 1));
     try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 20 }).stop);
@@ -2295,7 +2320,7 @@ test "an interrupt line a device still holds high at exception return is pended 
         .{ .device = .{ .base = 0x4000_0000, .size = 0x10, .device = .{ .context = &latch, .read = Latch.read, .write = Latch.write, .tick = Latch.tick, .asserted = Latch.asserted } } },
     };
     var regions = try Regions.adopt(&entries);
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m0plus, .{});
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m0plus, .{}, .{});
     cpu.reset();
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 1));
     try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 60 }).stop);
@@ -2470,7 +2495,7 @@ test "a Non-secure instruction fetch from Secure memory is refused and sets INVE
 
 test "a bus that supplies its own fetch is still checked by the SAU, D1.2.232" {
     var m: Fetching = .{ .inner = loaded() };
-    var cpu = CpuFetching.init(&m, .m33, .{});
+    var cpu = CpuFetching.init(&m, .m33, .{}, .{});
     cpu.reset();
     nonSecure(&cpu);
     try std.testing.expectEqual(@as(?u16, 0), cpu.parcel(0x40));

@@ -64,7 +64,7 @@ test "the smallest device: one register, and every byte the program stores to it
     word(0x1c, 0x4000_0000);
 
     var memory = try core.memory.Regions.adopt(&entries);
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
 
     const ran = cpu.run(.{ .instructions = 100 });
 

@@ -25,7 +25,7 @@ var board: Board = .{};
 
 test "a Cortex-M0+ runs the CRC-32 firmware to its breakpoint and leaves the checksum of \"123456789\" in r0" {
     try board.load();
-    var cpu = Cpu.init(&board.memory, .m0plus, .{});
+    var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
 
     const ran = cpu.run(.{ .instructions = 10_000 });
 
@@ -38,7 +38,7 @@ test "a Cortex-M0+ runs the CRC-32 firmware to its breakpoint and leaves the che
 test "the same run keeps a trace, and core.arm.trace renders its last records" {
     try board.load();
     var records: [16]core.arm.trace.Record = undefined;
-    var cpu = Cpu.init(&board.memory, .m0plus, try .init(&records));
+    var cpu = Cpu.init(&board.memory, .m0plus, .{}, try .init(&records));
 
     _ = cpu.run(.{ .instructions = 10_000 });
 

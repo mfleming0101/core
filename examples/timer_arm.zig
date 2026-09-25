@@ -18,7 +18,7 @@ var entries = [_]core.memory.Regions.Entry{
 test "a timer device on the bus interrupts a Cortex-M0+ five times, and the program counts the interrupts" {
     var memory = try core.memory.Regions.adopt(&entries);
     try core.memory.elf.load(firmware, &memory);
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
 
     const ran = cpu.run(.{ .instructions = 100_000 });
 

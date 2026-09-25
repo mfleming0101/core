@@ -1,11 +1,16 @@
 const std = @import("std");
 const register = @import("../../register.zig");
 const scb = @import("../../../src/arm/system/scb.zig");
+const Caches = @import("../../../src/arm/system/core.zig").Caches;
 
 fn of(comptime c: anytype) scb.Scb {
+    return fitted(c, .{});
+}
+
+fn fitted(comptime c: anytype, caches: Caches) scb.Scb {
     return .init(&struct {
         const profile: scb.Profile = scb.profileOf(c);
-    }.profile);
+    }.profile, caches);
 }
 
 fn registersOf(comptime c: anytype) []const register.Register {
@@ -31,7 +36,7 @@ fn find(comptime c: anytype, name: []const u8) register.Register {
 }
 
 test "every implemented register of the System Control Block resets and masks as its manual says, v6-M and v7-M B3.2.2, v8-M D1.1.11" {
-    inline for (.{ .m0plus, .m4, .m23, .m33, .m55 }) |core| {
+    inline for (.{ .m0plus, .m4, .m7, .m23, .m33, .m55 }) |core| {
         var block = of(core);
         try std.testing.expect(register.check(&block, registersOf(core)) == null);
     }
@@ -81,6 +86,98 @@ test "CCR resets to the value of the core and keeps its reserved-as-one bits, v6
         try std.testing.expectEqual(@as(u32, at_reset), block.readRegister(scb.ccr).?);
         try std.testing.expect(block.writeRegister(scb.ccr, 0));
         try std.testing.expectEqual(@as(u32, at_reset & ~@as(u32, if (core == .m4) 0x200 else 0)), block.readRegister(scb.ccr).?);
+    }
+}
+
+test "the M7 resets CCR with BP set, which no write clears, and lets software set IC and DC only for the caches the part has, v7-M B3.2.8, M7 TRM 3.2 4.1" {
+    var block = fitted(.m7, .{ .data = .kb32, .instruction = .kb32 });
+    try std.testing.expectEqual(@as(u32, 0x0004_0200), block.readRegister(scb.ccr).?);
+    try std.testing.expect(block.writeRegister(scb.ccr, 0x0003_0200));
+    try std.testing.expectEqual(@as(u32, 0x0007_0200), block.readRegister(scb.ccr).?);
+    try std.testing.expect(block.writeRegister(scb.ccr, 0x0000_0200));
+    try std.testing.expectEqual(@as(u32, 0x0004_0200), block.readRegister(scb.ccr).?);
+    var data_only = fitted(.m7, .{ .data = .kb4 });
+    try std.testing.expect(data_only.writeRegister(scb.ccr, 0x0003_0200));
+    try std.testing.expectEqual(@as(u32, 0x0005_0200), data_only.readRegister(scb.ccr).?);
+    var none = of(.m7);
+    try std.testing.expect(none.writeRegister(scb.ccr, 0x0003_0200));
+    try std.testing.expectEqual(@as(u32, 0x0004_0200), none.readRegister(scb.ccr).?);
+    var four = fitted(.m4, .{ .data = .kb32, .instruction = .kb32 });
+    try std.testing.expect(four.writeRegister(scb.ccr, 0x0007_0200));
+    try std.testing.expectEqual(@as(u32, 0x0000_0200), four.readRegister(scb.ccr).?);
+}
+
+test "CLIDR, CTR and CCSIDR describe the M7 caches and CSSELR.InD picks the data or the instruction CCSIDR, v7-M B4.8, M7 TRM 3.3.3 3.3.4 3.3.5" {
+    var block = fitted(.m7, .{ .data = .kb32, .instruction = .kb32 });
+    try std.testing.expectEqual(@as(u32, 0x0900_0003), block.readRegister(scb.clidr).?);
+    try std.testing.expectEqual(@as(u32, 0x8303_c003), block.readRegister(scb.ctr).?);
+    try std.testing.expectEqual(@as(u32, 0), block.readRegister(scb.csselr).?);
+    try std.testing.expectEqual(@as(u32, 0xf01f_e019), block.readRegister(scb.ccsidr).?);
+    try std.testing.expect(block.writeRegister(scb.csselr, 0xffff_ffff));
+    try std.testing.expectEqual(@as(u32, 1), block.readRegister(scb.csselr).?);
+    try std.testing.expectEqual(@as(u32, 0xf03f_e009), block.readRegister(scb.ccsidr).?);
+    try std.testing.expect(block.writeRegister(scb.ccsidr, 0));
+    try std.testing.expectEqual(@as(u32, 0xf03f_e009), block.readRegister(scb.ccsidr).?);
+    try std.testing.expect(block.writeRegister(scb.csselr, 0));
+    try std.testing.expectEqual(@as(u32, 0xf01f_e019), block.readRegister(scb.ccsidr).?);
+    try std.testing.expect(block.writeRegister(scb.csselr, 1));
+    try std.testing.expect(block.writeRegister(scb.clidr, 0));
+    block.reset();
+    try std.testing.expectEqual(@as(u32, 0xf01f_e019), block.readRegister(scb.ccsidr).?);
+    try std.testing.expectEqual(@as(u32, 0x0900_0003), block.readRegister(scb.clidr).?);
+}
+
+test "every CCSIDR the M7 TRM lists is the one its size selects, M7 TRM Table 3-7" {
+    inline for (.{ .kb4, .kb8, .kb16, .kb32, .kb64 }, .{ 0xf003_e019, 0xf007_e019, 0xf00f_e019, 0xf01f_e019, 0xf03f_e019 }, .{ 0xf007_e009, 0xf00f_e009, 0xf01f_e009, 0xf03f_e009, 0xf07f_e009 }) |size, data, instruction| {
+        var block = fitted(.m7, .{ .data = size, .instruction = size });
+        try std.testing.expectEqual(@as(u32, data), block.readRegister(scb.ccsidr).?);
+        try std.testing.expect(block.writeRegister(scb.csselr, 1));
+        try std.testing.expectEqual(@as(u32, instruction), block.readRegister(scb.ccsidr).?);
+    }
+}
+
+test "an M7 built without caches keeps the identification registers, with CLIDR and each CCSIDR reading zero, M7 TRM 3.2 3.3.3 3.3.4 3.3.5" {
+    var block = of(.m7);
+    try std.testing.expectEqual(@as(u32, 0), block.readRegister(scb.clidr).?);
+    try std.testing.expectEqual(@as(u32, 0x8303_c003), block.readRegister(scb.ctr).?);
+    try std.testing.expectEqual(@as(u32, 0), block.readRegister(scb.ccsidr).?);
+    try std.testing.expect(block.writeRegister(scb.csselr, 1));
+    try std.testing.expectEqual(@as(u32, 1), block.readRegister(scb.csselr).?);
+    try std.testing.expectEqual(@as(u32, 0), block.readRegister(scb.ccsidr).?);
+    var instruction_only = fitted(.m7, .{ .instruction = .kb16 });
+    try std.testing.expectEqual(@as(u32, 0x0900_0001), instruction_only.readRegister(scb.clidr).?);
+    try std.testing.expectEqual(@as(u32, 0), instruction_only.readRegister(scb.ccsidr).?);
+}
+
+test "the M7 takes every cache and branch predictor maintenance write and reads each as zero, and the reserved word between faults, with or without caches, v7-M B2.2.7, M7 TRM 3.2" {
+    var block = of(.m7);
+    var cached = fitted(.m7, .{ .data = .kb32, .instruction = .kb32 });
+    var offset = scb.iciallu;
+    while (offset <= scb.bpiall) : (offset += 4) {
+        if (offset == scb.iciallu + 4) continue;
+        try std.testing.expect(block.writeRegister(offset, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0), block.readRegister(offset));
+        try std.testing.expect(cached.writeRegister(offset, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0), cached.readRegister(offset));
+    }
+    try std.testing.expectEqual(@as(?u32, null), block.readRegister(scb.iciallu + 4));
+    try std.testing.expect(!block.writeRegister(scb.iciallu + 4, 0));
+    try std.testing.expectEqual(@as(?u32, null), block.readRegister(scb.bpiall + 1));
+}
+
+test "a core without caches still refuses the cache identification and maintenance addresses, M4 TRM 4.1" {
+    inline for (.{ .m0, .m0plus, .m1, .m23, .m3, .m4, .m33, .m55, .m85 }) |core| {
+        var block = fitted(core, .{ .data = .kb32, .instruction = .kb32 });
+        var offset = scb.clidr;
+        while (offset <= scb.csselr) : (offset += 4) {
+            try std.testing.expectEqual(@as(?u32, null), block.readRegister(offset));
+            try std.testing.expect(!block.writeRegister(offset, 0));
+        }
+        offset = scb.iciallu;
+        while (offset <= scb.bpiall) : (offset += 4) {
+            try std.testing.expectEqual(@as(?u32, null), block.readRegister(offset));
+            try std.testing.expect(!block.writeRegister(offset, 0));
+        }
     }
 }
 

@@ -33,6 +33,8 @@ pub const ns_base = @import("system/processor.zig").ns_base;
 pub const Core = @import("system/core.zig").Core;
 /// The spec of a core, selected at compile time.
 pub const spec = @import("system/core.zig").spec;
+/// The level 1 caches a part was built with, which Processor.init takes.
+pub const Caches = @import("system/core.zig").Caches;
 /// Why the core is standing still: isa's seventeen reasons a step halted.
 pub const Stop = @import("isa").arm.Stop;
 /// The instruction class a step reports, which the cycle table is indexed by.

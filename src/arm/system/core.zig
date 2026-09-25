@@ -32,7 +32,14 @@ pub const Spec = struct {
     mve: bool = false,
     mpu_regions: u8 = 0,
     mvfr: [3]u32 = @splat(0),
+    caches: bool = false,
 };
+
+/// The size of a level 1 cache, as M7 TRM Table 3-7 lists them.
+pub const CacheSize = enum { none, kb4, kb8, kb16, kb32, kb64 };
+
+/// The level 1 caches one part was built with, which the M7 TRM leaves to the part; a core that carries none ignores them.
+pub const Caches = struct { data: CacheSize = .none, instruction: CacheSize = .none };
 
 /// The spec of a core, each entry read off its Technical Reference Manual: the cycle tables from its instruction set summary, M4 TRM 3.3, and the entry and exit cycles from its interrupt latency, M4 TRM 3.9.2.
 pub fn spec(comptime core: Core) Spec {
@@ -86,7 +93,7 @@ pub fn spec(comptime core: Core) Spec {
             .security = true,
         }),
         .m3 => like(.m4, .{ .architecture = .armv7m, .cpuid = 0x410f_c231, .exit = 12, .floating_point = false, .mvfr = [3]u32{ 0, 0, 0 } }),
-        .m7 => like(.m4, .{ .cpuid = 0x411f_c272, .cycles = null, .taken = null, .double_precision = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0221, 0x1200_0011, 0x0000_0040 } }),
+        .m7 => like(.m4, .{ .cpuid = 0x411f_c272, .cycles = null, .taken = null, .ccr = 0x0004_0200, .double_precision = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0221, 0x1200_0011, 0x0000_0040 }, .caches = true }),
         .m33 => like(.m4, .{ .architecture = .armv8m_main, .cpuid = 0x410f_d213, .cycles = null, .taken = null, .ccr = 0x0000_0201, .security = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0021, 0x1100_0011, 0x0000_0040 } }),
         .m55 => like(.m33, .{ .architecture = .armv8_1m_main, .cpuid = 0x411f_d221, .double_precision = true, .half_precision = true, .mve = true, .mvfr = [3]u32{ 0x1011_0221, 0x1210_0211, 0x0000_0040 } }),
         .m85 => like(.m55, .{ .cpuid = 0x411f_d230, .pacbti = true }),

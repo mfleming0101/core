@@ -30,7 +30,7 @@ test "three instructions in memory, a vector table in front of them, and a core 
     });
 
     var memory = try core.memory.Regions.adopt(&entries);
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
     try std.testing.expectEqual(@as(u32, 0x1000), cpu.state.sp());
     try std.testing.expectEqual(@as(u32, 0x8), cpu.state.pc);
 

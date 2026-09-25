@@ -16,7 +16,7 @@ test "a load from an address nothing answers, with no fault handler installed, l
     var memory = try core.memory.Regions.adopt(&entries);
     try core.memory.elf.load(firmware, &memory);
     var records: [8]core.arm.trace.Record = undefined;
-    var cpu = Cpu.init(&memory, .m3, try .init(&records));
+    var cpu = Cpu.init(&memory, .m3, .{}, try .init(&records));
 
     const ran = cpu.run(.{ .instructions = 1_000 });
 

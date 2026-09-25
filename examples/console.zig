@@ -24,7 +24,7 @@ fn runToExit(cpu: *Cpu, console: *std.Io.Writer) !u8 {
 test "a program prints over semihosting and exits with a status the host reads" {
     var memory = try core.memory.Regions.adopt(&entries);
     try core.memory.elf.load(firmware, &memory);
-    var cpu = Cpu.init(&memory, .m0plus, .{});
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
 
     var text: [64]u8 = undefined;
     var console: std.Io.Writer = .fixed(&text);
