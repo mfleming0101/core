@@ -190,7 +190,7 @@ pub const secureflt_ena: u32 = 1 << 19;
 /// The DEMCR bit that runs the DWT.
 pub const trcena: u32 = 1 << 24;
 
-const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache } };
+const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_type } };
 
 /// Every register the block holds, with the offset and the group that decides whether a core has it.
 pub const layout = [_]Slot{
@@ -219,7 +219,7 @@ pub const layout = [_]Slot{
     .{ .name = "MVFR1", .offset = mvfr1, .group = .floating },
     .{ .name = "MVFR2", .offset = mvfr2, .group = .floating },
     .{ .name = "CLIDR", .offset = clidr, .group = .cache },
-    .{ .name = "CTR", .offset = ctr, .group = .cache },
+    .{ .name = "CTR", .offset = ctr, .group = .cache_type },
     .{ .name = "CCSIDR", .offset = ccsidr, .group = .cache },
     .{ .name = "CSSELR", .offset = csselr, .group = .cache },
 };
@@ -274,7 +274,7 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
         mvfr0 => .{ .reset = spec.mvfr[0], .write_mask = 0 },
         mvfr1 => .{ .reset = spec.mvfr[1], .write_mask = 0 },
         mvfr2 => .{ .reset = spec.mvfr[2], .write_mask = 0 },
-        ctr => .{ .reset = 0x8303_c003, .write_mask = 0 },
+        ctr => .{ .reset = if (spec.caches) 0x8303_c003 else 0, .write_mask = 0 },
         csselr => .{ .reset = 0, .write_mask = 1 },
         else => .{ .reset = 0, .write_mask = 0 },
     };
@@ -292,6 +292,7 @@ pub fn profileOf(comptime c: core.Core) Profile {
             .main => main,
             .floating => spec.floating_point,
             .cache => spec.caches,
+            .cache_type => spec.caches or spec.architecture == .armv7m or spec.architecture == .armv7em,
         };
         if (!held) continue;
         const v = valuesOf(spec, slot);
