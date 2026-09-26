@@ -279,7 +279,7 @@ pub fn Processor(comptime options: Options) type {
             out.mpu_ns_regions = if (part.mpu_ns_regions) |n| @intCast(choice.mpu_ns_regions.fit(n)) else if (spec.security) spec.mpu_regions else 0;
             out.sau_regions = if (part.sau_regions) |n| @intCast(choice.sau_regions.fit(n)) else if (spec.security) sau_block.regions else 0;
             out.priority_bits = if (part.priority_bits) |n| @intCast(choice.priority_bits.fit(n)) else spec.priority_bits;
-            out.interrupts = if (part.interrupts) |n| @min(choice.interrupts.fit(n), nvic_block.lines) else nvic_block.lines;
+            out.interrupts = @min(if (part.interrupts) |n| choice.interrupts.fit(n) else choice.interrupts.most(), nvic_block.lines);
             return out;
         }
 

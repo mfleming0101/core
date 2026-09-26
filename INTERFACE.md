@@ -72,7 +72,8 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
   `priority_bits` and the number of external `interrupts`, each lowered to a value the core's
   TRM lists or clamped to its range. Left null, the core keeps its default: 8 MPU and SAU
   regions, or no MPU on the M0 and M1; 2 priority bits on the M0, M0+, M1 and M23, 4 on the
-  rest; and 240 interrupts, which is also the most the library carries. An M7 given
+  rest; and 32 interrupts on the M0, M0+ and M1 and 240 on the rest, which is also the most
+  the library carries. An M7 given
   `.{ .data = .kb32, .instruction = .kb32, .itcm = .{ .size = .kb64, .enabled = true } }`
   reports those, `.{}` is a part with none of them, and a core without the registers a field
   sets ignores that field.

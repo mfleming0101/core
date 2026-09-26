@@ -592,6 +592,20 @@ test "a part's values outside its core's TRM options are lowered or clamped to t
     try std.testing.expectEqual(@as(?u32, 8), plain.peek(4, 0xe000_edd4));
 }
 
+test "a part that gives no interrupt count has the 32 its TRM allows at most on the M0, M0+ and M1, and 240 on the rest, M0, M0+ and M1 TRM Table 1-1" {
+    var m = loaded();
+    for ([_]arm.Core{ .m0, .m0plus, .m1 }) |core| {
+        var cpu = Cpu.init(&m, core, .{}, .{});
+        cpu.pend(32);
+        try std.testing.expect(cpu.pending == 0);
+        cpu.pend(31);
+        try std.testing.expect(cpu.pending != 0);
+    }
+    var cpu = Cpu.init(&m, .m23, .{}, .{});
+    cpu.pend(239);
+    try std.testing.expect(cpu.pending != 0);
+}
+
 test "SAU_TYPE reads the region count each part was built with, lowered to one its core's TRM lists, and kept through a reset, M23 TRM Table 1-1, M33 TRM 1.3, v8-M D1.2.229" {
     var m = loaded();
     for ([_]arm.Core{ .m23, .m33 }) |core| {
