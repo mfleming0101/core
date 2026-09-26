@@ -74,6 +74,12 @@ test "the 8KB from 0xE001E000 are the implementation defined registers of the M5
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe002_0000));
 }
 
+test "the 4KB from 0xE0047000 are the EWIC, M55 TRM Table A-1" {
+    try std.testing.expectEqual(.ewic, bus.region(0xe004_7000));
+    try std.testing.expectEqual(.ewic, bus.region(0xe004_7ffc));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe004_8000));
+}
+
 test "the rest of the private peripheral bus is unmapped in this core" {
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_dffc));
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_ecf8));

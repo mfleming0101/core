@@ -24,6 +24,7 @@ const m7_block = @import("m7.zig");
 const icb_block = @import("icb.zig");
 const impdef_block = @import("impdef.zig");
 const ras_block = @import("ras.zig");
+const ewic_block = @import("ewic.zig");
 const mpu_block = @import("mpu.zig");
 const trace = @import("../trace.zig");
 const regions = @import("../../memory/regions.zig");
@@ -128,6 +129,7 @@ pub fn Processor(comptime options: Options) type {
     const Impdef = for (options.cores) |c| {
         if (c == .m55 or c == .m85) break impdef_block.Block;
     } else void;
+    const Ewic = if (Impdef == void) void else ewic_block.Ewic;
     const choices = blk: {
         var out: [options.cores.len]core.Choices = undefined;
         for (options.cores, 0..) |c, i| out[i] = core.choicesOf(c);
@@ -248,6 +250,7 @@ pub fn Processor(comptime options: Options) type {
         sau: sau_block.Sau,
         m7: M7,
         impdef: Impdef,
+        ewic: Ewic,
         mpu: Mpu,
         mpu_ns: MpuNs,
         banked: State.Banked,
@@ -322,6 +325,7 @@ pub fn Processor(comptime options: Options) type {
                 .sau = .init(spec.security, spec.architecture.main(), part.sau_regions.?),
                 .m7 = if (M7 == void) {} else .init(part),
                 .impdef = if (Impdef == void) {} else .init(c, part),
+                .ewic = if (Ewic == void) {} else .init(if (c == .m55 or c == .m85) part.ewic else 0),
                 .mpu = .init(part.mpu_regions.?, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .mpu_ns = if (MpuNs == void) {} else .init(part.mpu_ns_regions.?, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .banked = .{},
@@ -434,6 +438,7 @@ pub fn Processor(comptime options: Options) type {
             if (M7 != void) self.m7.wiring(&out);
             if (Impdef != void) {
                 if (self.spec.core == .m55 or self.spec.core == .m85) self.impdef.wiring(&out);
+                out.ewic = self.ewic.events;
             }
             if (SysTickNs != void) {
                 if (self.systick_ns) |timer| {
@@ -720,6 +725,10 @@ pub fn Processor(comptime options: Options) type {
             return if (ns and ras_block.gated(offset) and !self.faultsNonSecure()) 0 else word;
         }
 
+        fn ewicOpen(self: *Self) bool {
+            return !self.spec.security or self.state.secure or self.faultsNonSecure();
+        }
+
         fn writeImpdef(self: *Self, offset: u32, value: u32) bool {
             if (Impdef == void) return false;
             const block = self.impdefBlock() orelse return false;
@@ -897,6 +906,9 @@ pub fn Processor(comptime options: Options) type {
         /// Raises a whole set of lines, waking a sleeping core if one of them can be taken.
         pub fn pendAll(self: *Self, raised: Lines) void {
             self.pending |= @as(Set, raised & self.nvic.present()) << first_interrupt;
+            if (Ewic != void and self.ewic.enabled) {
+                for (0..ewic_block.banks) |n| self.ewic.latch(@intCast(n), nvic_block.wordOf(raised & self.nvic.present(), @intCast(n)));
+            }
             self.pended();
             self.due = (self.due & kept_due) | summary(self.pending);
             if (self.due & asleep_due != 0 and self.woken()) self.due &= ~asleep_due;
@@ -1582,6 +1594,10 @@ pub fn Processor(comptime options: Options) type {
                 .nvic => return answered(into, self.readNvic(address - ppb.nvic_base, self.spec.security and !self.state.secure)),
                 .nvic_ns => return self.spec.security and answered(into, if (self.state.secure) self.readNvic(address - ppb.nvic_base - ppb.alias, true) else 0),
                 .ras => return answered(into, self.readRas(address - ras_block.base, self.spec.security and !self.state.secure)),
+                .ewic => {
+                    if (Ewic == void or !self.ewicOpen()) return false;
+                    return answered(into, self.ewic.readRegister(address - ewic_block.base));
+                },
                 .impdef => {
                     if (Impdef == void) return false;
                     const block = self.impdefBlock() orelse return false;
@@ -1670,6 +1686,7 @@ pub fn Processor(comptime options: Options) type {
                 .nvic_ns => self.spec.security and (!self.state.secure or self.writeNvic(address - ppb.nvic_base - ppb.alias, true, value)),
                 .ras => self.readRas(address - ras_block.base, self.spec.security and !self.state.secure) != null,
                 .impdef => self.writeImpdef(address - impdef_block.base, value),
+                .ewic => Ewic != void and self.ewicOpen() and self.ewic.writeRegister(address - ewic_block.base, value),
                 .ppb_unmapped => false,
             };
             return if (written) {} else null;

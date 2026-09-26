@@ -4158,3 +4158,63 @@ test "the RAS error record is RAZ/WI from the Non-secure state while AIRCR.BFHFN
     cpu.reguard();
     try std.testing.expectEqual(@as(?u32, 0x101), cpu.peek(4, 0xe000_5000));
 }
+
+test "an M55 part fits an EWIC only where it gives one events, EWIC_NUMID reporting them, EWIC_ASCR resetting to three and EWIC_CLRMASK clearing the masks, which keep only the interrupts supported, M55 TRM A.1 Table A-1 A.2.3 A.2.5" {
+    var m = loaded();
+    var none = fast(.m55, &m);
+    try std.testing.expectEqual(@as(?u32, null), none.peek(4, 0xe004_7000));
+    var least = Cpu.init(&m, .m55, .{ .ewic = 1 }, .{});
+    try std.testing.expectEqual(@as(?u32, 4), least.peek(4, 0xe004_700c));
+    var cpu = Cpu.init(&m, .m55, .{ .ewic = 40 }, .{});
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe004_7000));
+    try std.testing.expectEqual(@as(?u32, 3), cpu.peek(4, 0xe004_7004));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe004_7200, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe004_7204, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe004_7208, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe004_720c, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?u32, 7), cpu.peek(4, 0xe004_7200));
+    try std.testing.expectEqual(@as(?u32, 0xffff_ffff), cpu.peek(4, 0xe004_7204));
+    try std.testing.expectEqual(@as(?u32, 0x1f), cpu.peek(4, 0xe004_7208));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe004_720c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe004_7008, 1));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe004_7200));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe004_7204));
+    cpu.reset();
+    try std.testing.expectEqual(@as(?u32, 40), cpu.peek(4, 0xe004_700c));
+}
+
+test "while EWIC_CR.EN is set the EWIC latches each supported interrupt raised, EWIC_PSR summarising, and clearing EN drops them, M55 TRM A.2.1 A.2.6 A.2.7" {
+    var m = loaded();
+    var cpu = Cpu.init(&m, .m55, .{ .ewic = 40 }, .{});
+    cpu.pend(33);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe004_7408));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe004_7000, 1));
+    cpu.pend(33);
+    cpu.pend(40);
+    try std.testing.expectEqual(@as(?u32, 2), cpu.peek(4, 0xe004_7408));
+    try std.testing.expectEqual(@as(?u32, 4), cpu.peek(4, 0xe004_7600));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe004_7404, 1));
+    try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe004_7404));
+    try std.testing.expectEqual(@as(?u32, 6), cpu.peek(4, 0xe004_7600));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe004_7400));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe004_7000, 0));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe004_7404));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe004_7600));
+}
+
+test "the Non-secure state reaches the EWIC only while AIRCR.BFHFNMINS is set, M55 TRM A.2.1" {
+    var m = loaded();
+    var cpu = Cpu.init(&m, .m55, .{ .ewic = 40 }, .{});
+    _ = cpu.poke(4, 0xe000_edd8, 1);
+    _ = cpu.poke(4, 0xe000_eddc, 0xe004_7000);
+    _ = cpu.poke(4, 0xe000_ede0, 0xe004_7fe1);
+    _ = cpu.poke(4, 0xe000_edd8, 0);
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe004_700c));
+    cpu.state.secure = true;
+    cpu.reguard();
+    _ = cpu.poke(4, 0xe000_ed0c, @as(u32, scb_block.vectkey) << 16 | scb_block.bfhfnmins);
+    cpu.state.secure = false;
+    cpu.reguard();
+    try std.testing.expectEqual(@as(?u32, 40), cpu.peek(4, 0xe004_700c));
+}

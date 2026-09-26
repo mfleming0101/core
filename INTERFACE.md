@@ -81,7 +81,8 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
   `calibration`, of which SYST_CALIB keeps SKEW and TENMS; NOREF always reads one, as the
   library fits no SysTick reference clock. `calibration_ns` is the same for SYST_CALIB_NS of
   the second SysTick, which the M33, M55 and M85 always fit and the M23 fits where
-  `systick_ns` is set. An M7 given
+  `systick_ns` is set. On the M55 and M85 it is also `ewic`, the number of events the part's
+  External Wakeup Interrupt Controller supports, 4 to 483, or 0 for none. An M7 given
   `.{ .data = .kb32, .instruction = .kb32, .itcm = .{ .size = .kb64, .enabled = true } }`
   reports those, `.{}` is a part with none of them, and a core without the registers a field
   sets ignores that field.
