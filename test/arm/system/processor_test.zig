@@ -4121,3 +4121,40 @@ test "EVENTSPR behaves as an RXEV event and as an NMI, M55 TRM 5.22.1" {
     try std.testing.expect(cpu.pending & Cpu.one(arm.nmi) != 0);
     try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e400));
 }
+
+test "the RAS error record reads empty, ERRFR0 and ERRDEVID announcing one record only where ECC is fitted, ERRIIDR naming the core and RFSR reading zero, M55 and M85 TRM Table 5-2 Table 11-5 11.6.3" {
+    var m = loaded();
+    var cpu = Cpu.init(&m, .m55, .{ .ecc = true }, .{});
+    try std.testing.expectEqual(@as(?u32, 0x101), cpu.peek(4, 0xe000_5000));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_5010, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_5010));
+    try std.testing.expectEqual(@as(?u32, 0x7000_0000), cpu.peek(4, 0xe000_501c));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_5e00));
+    try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe000_5fc8));
+    try std.testing.expectEqual(@as(?u32, 0xd220_043b), cpu.peek(4, 0xe000_5e10));
+    try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe000_5004));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_ef04));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ef04));
+    var bare = fast(.m85, &m);
+    try std.testing.expectEqual(@as(?u32, 0), bare.peek(4, 0xe000_5000));
+    try std.testing.expectEqual(@as(?u32, 0), bare.peek(4, 0xe000_5fc8));
+    try std.testing.expectEqual(@as(?u32, 0xd230_043b), bare.peek(4, 0xe000_5e10));
+    var m33 = fast(.m33, &m);
+    try std.testing.expectEqual(@as(?u32, null), m33.peek(4, 0xe000_5000));
+    try std.testing.expectEqual(@as(?u32, null), m33.peek(4, 0xe000_ef04));
+}
+
+test "the RAS error record is RAZ/WI from the Non-secure state while AIRCR.BFHFNMINS is zero, but for ERRIIDR and ERRDEVID, M55 TRM 11.6.1 11.6.6, v8-M D1.2.86" {
+    var m = loaded();
+    var cpu = Cpu.init(&m, .m55, .{ .ecc = true }, .{});
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_5000));
+    try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe000_5fc8));
+    try std.testing.expectEqual(@as(?u32, 0xd220_043b), cpu.peek(4, 0xe000_5e10));
+    cpu.state.secure = true;
+    cpu.reguard();
+    _ = cpu.poke(4, 0xe000_ed0c, @as(u32, scb_block.vectkey) << 16 | scb_block.bfhfnmins);
+    cpu.state.secure = false;
+    cpu.reguard();
+    try std.testing.expectEqual(@as(?u32, 0x101), cpu.peek(4, 0xe000_5000));
+}

@@ -61,6 +61,12 @@ test "the Non-secure aliases of the control words, the SysTick and the NVIC sit 
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe002_e020));
 }
 
+test "the 4KB from 0xE0005000 are the RAS error record, M55 TRM Table 8-3" {
+    try std.testing.expectEqual(.ras, bus.region(0xe000_5000));
+    try std.testing.expectEqual(.ras, bus.region(0xe000_5ffc));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_6000));
+}
+
 test "the 8KB from 0xE001E000 are the implementation defined registers of the M55 and M85, M55 TRM Table 8-3" {
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe001_dffc));
     try std.testing.expectEqual(.impdef, bus.region(0xe001_e000));

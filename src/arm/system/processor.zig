@@ -23,6 +23,7 @@ const sau_block = @import("sau.zig");
 const m7_block = @import("m7.zig");
 const icb_block = @import("icb.zig");
 const impdef_block = @import("impdef.zig");
+const ras_block = @import("ras.zig");
 const mpu_block = @import("mpu.zig");
 const trace = @import("../trace.zig");
 const regions = @import("../../memory/regions.zig");
@@ -710,6 +711,13 @@ pub fn Processor(comptime options: Options) type {
         fn impdefHidden(self: *Self, offset: u32) bool {
             if (!self.spec.security or self.state.secure) return false;
             return impdef_block.secureOnly(offset) or !self.faultsNonSecure();
+        }
+
+        fn readRas(self: *Self, offset: u32, ns: bool) ?u32 {
+            if (Impdef == void) return null;
+            const block = self.impdefBlock() orelse return null;
+            const word = ras_block.readRegister(self.spec.core, block.wired.ecc, offset) orelse return null;
+            return if (ns and ras_block.gated(offset) and !self.faultsNonSecure()) 0 else word;
         }
 
         fn writeImpdef(self: *Self, offset: u32, value: u32) bool {
@@ -1550,6 +1558,7 @@ pub fn Processor(comptime options: Options) type {
                 }),
                 .scb => switch (address - ppb.scb_base) {
                     scb_block.icsr => return answered(into, self.readIcsr(self.spec.security and !self.state.secure)),
+                    ras_block.rfsr => return answered(into, self.readRfsr()),
                     scb_block.shcsr => return answered(into, self.readShcsr(self.spec.security and !self.state.secure)),
                     scb_block.aircr, scb_block.scr, scb_block.ccr, scb_block.nsacr, scb_block.fpccr => |offset| return answered(into, self.readView(self.spec.security and !self.state.secure, offset)),
                     sau_block.first...sau_block.last => |offset| return answered(into, if (self.spec.security and !self.state.secure) 0 else self.sau.readRegister(offset - sau_block.first)),
@@ -1562,6 +1571,7 @@ pub fn Processor(comptime options: Options) type {
                     if (!self.state.secure) return answered(into, 0);
                     return answered(into, switch (address - ppb.scb_base - ppb.alias) {
                         scb_block.icsr => self.readIcsr(true),
+                        ras_block.rfsr => self.readRfsr(),
                         scb_block.shcsr => self.readShcsr(true),
                         scb_block.aircr, scb_block.scr, scb_block.ccr, scb_block.nsacr, scb_block.fpccr => |offset| self.readView(true, offset),
                         mpu_block.first...mpu_block.last => |offset| self.nonSecureMpu().?.readRegister(offset - mpu_block.first),
@@ -1571,6 +1581,7 @@ pub fn Processor(comptime options: Options) type {
                 .revidr, .revidr_ns => |region| return answered(into, self.readRevidr(region == .revidr_ns)),
                 .nvic => return answered(into, self.readNvic(address - ppb.nvic_base, self.spec.security and !self.state.secure)),
                 .nvic_ns => return self.spec.security and answered(into, if (self.state.secure) self.readNvic(address - ppb.nvic_base - ppb.alias, true) else 0),
+                .ras => return answered(into, self.readRas(address - ras_block.base, self.spec.security and !self.state.secure)),
                 .impdef => {
                     if (Impdef == void) return false;
                     const block = self.impdefBlock() orelse return false;
@@ -1579,6 +1590,10 @@ pub fn Processor(comptime options: Options) type {
                 },
                 .ppb_unmapped => return false,
             }
+        }
+
+        fn readRfsr(self: *Self) ?u32 {
+            return if (self.architecture() == .armv8_1m_main) 0 else null;
         }
 
         fn readRevidr(self: *Self, aliased: bool) ?u32 {
@@ -1629,6 +1644,7 @@ pub fn Processor(comptime options: Options) type {
                 .scb => switch (address - ppb.scb_base) {
                     scb_block.aircr => self.writeAircr(self.spec.security and !self.state.secure, value),
                     scb_block.icsr => self.writeIcsr(self.spec.security and !self.state.secure, value),
+                    ras_block.rfsr => self.readRfsr() != null,
                     scb_block.shcsr => self.writeShcsr(self.spec.security and !self.state.secure, value),
                     scb_block.stir => self.trigger(value),
                     scb_block.scr, scb_block.ccr, scb_block.nsacr, scb_block.fpccr => |offset| self.writeView(self.spec.security and !self.state.secure, offset, value),
@@ -1641,6 +1657,7 @@ pub fn Processor(comptime options: Options) type {
                 .scb_ns => self.spec.security and (!self.state.secure or switch (address - ppb.scb_base - ppb.alias) {
                     scb_block.aircr => self.writeAircr(true, value),
                     scb_block.icsr => self.writeIcsr(true, value),
+                    ras_block.rfsr => self.readRfsr() != null,
                     scb_block.shcsr => self.writeShcsr(true, value),
                     scb_block.stir => self.trigger(value),
                     scb_block.scr, scb_block.ccr, scb_block.nsacr, scb_block.fpccr => |offset| self.writeView(true, offset, value),
@@ -1651,6 +1668,7 @@ pub fn Processor(comptime options: Options) type {
                 .revidr, .revidr_ns => |region| self.readRevidr(region == .revidr_ns) != null,
                 .nvic => self.writeNvic(address - ppb.nvic_base, self.spec.security and !self.state.secure, value),
                 .nvic_ns => self.spec.security and (!self.state.secure or self.writeNvic(address - ppb.nvic_base - ppb.alias, true, value)),
+                .ras => self.readRas(address - ras_block.base, self.spec.security and !self.state.secure) != null,
                 .impdef => self.writeImpdef(address - impdef_block.base, value),
                 .ppb_unmapped => false,
             };
