@@ -10,7 +10,7 @@ fn of(comptime c: anytype) scb.Scb {
 fn fitted(comptime c: anytype, part: Part) scb.Scb {
     return .init(&struct {
         const profile: scb.Profile = scb.profileOf(c);
-    }.profile, part);
+    }.profile, part, part.vtor);
 }
 
 fn registersOf(comptime c: anytype) []const register.Register {
@@ -464,4 +464,22 @@ test "NSACR holds CP10 and CP11 on the M33, M55 and M85, is RES0 on the M23 and 
     try std.testing.expectEqual(@as(?u32, 0), m23.readRegister(scb.nsacr));
     var m4 = of(.m4);
     try std.testing.expectEqual(@as(?u32, null), m4.readRegister(scb.nsacr));
+}
+
+test "MMFAR and BFAR are one register on the M3, M4 and M7, so each fault address clears the other's valid bit, M3 and M4 TRM Table 4-1, M7 TRM Table 3-1 footnote f" {
+    inline for (.{ .m3, .m4, .m7 }) |core| {
+        var block = of(core);
+        block.fault(.data_violation, 0x2000_0000);
+        try std.testing.expectEqual(@as(?u32, 0x2000_0000), block.readRegister(scb.bfar));
+        block.fault(.data_fault, 0x9000_0000);
+        try std.testing.expectEqual(@as(?u32, 0x9000_0000), block.readRegister(scb.mmfar));
+        try std.testing.expectEqual(@as(?u32, 1 << 15 | 1 << 9 | 1 << 1), block.readRegister(scb.cfsr));
+        try std.testing.expect(block.writeRegister(scb.mmfar, 0x1234_5678));
+        try std.testing.expectEqual(@as(?u32, 0x1234_5678), block.readRegister(scb.bfar));
+    }
+    var m33 = of(.m33);
+    m33.fault(.data_violation, 0x2000_0000);
+    m33.fault(.data_fault, 0x9000_0000);
+    try std.testing.expectEqual(@as(?u32, 0x2000_0000), m33.readRegister(scb.mmfar));
+    try std.testing.expectEqual(@as(?u32, 1 << 15 | 1 << 9 | 1 << 7 | 1 << 1), m33.readRegister(scb.cfsr));
 }

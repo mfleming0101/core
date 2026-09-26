@@ -3753,3 +3753,107 @@ test "REVIDR reads the part's REVIDRNUM on the M55 and M85 through a reset, read
     var four = Cpu.init(&m, .m4, .{}, .{});
     try std.testing.expectEqual(@as(?u32, null), four.peek(4, 0xe000_ecfc));
 }
+
+test "AIRCR.SYSRESETREQS is Secure only and keeps SYSRESETREQ from Non-secure code, v8-M D1.2.3" {
+    var m = loaded();
+    var kept = fast(.m33, &m);
+    try std.testing.expectEqual(@as(?void, {}), kept.poke(4, 0xe000_ed0c, 0x05fa_0008));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_0008), kept.peek(4, 0xe000_ed0c));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_0000), kept.peek(4, 0xe002_ed0c));
+    _ = kept.run(.{ .instructions = 2 });
+    nonSecure(&kept);
+    try std.testing.expectEqual(@as(?void, {}), kept.poke(4, 0xe000_ed0c, 0x05fa_0004));
+    _ = kept.step();
+    try std.testing.expectEqual(@as(u32, 1), kept.state.r[0]);
+    var open = fast(.m33, &m);
+    _ = open.run(.{ .instructions = 2 });
+    nonSecure(&open);
+    try std.testing.expectEqual(@as(?void, {}), open.poke(4, 0xe000_ed0c, 0x05fa_0004));
+    _ = open.step();
+    try std.testing.expectEqual(@as(u32, 0), open.state.r[0]);
+}
+
+test "AIRCR.DIT is banked on the M55 and AIRCR.IESB is one bit the Non-secure state reaches only with BFHFNMINS, while the M33 has neither, v8-M D1.2.3, M55 TRM Table 1-2" {
+    var m = loaded();
+    var cpu = fast(.m55, &m);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed0c, 0x05fa_0030));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_0030), cpu.peek(4, 0xe000_ed0c));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_0000), cpu.peek(4, 0xe002_ed0c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed0c, 0x05fa_0030));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_0010), cpu.peek(4, 0xe002_ed0c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed0c, 0x05fa_2030));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_2030), cpu.peek(4, 0xe002_ed0c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed0c, 0x05fa_0010));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_2010), cpu.peek(4, 0xe000_ed0c));
+    var m33 = fast(.m33, &m);
+    try std.testing.expectEqual(@as(?void, {}), m33.poke(4, 0xe000_ed0c, 0x05fa_0030));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_0000), m33.peek(4, 0xe000_ed0c));
+}
+
+test "CCR keeps one BFHFNMIGN, which the Non-secure view reads and writes only with BFHFNMINS, while DIV_0_TRP and the M55's LOB are banked, v8-M D1.2.9" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed14, 0x0000_0301));
+    try std.testing.expectEqual(@as(?u32, 0x0000_0301), cpu.peek(4, 0xe002_ed14));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed14, 0x0000_0211));
+    try std.testing.expectEqual(@as(?u32, 0x0000_0311), cpu.peek(4, 0xe002_ed14));
+    try std.testing.expectEqual(@as(?u32, 0x0000_0301), cpu.peek(4, 0xe000_ed14));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed0c, 0x05fa_2000));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed14, 0x0000_0211));
+    try std.testing.expectEqual(@as(?u32, 0x0000_0201), cpu.peek(4, 0xe000_ed14));
+    var m55 = fast(.m55, &m);
+    try std.testing.expectEqual(@as(?void, {}), m55.poke(4, 0xe000_ed14, 0x0008_0201));
+    try std.testing.expectEqual(@as(?u32, 0x0008_0201), m55.peek(4, 0xe000_ed14));
+    try std.testing.expectEqual(@as(?u32, 0x0000_0201), m55.peek(4, 0xe002_ed14));
+}
+
+test "FPCCR is banked bit by bit: S, TS, LSPENS and CLRONRETS read as zero to the Non-secure view, and LSPEN is one bit that LSPENS keeps from it, v8-M D1.2.100" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    try std.testing.expectEqual(@as(?u32, 0xc000_0004), cpu.peek(4, 0xe000_ef34));
+    try std.testing.expectEqual(@as(?u32, 0xc000_0000), cpu.peek(4, 0xe002_ef34));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ef34, 0x7c00_0000));
+    try std.testing.expectEqual(@as(?u32, 0xd000_0000), cpu.peek(4, 0xe002_ef34));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ef34, 0));
+    try std.testing.expectEqual(@as(?u32, 0x5000_0000), cpu.peek(4, 0xe002_ef34));
+    try std.testing.expect(cpu.lazyFpEnabled());
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ef34, 0x4000_0000));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ef34, 0));
+    try std.testing.expect(!cpu.lazyFpEnabled());
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_ef34));
+}
+
+test "VTOR resets to the vector tables the part's pins give, masked to the bits the core keeps, and the core resets out of the Secure one, M7 TRM Table 3-1, M23 TRM Table 5-1, M33 TRM Table 3-1" {
+    var m = loaded();
+    std.mem.writeInt(u32, m.bytes[0x200..][0..4], 0x2000_1000, .little);
+    std.mem.writeInt(u32, m.bytes[0x204..][0..4], 0x9, .little);
+    var cpu = Cpu.init(&m, .m33, .{ .vtor = 0x27f, .vtor_ns = 0x400 }, .{});
+    try std.testing.expectEqual(@as(?u32, 0x200), cpu.peek(4, 0xe000_ed08));
+    try std.testing.expectEqual(@as(?u32, 0x400), cpu.peek(4, 0xe002_ed08));
+    try std.testing.expectEqual(@as(u32, 0x2000_1000), cpu.state.msp);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed08, 0));
+    cpu.reset();
+    try std.testing.expectEqual(@as(?u32, 0x200), cpu.peek(4, 0xe000_ed08));
+    try std.testing.expectEqual(@as(u32, 0x2000_1000), cpu.state.msp);
+    var seven = Cpu.init(&m, .m7, .{ .vtor = 0x200 }, .{});
+    try std.testing.expectEqual(@as(?u32, 0x200), seven.peek(4, 0xe000_ed08));
+    try std.testing.expectEqual(@as(u32, 0x2000_1000), seven.state.msp);
+    var small = Cpu.init(&m, .m23, .{ .vtor = 0x280 }, .{});
+    try std.testing.expectEqual(@as(?u32, 0x200), small.peek(4, 0xe000_ed08));
+    var four = Cpu.init(&m, .m4, .{ .vtor = 0x200 }, .{});
+    try std.testing.expectEqual(@as(?u32, 0), four.peek(4, 0xe000_ed08));
+    try std.testing.expectEqual(@as(u32, 0x2000_2000), four.state.msp);
+}
+
+test "the M23's SHCSR reads and writes the pending and active states Armv8-M Baseline keeps, and nothing of the fault enables, while the M0+ reads zero, v8-M D1.2.233" {
+    var m = loaded();
+    var cpu = fast(.m23, &m);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed24, 0x0007_8000));
+    try std.testing.expect(cpu.pending & Cpu.one(11) != 0);
+    try std.testing.expectEqual(@as(?u32, 0x0000_8000), cpu.peek(4, 0xe000_ed24));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed24, 0));
+    try std.testing.expectEqual(@as(Cpu.Set, 0), cpu.pending & Cpu.one(11));
+    var zero = fast(.m0plus, &m);
+    try std.testing.expectEqual(@as(?void, {}), zero.poke(4, 0xe000_ed24, 0x0000_8000));
+    try std.testing.expectEqual(@as(?u32, 0), zero.peek(4, 0xe000_ed24));
+}

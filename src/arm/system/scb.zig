@@ -93,6 +93,14 @@ pub const nsacr_cp10: u32 = 1 << 10;
 pub const aspen: u32 = 1 << 31;
 /// The FPCCR bit that makes that saving lazy.
 pub const lspen: u32 = 1 << 30;
+/// The FPCCR bit that keeps LSPEN from Non-secure writes.
+pub const lspens: u32 = 1 << 29;
+/// The FPCCR bit that clears the floating-point registers on an exception return.
+pub const clronret: u32 = 1 << 28;
+/// The FPCCR bit that keeps CLRONRET from Non-secure writes.
+pub const clronrets: u32 = 1 << 27;
+/// The FPCCR bit recording that the debug monitor could be pended when the frame was reserved.
+pub const monrdy: u32 = 1 << 8;
 /// The FPCCR bit that makes a lazy frame carry the callee-saved registers too.
 pub const treat_as_secure: u32 = 1 << 26;
 /// The FPCCR bit recording that the lazy frame was reserved in Thread mode.
@@ -116,6 +124,10 @@ pub const mmrdy: u32 = 1 << 5;
 
 /// The AIRCR bit a program resets the core with.
 pub const sysresetreq: u32 = 1 << 2;
+/// The AIRCR bit that keeps SYSRESETREQ from the Non-secure state, v8-M D1.2.3.
+pub const sysresetreqs: u32 = 1 << 3;
+/// The AIRCR bit that asks for implicit error synchronization barriers, one bit for both Security states, v8-M D1.2.3.
+pub const iesb: u32 = 1 << 5;
 /// The AIRCR bit that hands BusFault, HardFault and NMI to the Non-secure state.
 pub const bfhfnmins: u32 = 1 << 13;
 /// The AIRCR bit that halves the Non-secure priority range.
@@ -175,7 +187,7 @@ pub const recorded = [_]struct { bit: u32, name: []const u8 }{
 
 /// The CCR bit that lets a handler return to Thread mode with exceptions still active.
 pub const nonbasethrdena: u32 = 1 << 0;
-/// The CCR bit that makes a negative-priority handler ignore a data fault.
+/// The CCR bit that makes a negative-priority handler ignore a data fault, one bit for both Security states, v8-M D1.2.9.
 pub const bfhfnmign: u32 = 1 << 8;
 /// The CCR bit that aligns the exception frame to eight bytes.
 pub const stkalign: u32 = 1 << 9;
@@ -254,6 +266,8 @@ pub const Profile = struct {
     levels: u32,
     features: [14]?u32,
     tcms: bool,
+    pinned_vtor: bool,
+    one_address: bool,
     reset: [layout.len]u32,
     write_mask: [layout.len]u32,
 };
@@ -270,13 +284,15 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
         cpuid => .{ .reset = spec.cpuid, .write_mask = 0 },
         vtor => .{ .reset = 0, .write_mask = switch (spec.core) {
             .m0, .m1 => 0,
+            .m23 => 0xffff_ff00,
             else => 0xffff_ff80,
         } },
-        aircr => .{ .reset = vectkeystat, .write_mask = (if (spec.security) 0x0000_6000 else 0) | (if (main) 0x0000_0700 else 0) },
+        aircr => .{ .reset = vectkeystat, .write_mask = (if (spec.security) 0x0000_6008 else 0) | (if (main) 0x0000_0700 else 0) | (if (wide_default) 0x0000_0030 else 0) },
         ccr => .{ .reset = spec.ccr, .write_mask = switch (spec.architecture) {
             .armv6m, .armv8m_base => 0,
             .armv7m, .armv7em => if (spec.core == .m7) 0x0000_011b else 0x0000_031b,
-            .armv8m_main, .armv8_1m_main => 0x0000_051a,
+            .armv8m_main => 0x0000_051a,
+            .armv8_1m_main => 0x0008_051a,
         } },
         shpr1 => .{ .reset = 0, .write_mask = lane << 16 | lane << 8 | lane },
         shpr2 => .{ .reset = 0, .write_mask = lane << 24 },
@@ -325,7 +341,7 @@ pub fn profileOf(comptime c: core.Core) Profile {
     @setEvalBranchQuota(200_000);
     const spec = core.spec(c);
     const main = spec.architecture.main();
-    var out: Profile = .{ .present = 0, .main = main, .floating_point = spec.floating_point, .caches = spec.caches, .levels = if (c == .m7) 0x0900_0000 else 0x0920_0000, .features = featuresOf(c), .tcms = c == .m7, .reset = @splat(0), .write_mask = @splat(0) };
+    var out: Profile = .{ .present = 0, .main = main, .floating_point = spec.floating_point, .caches = spec.caches, .levels = if (c == .m7) 0x0900_0000 else 0x0920_0000, .features = featuresOf(c), .tcms = c == .m7, .pinned_vtor = c == .m7 or spec.architecture.v8(), .one_address = main and !spec.architecture.v8(), .reset = @splat(0), .write_mask = @splat(0) };
     for (layout, 0..) |slot, i| {
         const held = switch (slot.group) {
             .shared => true,
@@ -346,7 +362,7 @@ pub fn profileOf(comptime c: core.Core) Profile {
     return out;
 }
 
-/// The block itself: a word per register the core has, over a profile shared by every instance, and the cache sizes, TCMs and REVIDR of this part.
+/// The block itself: a word per register the core has, over a profile shared by every instance, and the cache sizes, TCMs, REVIDR and reset VTOR of this part.
 pub const Scb = struct {
     const Self = @This();
 
@@ -356,9 +372,10 @@ pub const Scb = struct {
     instruction: core.CacheSize,
     tcm: bool,
     revision: u4,
+    table: u32,
 
-    /// A block at the reset values its profile and its part give; a core without caches keeps none.
-    pub fn init(profile: *const Profile, part: core.Part) Self {
+    /// A block at the reset values its profile and its part give, VTOR reset to the table the part's pins give where the core has them; a core without caches keeps none.
+    pub fn init(profile: *const Profile, part: core.Part, table: u32) Self {
         var out: Self = .{
             .profile = profile,
             .words = undefined,
@@ -366,6 +383,7 @@ pub const Scb = struct {
             .instruction = .none,
             .tcm = profile.tcms and (part.itcm.size != .none or part.dtcm.size != .none),
             .revision = part.revidr,
+            .table = if (profile.pinned_vtor) table & profile.write_mask[comptime slot(vtor).?] else 0,
         };
         if (profile.caches) {
             out.data = part.data;
@@ -378,6 +396,7 @@ pub const Scb = struct {
     /// Returns every register to its reset value.
     pub fn reset(self: *Self) void {
         self.words = self.profile.reset;
+        self.words[comptime slot(vtor).?] = self.table;
         const ctype = @as(u32, @intFromBool(self.data != .none)) << 1 | @intFromBool(self.instruction != .none);
         self.words[comptime slot(clidr).?] = if (ctype == 0) 0 else self.profile.levels | ctype;
         if (ctype != 0) self.words[comptime slot(ctr).?] = cache_type;
@@ -409,7 +428,7 @@ pub const Scb = struct {
     /// Records a fault in CFSR, and its address in MMFAR or BFAR where the fault has one.
     pub fn fault(self: *Self, stop: Stop, address: u32) void {
         if (!self.profile.main) return;
-        self.words[comptime slot(cfsr).?] |= switch (stop) {
+        const bits: u32 = switch (stop) {
             .undefined_instruction => undefinstr,
             .not_t32_state, .authentication_failure, .not_branch_target, .tail_predication => invstate,
             .exception_return => invpc,
@@ -418,16 +437,25 @@ pub const Scb = struct {
             .divide_by_zero => divbyzero,
             .fetch_violation => iaccviol,
             .data_violation => blk: {
-                self.words[comptime slot(mmfar).?] = address;
+                self.faultAddress(mmfar, address);
                 break :blk daccviol | mmarvalid;
             },
             .fetch_fault => ibuserr,
             .data_fault => blk: {
-                self.words[comptime slot(bfar).?] = address;
+                self.faultAddress(bfar, address);
                 break :blk preciserr | bfarvalid;
             },
             else => return,
         };
+        self.words[comptime slot(cfsr).?] |= bits;
+    }
+
+    fn faultAddress(self: *Self, comptime offset: u32, address: u32) void {
+        self.words[comptime slot(offset).?] = address;
+        if (!self.profile.one_address) return;
+        const other = if (offset == mmfar) bfar else mmfar;
+        self.words[comptime slot(other).?] = address;
+        self.words[comptime slot(cfsr).?] &= ~@as(u32, if (offset == mmfar) bfarvalid else mmarvalid);
     }
 
     /// Records that the fault happened while stacking an exception frame.
@@ -466,9 +494,21 @@ pub const Scb = struct {
         if (offset == aircr and value >> 16 != vectkey) return true;
         if (offset == clidr or offset == ccsidr or offset == ctr) return true;
         if (offset == csselr) self.words[comptime slot(ccsidr).?] = self.selected(value & 1);
+        if (self.profile.one_address and (offset == mmfar or offset == bfar)) {
+            self.words[comptime slot(mmfar).?] = value;
+            self.words[comptime slot(bfar).?] = value;
+            return true;
+        }
         const mask = self.profile.write_mask[i] | (if (offset == ccr) self.enables() else 0);
         self.words[i] = if (clearedByWrite(offset)) self.words[i] & ~value else (value & mask) | (self.profile.reset[i] & ~mask);
         return true;
+    }
+
+    /// Takes the bits of a write that a mask selects, as far as the register lets a program write them, with no key or status rule.
+    pub fn writeBits(self: *Self, offset: u32, mask: u32, value: u32) void {
+        const i = index(offset);
+        const writable = self.profile.write_mask[i] & mask;
+        self.words[i] = (self.words[i] & ~writable) | (value & writable);
     }
 
     fn index(offset: u32) u8 {

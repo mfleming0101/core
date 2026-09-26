@@ -301,8 +301,8 @@ pub fn Processor(comptime options: Options) type {
                 .state = .{ .secure = spec.security, .fpscr = fp.fixedFields(spec.architecture, 0) },
                 .memory = memory,
                 .systick = .{},
-                .scb = .init(&profiles[at], part),
-                .scb_ns = .init(&profiles[at], part),
+                .scb = .init(&profiles[at], part, part.vtor),
+                .scb_ns = .init(&profiles[at], part, part.vtor_ns),
                 .nvic = .init(part.priority_bits.?, part.interrupts.?),
                 .dwt = .init(spec.architecture.main()),
                 .sau = .init(spec.security, spec.architecture.main(), part.sau_regions.?),
@@ -410,14 +410,17 @@ pub fn Processor(comptime options: Options) type {
                 .priority_bits = self.priorityBits(),
                 .interrupts = self.nvic.count,
                 .revidr = self.scb.revision,
+                .vtor = self.scb.table,
+                .vtor_ns = self.scb_ns.table,
             };
             if (M7 != void) self.m7.wiring(&out);
             return out;
         }
 
         fn atReset(self: *Self) void {
-            const sp = self.load(4, 0) orelse return self.lockAtReset(0);
-            const entry = self.load(4, 4) orelse return self.lockAtReset(4);
+            const table = self.scb.get(scb_block.vtor);
+            const sp = self.load(4, table) orelse return self.lockAtReset(table);
+            const entry = self.load(4, table +% 4) orelse return self.lockAtReset(table +% 4);
             self.state.msp = sp & ~@as(u32, 3);
             self.state.lr = 0xffff_ffff;
             self.state.branchTo(entry);
@@ -1050,9 +1053,9 @@ pub fn Processor(comptime options: Options) type {
             return self.spec.security and self.scbOf(true).get(scb_block.fpccr) & scb_block.treat_as_secure != 0;
         }
 
-        /// Whether FPCCR.LSPEN makes the saving lazy rather than eager.
+        /// Whether FPCCR.LSPEN, one bit for both Security states, makes the saving lazy rather than eager.
         pub fn lazyFpEnabled(self: *Self) bool {
-            return self.scs().get(scb_block.fpccr) & scb_block.lspen != 0;
+            return self.scb.get(scb_block.fpccr) & scb_block.lspen != 0;
         }
 
         /// Reserves a lazy frame at an address and records what could fault then, or clears LSPACT.
@@ -1064,7 +1067,9 @@ pub fn Processor(comptime options: Options) type {
             };
             const owner = self.scs();
             const recorded = scb_block.fp_user | scb_block.fp_thread | scb_block.ufrdy | scb_block.sfrdy | scb_block.bfrdy | scb_block.mmrdy | scb_block.hfrdy;
-            var value = (owner.get(scb_block.fpccr) & ~recorded) | scb_block.lspact | self.readiness();
+            const unbanked: u32 = if (self.spec.security) scb_block.sfrdy | scb_block.bfrdy | scb_block.hfrdy else 0;
+            const ready = self.readiness();
+            var value = (owner.get(scb_block.fpccr) & ~recorded) | scb_block.lspact | (ready & ~unbanked);
             if (!self.state.handler()) {
                 value |= scb_block.fp_thread;
                 if (self.state.control & State.control_npriv != 0) value |= scb_block.fp_user;
@@ -1072,8 +1077,8 @@ pub fn Processor(comptime options: Options) type {
             owner.put(scb_block.fpcar, address & ~@as(u32, 7));
             owner.put(scb_block.fpccr, value);
             if (self.spec.security) {
-                const top = self.scb.get(scb_block.fpccr) & ~scb_block.fp_secure;
-                self.scb.put(scb_block.fpccr, top | (if (self.state.secure) scb_block.fp_secure else 0));
+                const top = self.scb.get(scb_block.fpccr) & ~(scb_block.fp_secure | unbanked);
+                self.scb.put(scb_block.fpccr, top | (ready & unbanked) | (if (self.state.secure) scb_block.fp_secure else 0));
             }
         }
 
@@ -1370,7 +1375,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         noinline fn ignoring(self: *Self, address: u32) bool {
-            if (self.scs().get(scb_block.ccr) & scb_block.bfhfnmign == 0) return false;
+            if (self.scb.get(scb_block.ccr) & scb_block.bfhfnmign == 0) return false;
             if (self.executionPriority() > -1) return false;
             self.scs().fault(.data_fault, address);
             return true;
@@ -1460,7 +1465,7 @@ pub fn Processor(comptime options: Options) type {
                 .scb => switch (address - ppb.scb_base) {
                     scb_block.icsr => return answered(into, self.readIcsr(self.spec.security and !self.state.secure)),
                     scb_block.shcsr => return answered(into, self.readShcsr(self.spec.security and !self.state.secure)),
-                    scb_block.aircr, scb_block.scr, scb_block.nsacr => |offset| return answered(into, self.readView(self.spec.security and !self.state.secure, offset)),
+                    scb_block.aircr, scb_block.scr, scb_block.ccr, scb_block.nsacr, scb_block.fpccr => |offset| return answered(into, self.readView(self.spec.security and !self.state.secure, offset)),
                     sau_block.first...sau_block.last => |offset| return answered(into, if (self.spec.security and !self.state.secure) 0 else self.sau.readRegister(offset - sau_block.first)),
                     m7_block.first...m7_block.last => |offset| return answered(into, if (self.m7Control()) |block| block.readRegister(offset - m7_block.first) else null),
                     mpu_block.first...mpu_block.last => |offset| return answered(into, self.mpuOf(self.state.secure).readRegister(offset - mpu_block.first)),
@@ -1472,7 +1477,7 @@ pub fn Processor(comptime options: Options) type {
                     return answered(into, switch (address - ppb.scb_base - ppb.alias) {
                         scb_block.icsr => self.readIcsr(true),
                         scb_block.shcsr => self.readShcsr(true),
-                        scb_block.aircr, scb_block.scr, scb_block.nsacr => |offset| self.readView(true, offset),
+                        scb_block.aircr, scb_block.scr, scb_block.ccr, scb_block.nsacr, scb_block.fpccr => |offset| self.readView(true, offset),
                         mpu_block.first...mpu_block.last => |offset| self.nonSecureMpu().?.readRegister(offset - mpu_block.first),
                         else => |offset| self.scb_ns.readRegister(offset),
                     });
@@ -1520,7 +1525,7 @@ pub fn Processor(comptime options: Options) type {
                     scb_block.icsr => self.writeIcsr(self.spec.security and !self.state.secure, value),
                     scb_block.shcsr => self.writeShcsr(self.spec.security and !self.state.secure, value),
                     scb_block.stir => self.trigger(value),
-                    scb_block.scr, scb_block.nsacr => |offset| self.writeView(self.spec.security and !self.state.secure, offset, value),
+                    scb_block.scr, scb_block.ccr, scb_block.nsacr, scb_block.fpccr => |offset| self.writeView(self.spec.security and !self.state.secure, offset, value),
                     scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => |offset| self.scs().writeRegister(offset, value & self.nvic.lanes),
                     sau_block.first...sau_block.last => |offset| if (self.spec.security and !self.state.secure) true else self.sau.writeRegister(offset - sau_block.first, value),
                     m7_block.first...m7_block.last => |offset| if (self.m7Control()) |block| block.writeRegister(offset - m7_block.first, value) else false,
@@ -1532,7 +1537,7 @@ pub fn Processor(comptime options: Options) type {
                     scb_block.icsr => self.writeIcsr(true, value),
                     scb_block.shcsr => self.writeShcsr(true, value),
                     scb_block.stir => self.trigger(value),
-                    scb_block.scr, scb_block.nsacr => |offset| self.writeView(true, offset, value),
+                    scb_block.scr, scb_block.ccr, scb_block.nsacr, scb_block.fpccr => |offset| self.writeView(true, offset, value),
                     mpu_block.first...mpu_block.last => |offset| self.reprogram(self.nonSecureMpu().?, offset - mpu_block.first, value),
                     scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => |offset| self.scb_ns.writeRegister(offset, value & self.nvic.lanes),
                     else => |offset| self.scb_ns.writeRegister(offset, value),
@@ -1618,28 +1623,30 @@ pub fn Processor(comptime options: Options) type {
             pending: bool = false,
             reach: enum { banked, routed, secure } = .banked,
             v8: bool = false,
+            baseline: bool = false,
         };
 
         const held_bits = [_]Held{
             .{ .bit = 0, .n = mem_manage },
             .{ .bit = 1, .n = bus_fault, .reach = .routed },
-            .{ .bit = 2, .n = hard_fault, .v8 = true },
+            .{ .bit = 2, .n = hard_fault, .v8 = true, .baseline = true },
             .{ .bit = 3, .n = usage_fault },
             .{ .bit = 4, .n = secure_fault, .reach = .secure },
-            .{ .bit = 5, .n = nmi, .reach = .routed, .v8 = true },
-            .{ .bit = 7, .n = svcall },
-            .{ .bit = 10, .n = pendsv },
-            .{ .bit = 11, .n = systick },
+            .{ .bit = 5, .n = nmi, .reach = .routed, .v8 = true, .baseline = true },
+            .{ .bit = 7, .n = svcall, .baseline = true },
+            .{ .bit = 10, .n = pendsv, .baseline = true },
+            .{ .bit = 11, .n = systick, .baseline = true },
             .{ .bit = 12, .n = usage_fault, .pending = true },
             .{ .bit = 13, .n = mem_manage, .pending = true },
             .{ .bit = 14, .n = bus_fault, .pending = true, .reach = .routed },
-            .{ .bit = 15, .n = svcall, .pending = true },
+            .{ .bit = 15, .n = svcall, .pending = true, .baseline = true },
             .{ .bit = 20, .n = secure_fault, .pending = true, .reach = .secure },
-            .{ .bit = 21, .n = hard_fault, .pending = true, .v8 = true },
+            .{ .bit = 21, .n = hard_fault, .pending = true, .v8 = true, .baseline = true },
         };
 
         fn shcsrHeld(self: *Self, comptime slot: Held, ns: bool) ?Index {
             if (slot.v8 and !self.architecture().v8()) return null;
+            if (!slot.baseline and !self.architecture().main()) return null;
             if (!self.spec.security) return if (slot.reach == .secure) null else slot.n;
             return switch (slot.reach) {
                 .banked => slot.n + if (ns) ns_base else 0,
@@ -1666,9 +1673,11 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn readShcsr(self: *Self, ns: bool) u32 {
-            if (!self.architecture().main()) return 0;
+            if (self.architecture() == .armv6m) return 0;
             var value: u32 = 0;
-            for (self.shcsrBlocks(ns)) |part| value |= part[0].get(scb_block.shcsr) & part[1];
+            if (self.architecture().main()) {
+                for (self.shcsrBlocks(ns)) |part| value |= part[0].get(scb_block.shcsr) & part[1];
+            }
             inline for (held_bits) |slot| {
                 if (self.shcsrHeld(slot, ns)) |i| {
                     value |= bit(if (slot.pending) self.pending else self.active, i) << slot.bit;
@@ -1678,10 +1687,9 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn writeShcsr(self: *Self, ns: bool, value: u32) bool {
-            if (!self.architecture().main()) return true;
-            for (self.shcsrBlocks(ns)) |part| {
-                const kept = part[0].get(scb_block.shcsr);
-                _ = part[0].writeRegister(scb_block.shcsr, (value & part[1]) | (kept & ~part[1]));
+            if (self.architecture() == .armv6m) return true;
+            if (self.architecture().main()) {
+                for (self.shcsrBlocks(ns)) |part| part[0].writeBits(scb_block.shcsr, part[1], value);
             }
             inline for (held_bits) |slot| {
                 const set = value >> slot.bit & 1 != 0;
@@ -1723,7 +1731,9 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn writeAircr(self: *Self, ns: bool, value: u32) bool {
-            if (value >> 16 == scb_block.vectkey and value & scb_block.sysresetreq != 0) self.due |= reset_due;
+            if (value >> 16 != scb_block.vectkey) return true;
+            const kept = ns and self.scb.get(scb_block.aircr) & scb_block.sysresetreqs != 0;
+            if (value & scb_block.sysresetreq != 0 and !kept) self.due |= reset_due;
             return self.writeView(ns, scb_block.aircr, value);
         }
 
@@ -1731,7 +1741,25 @@ pub fn Processor(comptime options: Options) type {
 
         fn sharedOf(self: *Self, offset: u32) Shared {
             return switch (offset) {
-                scb_block.aircr => .{ .held = scb_block.pris | scb_block.bfhfnmins, .readable = scb_block.bfhfnmins },
+                scb_block.aircr => blk: {
+                    const open: u32 = if (self.faultsNonSecure()) scb_block.iesb else 0;
+                    break :blk .{ .held = scb_block.pris | scb_block.bfhfnmins | scb_block.sysresetreqs | scb_block.iesb, .readable = scb_block.bfhfnmins | open, .writable = open };
+                },
+                scb_block.ccr => blk: {
+                    const open: u32 = if (self.faultsNonSecure()) scb_block.bfhfnmign else 0;
+                    break :blk .{ .held = scb_block.bfhfnmign, .readable = scb_block.bfhfnmign, .writable = open };
+                },
+                scb_block.fpccr => blk: {
+                    const word = self.scb.get(scb_block.fpccr);
+                    const routed: u32 = if (self.faultsNonSecure()) scb_block.bfrdy | scb_block.hfrdy else 0;
+                    const lazy: u32 = if (word & scb_block.lspens != 0) 0 else scb_block.lspen;
+                    const clear: u32 = if (word & scb_block.clronrets != 0) 0 else scb_block.clronret;
+                    break :blk .{
+                        .held = scb_block.lspen | scb_block.lspens | scb_block.clronret | scb_block.clronrets | scb_block.treat_as_secure | scb_block.monrdy | scb_block.sfrdy | scb_block.bfrdy | scb_block.hfrdy | scb_block.fp_secure,
+                        .readable = scb_block.lspen | scb_block.clronret | scb_block.monrdy | routed,
+                        .writable = lazy | clear | scb_block.monrdy | routed,
+                    };
+                },
                 scb_block.nsacr => .{ .held = 0xffff_ffff },
                 scb_block.scr => blk: {
                     const open: u32 = if (self.scb.get(scb_block.scr) & scb_block.sleepdeeps != 0) 0 else scb_block.sleepdeep;
@@ -1751,7 +1779,7 @@ pub fn Processor(comptime options: Options) type {
         fn writeView(self: *Self, ns: bool, offset: u32, value: u32) bool {
             if (!ns) return self.scb.writeRegister(offset, value);
             const shared = self.sharedOf(offset);
-            if (shared.writable != 0) _ = self.scb.writeRegister(offset, (self.scb.readRegister(offset).? & ~shared.writable) | (value & shared.writable));
+            if (shared.writable != 0) self.scb.writeBits(offset, shared.writable, value);
             return self.scb_ns.writeRegister(offset, value & ~shared.held);
         }
 

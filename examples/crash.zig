@@ -31,7 +31,7 @@ test "a load from an address nothing answers, with no fault handler installed, l
         \\The last 2 lines of the trace:
         \\at      1  pc=0000000a code=0740 lsls r0, r0, #29 ; r0=60000000
         \\at      2  pc=0000000c code=6800 ldr r0, [r0, #0] ; mem=60000000 refused=no_memory
-        \\CFSR=00008200 (PRECISERR BFARVALID) HFSR=00000000 MMFAR=00000000 BFAR=60000000
+        \\CFSR=00008200 (PRECISERR BFARVALID) HFSR=00000000 MMFAR=60000000 BFAR=60000000
         \\
     , out.buffered());
 }
