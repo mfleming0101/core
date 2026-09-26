@@ -141,6 +141,8 @@ pub const sevonpend: u32 = 1 << 4;
 pub const sleepdeeps: u32 = 1 << 3;
 /// The SCR bit that asks for deep sleep, one bit for both Security states.
 pub const sleepdeep: u32 = 1 << 2;
+/// The SCR bit that sleeps the core on a return to Thread mode that leaves no exception active, v7-M B3.2.7.
+pub const sleeponexit: u32 = 1 << 1;
 
 /// The key an AIRCR write must carry to take effect.
 pub const vectkey: u32 = 0x05fa;

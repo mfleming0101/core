@@ -865,6 +865,11 @@ pub fn Processor(comptime options: Options) type {
             const held = self.memory.asserted();
             if (held != 0) self.pending |= @as(Set, held) << first_interrupt;
             self.rearm();
+            if (self.stop == null and self.sleepsOnExit()) self.sleep(.interrupt);
+        }
+
+        fn sleepsOnExit(self: *Self) bool {
+            return !self.state.handler() and self.active == 0 and self.scs().get(scb_block.scr) & scb_block.sleeponexit != 0;
         }
 
         fn delay(self: *Self, cycles: u32) void {

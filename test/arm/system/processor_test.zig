@@ -4218,3 +4218,54 @@ test "the Non-secure state reaches the EWIC only while AIRCR.BFHFNMINS is set, M
     cpu.reguard();
     try std.testing.expectEqual(@as(?u32, 40), cpu.peek(4, 0xe004_700c));
 }
+
+fn sleepOnExitImage() Memory {
+    return placed(&irq_vectors, &.{ 0x100, 0x120, 0x1e0 }, &.{
+        &.{ 0xdf00, 0x2715, 0xbe00 },
+        &.{ 0x4802, 0x2102, 0x6001, 0x3601, 0x4770, 0x0000, 0xe200, 0xe000 },
+        &.{ 0x3501, 0x4770 },
+    });
+}
+
+test "with SCR.SLEEPONEXIT set a return to Thread mode that leaves no exception active sleeps instead of running Thread code, and the next interrupt wakes the core into its handler, v6-M B1.5.8 B1.5.17, v7-M B1.5.8 B3.2.7, v8-M B2.2 RQVKT D1.2.230" {
+    inline for (.{ .m0plus, .m4, .m23, .m33 }) |core| {
+        var m = sleepOnExitImage();
+        var cpu = fast(core, &m);
+        cpu.reset();
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed10, scb_block.sleeponexit));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 2));
+        try std.testing.expectEqual(arm.Ended.asleep, cpu.run(.{ .instructions = 50, .asleep = true }).ended);
+        try std.testing.expectEqual(@as(u32, 1), cpu.state.r[6]);
+        try std.testing.expectEqual(@as(u32, 1), cpu.state.r[5]);
+        try std.testing.expectEqual(@as(u32, 0), cpu.state.r[7]);
+        try std.testing.expectEqual(@as(u32, 0x102), cpu.state.pc);
+        cpu.pend(1);
+        try std.testing.expectEqual(arm.Ended.asleep, cpu.run(.{ .instructions = 50, .asleep = true }).ended);
+        try std.testing.expectEqual(@as(u32, 2), cpu.state.r[5]);
+        try std.testing.expectEqual(@as(u32, 0), cpu.state.r[7]);
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed10, 0));
+        cpu.pend(1);
+        try std.testing.expectEqual(arm.Ended.stopped, cpu.run(.{ .instructions = 50, .asleep = true }).ended);
+        try std.testing.expectEqual(@as(u32, 0x15), cpu.state.r[7]);
+    }
+}
+
+test "a return from a nested handler to the handler it preempted does not sleep, which runs on and sleeps only on its own return to Thread mode, v7-M B1.5.8, v8-M RQVKT" {
+    inline for (.{ .m0plus, .m4, .m33 }) |core| {
+        var m = sleepOnExitImage();
+        var cpu = fast(core, &m);
+        cpu.reset();
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed10, scb_block.sleeponexit));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed1c, 0x8000_0000));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 2));
+        var steps: u32 = 0;
+        while (cpu.state.r[5] == 0 and steps < 50) : (steps += 1) _ = cpu.step();
+        try std.testing.expect(cpu.state.handler());
+        try std.testing.expectEqual(@as(u32, 0), cpu.state.r[6]);
+        try std.testing.expect(!cpu.step().asleep);
+        try std.testing.expectEqual(@as(u32, 0x126), cpu.state.pc);
+        try std.testing.expectEqual(arm.Ended.asleep, cpu.run(.{ .instructions = 50, .asleep = true }).ended);
+        try std.testing.expectEqual(@as(u32, 1), cpu.state.r[6]);
+        try std.testing.expectEqual(@as(u32, 0), cpu.state.r[7]);
+    }
+}
