@@ -317,7 +317,7 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
     };
 }
 
-/// ID_PFR0 to ID_ISAR5 of a core, null where the core has none: Armv6-M reserves them, v6-M D3.6.1; the M23 has them RES0 for want of the Main Extension, v8-M D1.2.140; the M3, M4 and M7 read their TRM tables, M3 and M4 TRM Table 4-1, M7 TRM Table 3-1, with ID_ISAR5 RAZ, v7-M Table B4-1; the M33, M55 and M85 read theirs, M33 TRM Table 3-1, M55 and M85 TRM Table 5-1, with debug fitted, no coprocessor interface and no CDE, the M33 with DSP and the M85 with PACBTI. The M33 TRM gives ID_PFR0 and ID_PFR1 values its notes contradict, so the M33 has neither.
+/// ID_PFR0 to ID_ISAR5 of a core, null where the core has none: Armv6-M reserves them, v6-M D3.6.1; the M23 has them RES0 for want of the Main Extension, v8-M D1.2.140; the M3, M4 and M7 read their TRM tables, M3 and M4 TRM Table 4-1, M7 TRM Table 3-1, with ID_ISAR5 RAZ, v7-M Table B4-1; the M33, M55 and M85 read theirs, M33 TRM Table 3-1, M55 and M85 TRM Table 5-1, with debug fitted, no coprocessor interface and no CDE, the M33 with DSP and the M85 with PACBTI. Where the M33 TRM's notes contradict its ID_PFR0 and ID_PFR1 values, the value v8-M allows an Armv8.0-M core wins: no RAS, which only Armv8.1-M has, v8-M D1.2.80, and the Security Extension without the Armv8.1-M state handling instructions, D1.2.141.
 fn featuresOf(comptime c: core.Core) [14]?u32 {
     const armv7: [14]?u32 = .{ 0x30, 0x200, 0x0010_0000, 0, 0x0010_0030, 0, 0x0100_0000, 0, 0x0110_0110, 0x0211_1000, 0x2111_2231, 0x0111_1110, 0x0131_0132, 0 };
     const armv8_1: [14]?u32 = .{ 0x2000_0030, 0x230, 0x1020_0000, 0, 0x0011_1040, 0, 0x0100_0000, 0x11, 0x0110_3110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 };
@@ -328,7 +328,7 @@ fn featuresOf(comptime c: core.Core) [14]?u32 {
         .m3 => {},
         .m4 => out[8..12].* = .{ 0x0114_1110, 0x0211_2000, 0x2123_2231, 0x0111_1131 },
         .m7 => out[8..12].* = .{ 0x0110_1110, 0x0211_2000, 0x2023_2231, 0x0111_1131 },
-        .m33 => out = .{ null, null, 0x0020_0000, 0, 0x0010_1f40, 0, 0x0100_0000, 0, 0x0110_1110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 },
+        .m33 => out = .{ 0x30, 0x210, 0x0020_0000, 0, 0x0010_1f40, 0, 0x0100_0000, 0, 0x0110_1110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 },
         .m55 => out = armv8_1,
         .m85 => {
             out = armv8_1;

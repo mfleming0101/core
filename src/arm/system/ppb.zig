@@ -37,7 +37,7 @@ const itm_size: u32 = 0x1000;
 pub const alias: u32 = 0x2_0000;
 
 /// Which block answers an address, or memory where the address is outside the peripheral bus.
-pub const Region = enum { memory, systick, systick_ns, control, control_ns, scb, scb_ns, revidr, revidr_ns, nvic, nvic_ns, itm, dwt, ras, impdef, ewic, ppb_unmapped };
+pub const Region = enum { memory, systick, systick_ns, control, control_ns, scb, scb_ns, revidr, revidr_ns, nvic, nvic_ns, itm, dwt, ras, impdef, impdef_ns, ewic, ppb_unmapped };
 
 /// Routes an address to the block that answers it; nothing in the peripheral bus is ever folded.
 pub fn region(address: u32) Region {
@@ -56,6 +56,7 @@ pub fn region(address: u32) Region {
     if (address -% dwt.base < dwt.size) return .dwt;
     if (address -% ras.base < ras.size) return .ras;
     if (address -% impdef.base < impdef.size) return .impdef;
+    if (address -% (impdef.base + alias) < impdef.size) return .impdef_ns;
     if (address -% ewic.base < ewic.size) return .ewic;
     return .ppb_unmapped;
 }

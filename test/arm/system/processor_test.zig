@@ -3844,7 +3844,7 @@ test "VTOR resets to the vector tables the part's pins give, masked to the bits 
     try std.testing.expectEqual(@as(u32, 0x2000_2000), four.state.msp);
 }
 
-test "the M23's SHCSR reads and writes the pending and active states Armv8-M Baseline keeps, and nothing of the fault enables, while the M0+ reads zero, v8-M D1.2.233" {
+test "the M23's SHCSR reads and writes the pending and active states Armv8-M Baseline keeps, and nothing of the fault enables, the M0 and M0+ only SVCALLPENDED, which their TRMs list among the system control registers, and the M1 nothing, v8-M D1.2.233, v6-M C1.6 C1.6.1, M0 TRM Table 4-1, M0+ TRM Table 4-1, M1 TRM 6.2.11" {
     var m = loaded();
     var cpu = fast(.m23, &m);
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed24, 0x0007_8000));
@@ -3852,7 +3852,15 @@ test "the M23's SHCSR reads and writes the pending and active states Armv8-M Bas
     try std.testing.expectEqual(@as(?u32, 0x0000_8000), cpu.peek(4, 0xe000_ed24));
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed24, 0));
     try std.testing.expectEqual(@as(Cpu.Set, 0), cpu.pending & Cpu.one(11));
-    var zero = fast(.m0plus, &m);
+    inline for (.{ .m0, .m0plus }) |core| {
+        var six = fast(core, &m);
+        try std.testing.expectEqual(@as(?void, {}), six.poke(4, 0xe000_ed24, 0xffff_ffff));
+        try std.testing.expect(six.pending & Cpu.one(11) != 0);
+        try std.testing.expectEqual(@as(?u32, 0x0000_8000), six.peek(4, 0xe000_ed24));
+        try std.testing.expectEqual(@as(?void, {}), six.poke(4, 0xe000_ed24, 0));
+        try std.testing.expectEqual(@as(?u32, 0), six.peek(4, 0xe000_ed24));
+    }
+    var zero = fast(.m1, &m);
     try std.testing.expectEqual(@as(?void, {}), zero.poke(4, 0xe000_ed24, 0x0000_8000));
     try std.testing.expectEqual(@as(?u32, 0), zero.peek(4, 0xe000_ed24));
 }
@@ -4422,4 +4430,95 @@ test "a Secure floating-point instruction that would fill a Non-secure lazy fram
     try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
     try std.testing.expectEqual(scb_block.lspact, cpu.scb_ns.get(scb_block.fpccr) & scb_block.lspact);
     try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, m.bytes[cpu.scb_ns.get(scb_block.fpcar)..][0..4], .little));
+}
+
+test "REVIDR is RAZ/WI from the Non-secure state on the M55 and M85, as their TRMs say where v8-M does not bank it, and so is REVIDR_NS, M55 and M85 TRM 5.7, v8-M D1.2.222 RCFPK" {
+    var m = loaded();
+    inline for (.{ .m55, .m85 }) |core| {
+        var cpu = Cpu.init(&m, core, .{ .revidr = 5 }, .{});
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ecfc));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ecfc, 1));
+        nonSecure(&cpu);
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_ecfc));
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ecfc));
+    }
+}
+
+test "ERRADDR0 holds what Secure software writes where ECC is fitted, through a Warm reset, as v8-M makes it read/write where the M55 TRM's tables disagree, v8-M D1.2.80, M55 TRM Table 11-5 Table 11-8" {
+    var m = loaded();
+    var cpu = Cpu.init(&m, .m55, .{ .ecc = true }, .{});
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_5018));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_5018, 0x2000_1234));
+    try std.testing.expectEqual(@as(?u32, 0x2000_1234), cpu.peek(4, 0xe000_5018));
+    cpu.reset();
+    try std.testing.expectEqual(@as(?u32, 0x2000_1234), cpu.peek(4, 0xe000_5018));
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_5018));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_5018, 5));
+    cpu.state.secure = true;
+    cpu.reguard();
+    try std.testing.expectEqual(@as(?u32, 0x2000_1234), cpu.peek(4, 0xe000_5018));
+    var bare = fast(.m85, &m);
+    try std.testing.expectEqual(@as(?void, {}), bare.poke(4, 0xe000_5018, 0x2000_1234));
+    try std.testing.expectEqual(@as(?u32, 0), bare.peek(4, 0xe000_5018));
+}
+
+test "EVENTMASKA and EVENTMASKn read their zero reset with no WIC transfer to fill them, CFGINFOSEL takes writes and CFGINFORD reads zero, and STLIDMPUSR keeps its sample while the MPU observation registers read zero, M55 and M85 TRM Table 5-15 5.18 5.22.2 5.23.2" {
+    var m = loaded();
+    var cpu = fast(.m55, &m);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e480));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e4bc));
+    try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe001_e4c0));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e700, 0x4c));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e700));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e704));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e810, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?u32, 0xffff_ffe6), cpu.peek(4, 0xe001_e810));
+    for ([_]u32{ 0xe001_e814, 0xe001_e818, 0xe001_e81c }) |address| try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, address));
+    try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe001_e820));
+    var eighty = fast(.m85, &m);
+    try std.testing.expectEqual(@as(?u32, 0), eighty.peek(4, 0xe001_e824));
+    for ([_]u32{ 0xe001_e814, 0xe001_e828, 0xe001_e830 }) |address| try std.testing.expectEqual(@as(?u32, null), eighty.peek(4, address));
+}
+
+test "STLNVICPENDOR and STLNVICACTVOR show the highest priority pending and active exception with its target and priority, and are RAZ/WI from the Non-secure state, M55 TRM 5.23.1" {
+    var m = loaded();
+    var cpu = fast(.m55, &m);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e800));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e400, 0x4000_0000));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 8));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e200, 8));
+    try std.testing.expectEqual(@as(?u32, 1 << 18 | 0x40 << 9 | 19), cpu.peek(4, 0xe001_e800));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e380, 8));
+    try std.testing.expectEqual(@as(?u32, 1 << 18 | 1 << 17 | 0x40 << 9 | 19), cpu.peek(4, 0xe001_e800));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e804));
+    cpu.active = Cpu.one(arm.nmi);
+    try std.testing.expectEqual(@as(?u32, 1 << 18 | 2), cpu.peek(4, 0xe001_e804));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe003_e804));
+}
+
+test "the implementation defined registers' Non-secure alias shows Secure code their Non-secure view and is RAZ/WI from the Non-secure state, M55 TRM Table 8-3, v8-M RCFPK" {
+    var m = loaded();
+    var cpu = fast(.m55, &m);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe003_e300));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe003_e300, 0));
+    try std.testing.expectEqual(@as(?u32, 0x33), cpu.peek(4, 0xe001_e300));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed0c, @as(u32, scb_block.vectkey) << 16 | scb_block.bfhfnmins));
+    try std.testing.expectEqual(@as(?u32, 0x33), cpu.peek(4, 0xe003_e300));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe003_e300, 0x11));
+    try std.testing.expectEqual(@as(?u32, 0x11), cpu.peek(4, 0xe001_e300));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe003_e500));
+    try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe003_e004));
+    _ = cpu.poke(4, 0xe000_edd8, 1);
+    _ = cpu.poke(4, 0xe000_eddc, 0xe003_e000);
+    _ = cpu.poke(4, 0xe000_ede0, 0xe003_ffe1);
+    _ = cpu.poke(4, 0xe000_edd8, 0);
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe003_e300));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe003_e300, 0x33));
+    cpu.state.secure = true;
+    cpu.reguard();
+    try std.testing.expectEqual(@as(?u32, 0x11), cpu.peek(4, 0xe001_e300));
+    var m33 = fast(.m33, &m);
+    try std.testing.expectEqual(@as(?u32, null), m33.peek(4, 0xe003_e300));
 }

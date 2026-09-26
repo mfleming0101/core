@@ -421,7 +421,7 @@ fn expectFeatures(block: *scb.Scb, words: [14]?u32) !void {
     }
 }
 
-test "ID_PFR0 to ID_ISAR5 read their TRM tables and ignore writes, M3 and M4 TRM Table 4-1, M7 TRM Table 3-1, M33 TRM Table 3-1, M55 and M85 TRM Table 5-1, v7-M Table B4-1" {
+test "ID_PFR0 to ID_ISAR5 read their TRM tables and ignore writes, the M33's ID_PFR0 and ID_PFR1 the values v8-M allows Armv8.0-M, M3 and M4 TRM Table 4-1, M7 TRM Table 3-1, M33 TRM Table 3-1 Table 3-2, M55 and M85 TRM Table 5-1, v7-M Table B4-1, v8-M D1.2.80 D1.2.140 D1.2.141" {
     var m3 = of(.m3);
     try expectFeatures(&m3, .{ 0x30, 0x200, 0x0010_0000, 0, 0x0010_0030, 0, 0x0100_0000, 0, 0x0110_0110, 0x0211_1000, 0x2111_2231, 0x0111_1110, 0x0131_0132, 0 });
     var m4 = of(.m4);
@@ -429,7 +429,7 @@ test "ID_PFR0 to ID_ISAR5 read their TRM tables and ignore writes, M3 and M4 TRM
     var m7 = of(.m7);
     try expectFeatures(&m7, .{ 0x30, 0x200, 0x0010_0000, 0, 0x0010_0030, 0, 0x0100_0000, 0, 0x0110_1110, 0x0211_2000, 0x2023_2231, 0x0111_1131, 0x0131_0132, 0 });
     var m33 = of(.m33);
-    try expectFeatures(&m33, .{ null, null, 0x0020_0000, 0, 0x0010_1f40, 0, 0x0100_0000, 0, 0x0110_1110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 });
+    try expectFeatures(&m33, .{ 0x30, 0x210, 0x0020_0000, 0, 0x0010_1f40, 0, 0x0100_0000, 0, 0x0110_1110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 });
     var m55 = of(.m55);
     try expectFeatures(&m55, .{ 0x2000_0030, 0x230, 0x1020_0000, 0, 0x0011_1040, 0, 0x0100_0000, 0x11, 0x0110_3110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 });
     var m85 = of(.m85);

@@ -130,6 +130,7 @@ pub fn Processor(comptime options: Options) type {
         if (c == .m55 or c == .m85) break impdef_block.Block;
     } else void;
     const Ewic = if (Impdef == void) void else ewic_block.Ewic;
+    const RasAddress = if (Impdef == void) void else u32;
     const choices = blk: {
         var out: [options.cores.len]core.Choices = undefined;
         for (options.cores, 0..) |c, i| out[i] = core.choicesOf(c);
@@ -251,6 +252,7 @@ pub fn Processor(comptime options: Options) type {
         m7: M7,
         impdef: Impdef,
         ewic: Ewic,
+        ras_address: RasAddress,
         mpu: Mpu,
         mpu_ns: MpuNs,
         banked: State.Banked,
@@ -326,6 +328,7 @@ pub fn Processor(comptime options: Options) type {
                 .m7 = if (M7 == void) {} else .init(part),
                 .impdef = if (Impdef == void) {} else .init(c, part),
                 .ewic = if (Ewic == void) {} else .init(if (c == .m55 or c == .m85) part.ewic else 0),
+                .ras_address = if (RasAddress == void) {} else 0,
                 .mpu = .init(part.mpu_regions.?, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .mpu_ns = if (MpuNs == void) {} else .init(part.mpu_ns_regions.?, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .banked = .{},
@@ -417,8 +420,10 @@ pub fn Processor(comptime options: Options) type {
         /// Returns a running core to its reset state, which is also what SYSRESETREQ does.
         pub fn reset(self: *Self) void {
             const before = self.impdef;
+            const address = self.ras_address;
             self.* = build(self.memory, self.spec.core, self.built(), self.trace);
             if (Impdef != void) self.impdef.keep(&before);
+            self.ras_address = address;
         }
 
         fn built(self: *const Self) core.Part {
@@ -713,27 +718,52 @@ pub fn Processor(comptime options: Options) type {
             return &self.impdef;
         }
 
-        fn impdefHidden(self: *Self, offset: u32) bool {
-            if (!self.spec.security or self.state.secure) return false;
+        fn impdefHidden(self: *Self, offset: u32, aliased: bool) bool {
+            if (aliased and !self.state.secure) return true;
+            if (!aliased and (!self.spec.security or self.state.secure)) return false;
             return impdef_block.secureOnly(offset) or !self.faultsNonSecure();
+        }
+
+        fn readImpdef(self: *Self, offset: u32, aliased: bool) ?u32 {
+            if (Impdef == void) return null;
+            const block = self.impdefBlock() orelse return null;
+            const word = block.readRegister(offset) orelse return null;
+            if (self.impdefHidden(offset, aliased)) return 0;
+            return switch (offset) {
+                impdef_block.stlnvicpendor => self.observed(self.best()),
+                impdef_block.stlnvicactvor => self.observed(self.ranked(self.active)),
+                else => word,
+            };
+        }
+
+        fn observed(self: *Self, found: ?Next) u32 {
+            const next = found orelse return 0;
+            return 1 << 18 | @as(u32, @intFromBool(!self.targets(next.n))) << 17 | @as(u32, @intCast(@max(next.priority, 0))) << 9 | numberOf(next.n);
         }
 
         fn readRas(self: *Self, offset: u32, ns: bool) ?u32 {
             if (Impdef == void) return null;
             const block = self.impdefBlock() orelse return null;
-            const word = ras_block.readRegister(self.spec.core, block.wired.ecc, offset) orelse return null;
+            const word = ras_block.readRegister(self.spec.core, block.wired.ecc, self.ras_address, offset) orelse return null;
             return if (ns and ras_block.gated(offset) and !self.faultsNonSecure()) 0 else word;
+        }
+
+        fn writeRas(self: *Self, offset: u32, ns: bool, value: u32) bool {
+            if (Impdef == void) return false;
+            if (self.readRas(offset, ns) == null) return false;
+            if (offset == ras_block.erraddr and self.impdef.wired.ecc and !(ns and !self.faultsNonSecure())) self.ras_address = value;
+            return true;
         }
 
         fn ewicOpen(self: *Self) bool {
             return !self.spec.security or self.state.secure or self.faultsNonSecure();
         }
 
-        fn writeImpdef(self: *Self, offset: u32, value: u32) bool {
+        fn writeImpdef(self: *Self, offset: u32, aliased: bool, value: u32) bool {
             if (Impdef == void) return false;
             const block = self.impdefBlock() orelse return false;
             if (block.readRegister(offset) == null) return false;
-            if (self.impdefHidden(offset)) return true;
+            if (self.impdefHidden(offset, aliased)) return true;
             if (offset == impdef_block.eventspr) {
                 if (value & impdef_block.event != 0) self.event();
                 if (value & impdef_block.nmi != 0) self.raise(self.instance(nmi));
@@ -1607,12 +1637,8 @@ pub fn Processor(comptime options: Options) type {
                     if (Ewic == void or !self.ewicOpen()) return false;
                     return answered(into, self.ewic.readRegister(address - ewic_block.base));
                 },
-                .impdef => {
-                    if (Impdef == void) return false;
-                    const block = self.impdefBlock() orelse return false;
-                    const word = block.readRegister(address - impdef_block.base) orelse return false;
-                    return answered(into, if (self.impdefHidden(address - impdef_block.base)) 0 else word);
-                },
+                .impdef => return answered(into, self.readImpdef(address - impdef_block.base, false)),
+                .impdef_ns => return answered(into, self.readImpdef(address - impdef_block.base - ppb.alias, true)),
                 .ppb_unmapped => return false,
             }
         }
@@ -1625,7 +1651,7 @@ pub fn Processor(comptime options: Options) type {
             return switch (self.architecture()) {
                 .armv6m, .armv7m, .armv7em => null,
                 .armv8m_base, .armv8m_main => 0,
-                .armv8_1m_main => if (self.state.secure and !aliased) self.scb.revision else null,
+                .armv8_1m_main => if (self.state.secure and !aliased) self.scb.revision else 0,
             };
         }
 
@@ -1693,8 +1719,9 @@ pub fn Processor(comptime options: Options) type {
                 .revidr, .revidr_ns => |region| self.readRevidr(region == .revidr_ns) != null,
                 .nvic => self.writeNvic(address - ppb.nvic_base, self.spec.security and !self.state.secure, value),
                 .nvic_ns => self.spec.security and (!self.state.secure or self.writeNvic(address - ppb.nvic_base - ppb.alias, true, value)),
-                .ras => self.readRas(address - ras_block.base, self.spec.security and !self.state.secure) != null,
-                .impdef => self.writeImpdef(address - impdef_block.base, value),
+                .ras => self.writeRas(address - ras_block.base, self.spec.security and !self.state.secure, value),
+                .impdef => self.writeImpdef(address - impdef_block.base, false, value),
+                .impdef_ns => self.writeImpdef(address - impdef_block.base - ppb.alias, true, value),
                 .ewic => Ewic != void and self.ewicOpen() and self.ewic.writeRegister(address - ewic_block.base, value),
                 .ppb_unmapped => false,
             };
@@ -1776,6 +1803,7 @@ pub fn Processor(comptime options: Options) type {
             reach: enum { banked, routed, secure } = .banked,
             v8: bool = false,
             baseline: bool = false,
+            v6: bool = false,
         };
 
         const held_bits = [_]Held{
@@ -1791,13 +1819,14 @@ pub fn Processor(comptime options: Options) type {
             .{ .bit = 12, .n = usage_fault, .pending = true },
             .{ .bit = 13, .n = mem_manage, .pending = true },
             .{ .bit = 14, .n = bus_fault, .pending = true, .reach = .routed },
-            .{ .bit = 15, .n = svcall, .pending = true, .baseline = true },
+            .{ .bit = 15, .n = svcall, .pending = true, .baseline = true, .v6 = true },
             .{ .bit = 20, .n = secure_fault, .pending = true, .reach = .secure },
             .{ .bit = 21, .n = hard_fault, .pending = true, .v8 = true, .baseline = true },
         };
 
         fn shcsrHeld(self: *Self, comptime slot: Held, ns: bool) ?Index {
             if (slot.v8 and !self.architecture().v8()) return null;
+            if (!slot.v6 and self.architecture() == .armv6m) return null;
             if (!slot.baseline and !self.architecture().main()) return null;
             if (!self.spec.security) return if (slot.reach == .secure) null else slot.n;
             return switch (slot.reach) {
@@ -1825,7 +1854,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn readShcsr(self: *Self, ns: bool) u32 {
-            if (self.architecture() == .armv6m) return 0;
+            if (self.spec.core == .m1) return 0;
             var value: u32 = 0;
             if (self.architecture().main()) {
                 for (self.shcsrBlocks(ns)) |part| value |= part[0].get(scb_block.shcsr) & part[1];
@@ -1839,7 +1868,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn writeShcsr(self: *Self, ns: bool, value: u32) bool {
-            if (self.architecture() == .armv6m) return true;
+            if (self.spec.core == .m1) return true;
             if (self.architecture().main()) {
                 for (self.shcsrBlocks(ns)) |part| part[0].writeBits(scb_block.shcsr, part[1], value);
             }
@@ -2035,9 +2064,13 @@ pub fn Processor(comptime options: Options) type {
         fn best(self: *Self) ?Next {
             const reachable: Set = 0xffff | @as(Set, self.nvic.enabled) << first_interrupt |
                 (if (self.security()) @as(Set, 0xffff) << ns_base else 0);
+            return self.ranked(self.pending & ~@as(Set, 3) & reachable);
+        }
+
+        fn ranked(self: *Self, set: Set) ?Next {
             var found: ?Next = null;
             var rank: u32 = 0;
-            var waiting = self.pending & ~@as(Set, 3) & reachable;
+            var waiting = set;
             while (waiting != 0) : (waiting &= waiting - 1) {
                 const i: Index = @intCast(@ctz(waiting));
                 const level = self.priority(i);
