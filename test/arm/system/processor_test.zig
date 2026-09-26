@@ -4269,3 +4269,75 @@ test "a return from a nested handler to the handler it preempted does not sleep,
         try std.testing.expectEqual(@as(u32, 0), cpu.state.r[7]);
     }
 }
+
+fn clearOnReturnImage() Memory {
+    return placed(&.{ 0x1000, 0x41, 0, 0, 0, 0, 0x81, 0x81, 0, 0, 0, 0x61 }, &.{ 0x40, 0x60, 0x80 }, &.{
+        &.{ 0xdf00, 0xbe00 },
+        &.{ 0xbf00, 0x4770 },
+        &.{0xbe00},
+    });
+}
+
+fn scratchInHandler(cpu: *Cpu, fpccr: u32, cpacr: u32) !void {
+    cpu.reset();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ef34, fpccr));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed88, cpacr));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed24, scb_block.usgfaultena | scb_block.secureflt_ena));
+    try std.testing.expectEqual(@as(?arm.Stop, null), cpu.run(.{ .instructions = 2 }).stop);
+    try std.testing.expectEqual(@as(u32, 0x62), cpu.state.pc);
+    cpu.state.control |= State.control_fpca;
+    cpu.state.fp[0] = 0x1234;
+    cpu.state.fp[15] = 0x5678;
+    cpu.state.fp[16] = 0x9abc;
+    cpu.state.fpscr = 0x0400_0000;
+    cpu.state.vpr = 0x55;
+}
+
+test "with FPCCR.CLRONRET set an exception return with CONTROL.FPCA set clears S0 to S15, FPSCR and VPR, and before Armv8.1-M whatever CPACR says, v8-M RQFCN E2.1.121" {
+    inline for (.{ .m33, .m55, .m85 }) |core| {
+        for ([_]u32{ scb_block.cp10, 0 }) |cpacr| {
+            if (core != .m33 and cpacr == 0) continue;
+            for ([_]u32{ 0xc000_0004, 0xd000_0004 }) |fpccr| {
+                var m = clearOnReturnImage();
+                var cpu = fast(core, &m);
+                try scratchInHandler(&cpu, fpccr, cpacr);
+                try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+                try std.testing.expectEqual(@as(u32, 0x42), cpu.state.pc);
+                const cleared = fpccr & scb_block.clronret != 0;
+                try std.testing.expectEqual(@as(u32, if (cleared) 0 else 0x1234), cpu.state.fp[0]);
+                try std.testing.expectEqual(@as(u32, if (cleared) 0 else 0x5678), cpu.state.fp[15]);
+                try std.testing.expectEqual(@as(u32, 0x9abc), cpu.state.fp[16]);
+                try std.testing.expectEqual(@as(u32, if (cleared) 0 else 0x0400_0000), cpu.state.fpscr);
+                try std.testing.expectEqual(@as(u32, if (cleared) 0 else 0x55), cpu.state.vpr);
+            }
+        }
+    }
+}
+
+test "from Armv8.1-M a clearing return CPACR refuses takes the NOCP UsageFault instead and leaves the registers, v8-M RXLTP E2.1.121" {
+    inline for (.{ .m55, .m85 }) |core| {
+        var m = clearOnReturnImage();
+        var cpu = fast(core, &m);
+        try scratchInHandler(&cpu, 0xd000_0004, 0);
+        try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+        try std.testing.expectEqual(@as(u32, 0x80), cpu.state.pc);
+        try std.testing.expectEqual(@as(u32, 6), cpu.state.xpsr & State.ipsr_mask);
+        try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
+        try std.testing.expectEqual(@as(u32, 0x1234), cpu.state.fp[0]);
+        try std.testing.expectEqual(@as(u32, 0x0400_0000), cpu.state.fpscr);
+    }
+}
+
+test "a clearing return while FPCCR_S.LSPACT is set takes the LSERR SecureFault and leaves the registers, v8-M RJMGQ D1.2.232 E2.1.121" {
+    inline for (.{ .m33, .m55 }) |core| {
+        var m = clearOnReturnImage();
+        var cpu = fast(core, &m);
+        try scratchInHandler(&cpu, 0xd000_0004, scb_block.cp10);
+        cpu.scb.put(scb_block.fpccr, cpu.scb.get(scb_block.fpccr) | scb_block.lspact);
+        try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+        try std.testing.expectEqual(@as(u32, 0x80), cpu.state.pc);
+        try std.testing.expectEqual(@as(u32, 7), cpu.state.xpsr & State.ipsr_mask);
+        try std.testing.expectEqual(@as(?u32, 1 << 7), cpu.peek(4, 0xe000_ede4));
+        try std.testing.expectEqual(@as(u32, 0x1234), cpu.state.fp[0]);
+    }
+}

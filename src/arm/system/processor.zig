@@ -2220,6 +2220,18 @@ pub fn Processor(comptime options: Options) type {
             const raw = self.rawPriority();
             self.active &= ~one(n);
             self.event();
+            if (self.floatingPoint() and s.control & State.control_fpca != 0 and self.scb.get(scb_block.fpccr) & scb_block.clronret != 0) {
+                if (self.scbOf(true).get(scb_block.fpccr) & scb_block.lspact != 0) {
+                    self.sau.flag(sau_block.lserr);
+                    return self.escalate(.secure_fault, exc_return);
+                }
+                if (self.architecture() == .armv8_1m_main) {
+                    if (self.coprocessorRefused(true, exc_return & secure_target != 0)) |target| return self.refuseCoprocessor(target, exc_return);
+                }
+                @memset(s.fp[0..16], 0);
+                s.fpscr = 0;
+                s.vpr = 0;
+            }
             if (secured) {
                 const background = exc_return & secure_stack != 0;
                 if (background != s.secure) {
@@ -2302,6 +2314,22 @@ pub fn Processor(comptime options: Options) type {
             self.scs().fault(.exception_return, 0);
             if (self.push(thread, self.carriesFp())) |stop| return stop;
             return self.escalate(.exception_return, exc_return);
+        }
+
+        fn coprocessorRefused(self: *Self, privileged: bool, secure: bool) ?bool {
+            const field = self.scbOf(secure).get(scb_block.cpacr) & scb_block.cp10;
+            if (field == 0 or (field == 1 << 20 and !privileged)) return secure;
+            if (!self.spec.security) return null;
+            if (!secure and self.scb.get(scb_block.nsacr) & scb_block.nsacr_cp10 == 0) return true;
+            if (self.icb.cppwr & icb_block.su10 != 0) return secure or self.icb.cppwr & icb_block.sus10 != 0;
+            return null;
+        }
+
+        fn refuseCoprocessor(self: *Self, secure: bool, exc_return: u32) ?Stop {
+            self.scbOf(secure).fault(.no_coprocessor, 0);
+            self.flags.nocp_secure = secure;
+            defer self.flags.nocp_secure = false;
+            return self.escalate(.no_coprocessor, exc_return);
         }
 
         fn returningIsCurrent(self: *Self, secured: bool, exc_return: u32) bool {

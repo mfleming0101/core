@@ -42,6 +42,8 @@ pub const invis: u32 = 1 << 1;
 pub const invep: u32 = 1 << 0;
 /// The SFSR bit for a data access the unit refused.
 pub const auviol: u32 = 1 << 3;
+/// The SFSR bit for a lazy floating-point state error, v8-M D1.2.232.
+pub const lserr: u32 = 1 << 7;
 /// The SFSR bit saying SFAR holds the address of that access.
 pub const sfarvalid: u32 = 1 << 6;
 
