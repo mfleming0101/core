@@ -76,7 +76,9 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
   any core but the M33, M55 and M85 may have; those three take up to 480. On the M55 and M85
   it is also `revidr`, the REVIDRNUM the part ties off, which REVIDR reads. On the M7, M23,
   M33, M55 and M85 it is also `vtor` and `vtor_ns`, the vector tables VTOR and VTOR_NS reset
-  to, which the core resets out of; the rest reset VTOR to zero. An M7 given
+  to, which the core resets out of; the rest reset VTOR to zero. On every core it is also
+  `calibration`, of which SYST_CALIB keeps SKEW and TENMS; NOREF always reads one, as the
+  library fits no SysTick reference clock. An M7 given
   `.{ .data = .kb32, .instruction = .kb32, .itcm = .{ .size = .kb64, .enabled = true } }`
   reports those, `.{}` is a part with none of them, and a core without the registers a field
   sets ignores that field.

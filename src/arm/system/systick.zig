@@ -4,11 +4,12 @@
 //! processor to raise the SysTick exception. Cycles beyond one wrap are taken modulo the
 //! reload, so a long jump lands where a cycle-by-cycle counter would.
 const std = @import("std");
-/// The 24-bit system timer: its control, reload and current value registers.
+/// The 24-bit system timer: its control, reload and current value registers, and the calibration word the part gives.
 pub const SysTick = struct {
     csr: u32 = 0,
     rvr: u32 = 0,
     cvr: u32 = 0,
+    calibration: u32 = noref,
 
     /// The SYST_CSR bit that runs the counter.
     pub const enable: u32 = 1 << 0;
@@ -18,11 +19,14 @@ pub const SysTick = struct {
     pub const clksource: u32 = 1 << 2;
     /// The SYST_CSR bit a wrap sets and a read clears.
     pub const countflag: u32 = 1 << 16;
-    const noref: u32 = 1 << 31;
+    /// The SYST_CALIB bit saying no reference clock is fitted, which the library never fits.
+    pub const noref: u32 = 1 << 31;
+    /// The SYST_CALIB bits a part wires, SKEW and TENMS.
+    pub const calibrated: u32 = 0x40ff_ffff;
 
-    /// Returns every register to zero.
+    /// Returns every register to zero but the calibration word.
     pub fn reset(self: *SysTick) void {
-        self.* = .{};
+        self.* = .{ .calibration = self.calibration };
     }
 
     /// The word a register read answers; reading SYST_CSR clears COUNTFLAG, v7-M B3.3.3.
@@ -35,7 +39,7 @@ pub const SysTick = struct {
             },
             0x4 => return self.rvr,
             0x8 => return self.cvr,
-            0xc => return noref,
+            0xc => return self.calibration,
             else => return null,
         }
     }

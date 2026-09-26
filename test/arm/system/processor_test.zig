@@ -3857,3 +3857,15 @@ test "the M23's SHCSR reads and writes the pending and active states Armv8-M Bas
     try std.testing.expectEqual(@as(?void, {}), zero.poke(4, 0xe000_ed24, 0x0000_8000));
     try std.testing.expectEqual(@as(?u32, 0), zero.peek(4, 0xe000_ed24));
 }
+
+test "SYST_CALIB reads the SKEW and TENMS the part gives through a reset, dropping its other bits, with NOREF set as no reference clock is fitted, M7 TRM Table 3-2, v8-M D1.2.240" {
+    var m = loaded();
+    var cpu = Cpu.init(&m, .m7, .{ .calibration = 0x7f02_71ff }, .{});
+    try std.testing.expectEqual(@as(?u32, 0xc002_71ff), cpu.peek(4, 0xe000_e01c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e01c, 0));
+    cpu.reset();
+    try std.testing.expectEqual(@as(?u32, 0xc002_71ff), cpu.peek(4, 0xe000_e01c));
+    try std.testing.expectEqual(@as(?u32, 0x4), cpu.peek(4, 0xe000_e010));
+    var zero = fast(.m0, &m);
+    try std.testing.expectEqual(@as(?u32, 0x8000_0000), zero.peek(4, 0xe000_e01c));
+}

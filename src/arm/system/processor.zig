@@ -300,7 +300,7 @@ pub fn Processor(comptime options: Options) type {
                 .model = .{ .decoding = decode.selectionOf(spec.architecture), .costs = costs[at] },
                 .state = .{ .secure = spec.security, .fpscr = fp.fixedFields(spec.architecture, 0) },
                 .memory = memory,
-                .systick = .{},
+                .systick = .{ .calibration = SysTick.noref | (part.calibration & SysTick.calibrated) },
                 .scb = .init(&profiles[at], part, part.vtor),
                 .scb_ns = .init(&profiles[at], part, part.vtor_ns),
                 .nvic = .init(part.priority_bits.?, part.interrupts.?),
@@ -412,6 +412,7 @@ pub fn Processor(comptime options: Options) type {
                 .revidr = self.scb.revision,
                 .vtor = self.scb.table,
                 .vtor_ns = self.scb_ns.table,
+                .calibration = self.systick.calibration & SysTick.calibrated,
             };
             if (M7 != void) self.m7.wiring(&out);
             return out;
