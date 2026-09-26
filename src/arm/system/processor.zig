@@ -133,6 +133,9 @@ pub fn Processor(comptime options: Options) type {
         for (choices) |c| most = @max(most, c.mpu_regions.most(), c.mpu_ns_regions.most());
         break :blk mpu_block.Mpu(@intCast(most));
     };
+    const SysTickNs = for (specs) |s| {
+        if (s.security) break ?SysTick;
+    } else void;
     const MpuNs = for (choices) |c| {
         if (c.mpu_ns_regions.most() != 0) break Mpu;
     } else void;
@@ -231,6 +234,7 @@ pub fn Processor(comptime options: Options) type {
         state: State,
         memory: *options.Bus,
         systick: SysTick,
+        systick_ns: SysTickNs,
         scb: scb_block.Scb,
         scb_ns: scb_block.Scb,
         icb: icb_block.Icb,
@@ -303,6 +307,7 @@ pub fn Processor(comptime options: Options) type {
                 .state = .{ .secure = spec.security, .fpscr = fp.fixedFields(spec.architecture, 0) },
                 .memory = memory,
                 .systick = .{ .calibration = SysTick.noref | (part.calibration & SysTick.calibrated) },
+                .systick_ns = if (SysTickNs == void) {} else if (spec.security and (spec.architecture.main() or part.systick_ns)) .{ .calibration = SysTick.noref | (part.calibration_ns & SysTick.calibrated) } else null,
                 .scb = .init(&profiles[at], part, part.vtor),
                 .scb_ns = .init(&profiles[at], part, part.vtor_ns),
                 .icb = .{},
@@ -418,6 +423,12 @@ pub fn Processor(comptime options: Options) type {
                 .calibration = self.systick.calibration & SysTick.calibrated,
             };
             if (M7 != void) self.m7.wiring(&out);
+            if (SysTickNs != void) {
+                if (self.systick_ns) |timer| {
+                    out.systick_ns = true;
+                    out.calibration_ns = timer.calibration & SysTick.calibrated;
+                }
+            }
             return out;
         }
 
@@ -654,14 +665,14 @@ pub fn Processor(comptime options: Options) type {
             return self.itns & @as(Lines, 1) << @intCast(n - first_interrupt) == 0;
         }
 
-        fn readItns(self: *Self, word: u32) ?u32 {
+        fn readItns(self: *Self, word: u32, ns: bool) ?u32 {
             if (!self.spec.security) return null;
-            return if (self.state.secure) nvic_block.wordOf(self.itns, word) else 0;
+            return if (ns) 0 else nvic_block.wordOf(self.itns, word);
         }
 
-        fn writeItns(self: *Self, word: u32, value: u32) bool {
+        fn writeItns(self: *Self, word: u32, ns: bool, value: u32) bool {
             if (!self.spec.security) return false;
-            if (self.state.secure) self.itns = (self.itns & ~nvic_block.placed(Lines, 0xffff_ffff, word)) | nvic_block.placed(Lines, value, word);
+            if (!ns) self.itns = (self.itns & ~nvic_block.placed(Lines, 0xffff_ffff, word)) | nvic_block.placed(Lines, value, word);
             return true;
         }
 
@@ -821,6 +832,9 @@ pub fn Processor(comptime options: Options) type {
             const elapsed: u32 = @intCast(@min(self.cycles - self.serviced, std.math.maxInt(u32)));
             self.serviced = self.cycles;
             if (self.systick.advance(elapsed)) self.raise(if (self.spec.security and self.flags.sttns) systick + ns_base else systick);
+            if (self.timerNs()) |timer| {
+                if (timer.advance(elapsed)) self.raise(systick + ns_base);
+            }
             if (self.memory.interrupts()) |raised| self.pendAll(raised);
             self.schedule();
             if (self.cycles >= self.deadline) self.due |= bound_due;
@@ -828,7 +842,8 @@ pub fn Processor(comptime options: Options) type {
 
         fn schedule(self: *Self) void {
             self.memory.follow(&self.cycles, &self.attention);
-            const next = self.serviced +| @min(self.systick.deadline(), self.memory.untilDue());
+            const other = if (self.timerNs()) |timer| timer.deadline() else std.math.maxInt(u64);
+            const next = self.serviced +| @min(self.systick.deadline(), other, self.memory.untilDue());
             self.attention = if (self.cycles < self.deadline) @min(next, self.deadline) else next;
         }
 
@@ -1433,14 +1448,24 @@ pub fn Processor(comptime options: Options) type {
         fn lanes(address: u32) ?Lane {
             const word = address & ~@as(u32, 3);
             return switch (ppb.region(address)) {
-                .scb => switch (word - ppb.scb_base) {
-                    scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => .merged,
-                    scb_block.cfsr => .cleared,
-                    else => null,
-                },
-                .nvic => if (word - ppb.nvic_base -% nvic_block.ipr < nvic_block.size - nvic_block.ipr) .merged else null,
+                .scb => scbLane(word - ppb.scb_base),
+                .scb_ns => scbLane(word - ppb.scb_base - ppb.alias),
+                .nvic => nvicLane(word - ppb.nvic_base),
+                .nvic_ns => nvicLane(word - ppb.nvic_base - ppb.alias),
                 else => null,
             };
+        }
+
+        fn scbLane(offset: u32) ?Lane {
+            return switch (offset) {
+                scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => .merged,
+                scb_block.cfsr => .cleared,
+                else => null,
+            };
+        }
+
+        fn nvicLane(offset: u32) ?Lane {
+            return if (offset -% nvic_block.ipr < nvic_block.size - nvic_block.ipr) .merged else null;
         }
 
         fn addressable(self: *Self, address: u32, comptime write: bool) bool {
@@ -1451,8 +1476,18 @@ pub fn Processor(comptime options: Options) type {
             return self.scs().get(scb_block.ccr) & scb_block.usersetmpend != 0;
         }
 
-        fn ownsSysTick(self: *Self) bool {
-            return !self.spec.security or self.state.secure or self.flags.sttns;
+        fn timerNs(self: *Self) ?*SysTick {
+            if (SysTickNs == void) return null;
+            return if (self.systick_ns) |*timer| timer else null;
+        }
+
+        fn sysTickOf(self: *Self, ns: bool) ?*SysTick {
+            if (!ns) return &self.systick;
+            return self.timerNs() orelse if (self.flags.sttns) &self.systick else null;
+        }
+
+        fn aliasedTimer(self: *Self) ?*SysTick {
+            return if (self.state.secure) self.timerNs() else null;
         }
 
         fn answered(into: *u32, word: ?u32) bool {
@@ -1465,7 +1500,13 @@ pub fn Processor(comptime options: Options) type {
             if (!self.addressable(address, false)) return false;
             switch (ppb.region(address)) {
                 .memory => unreachable,
-                .systick => return answered(into, if (self.ownsSysTick()) self.systick.readRegister(address - ppb.systick_base) else 0),
+                .systick => return answered(into, if (self.sysTickOf(self.spec.security and !self.state.secure)) |timer| timer.readRegister(address - ppb.systick_base) else 0),
+                .systick_ns => return self.spec.security and answered(into, if (self.aliasedTimer()) |timer| timer.readRegister(address - ppb.systick_base - ppb.alias) else 0),
+                .control_ns => return self.spec.security and answered(into, if (!self.state.secure) 0 else switch (address - ppb.control_base - ppb.alias) {
+                    ppb.ictr => (@as(u32, self.nvic.count) + 31) / 32 - 1,
+                    icb_block.actlr, icb_block.cppwr => |offset| self.icb.readRegister(self.spec.core, offset, true),
+                    else => null,
+                }),
                 .itm => return answered(into, 0),
                 .dwt => return answered(into, self.dwt.readRegister(address - ppb.dwt_base, self.cycles)),
                 .control => return answered(into, switch (address - ppb.control_base) {
@@ -1495,7 +1536,8 @@ pub fn Processor(comptime options: Options) type {
                     });
                 },
                 .revidr, .revidr_ns => |region| return answered(into, self.readRevidr(region == .revidr_ns)),
-                .nvic => return answered(into, self.readNvic(address - ppb.nvic_base)),
+                .nvic => return answered(into, self.readNvic(address - ppb.nvic_base, self.spec.security and !self.state.secure)),
+                .nvic_ns => return self.spec.security and answered(into, if (self.state.secure) self.readNvic(address - ppb.nvic_base - ppb.alias, true) else 0),
                 .ppb_unmapped => return false,
             }
         }
@@ -1524,7 +1566,16 @@ pub fn Processor(comptime options: Options) type {
             defer self.dwt.retime(self.cycles, self.scb.get(scb_block.demcr) & scb_block.trcena != 0);
             const written = switch (ppb.region(address)) {
                 .memory => unreachable,
-                .systick => if (self.ownsSysTick()) self.systick.writeRegister(address - ppb.systick_base, value) else true,
+                .systick => if (self.sysTickOf(self.spec.security and !self.state.secure)) |timer| timer.writeRegister(address - ppb.systick_base, value) else true,
+                .systick_ns => self.spec.security and if (self.aliasedTimer()) |timer| timer.writeRegister(address - ppb.systick_base - ppb.alias, value) else true,
+                .control_ns => self.spec.security and (!self.state.secure or switch (address - ppb.control_base - ppb.alias) {
+                    ppb.ictr => true,
+                    icb_block.actlr, icb_block.cppwr => |offset| blk: {
+                        self.icb.writeRegister(self.spec.core, offset, true, value);
+                        break :blk true;
+                    },
+                    else => false,
+                }),
                 .itm => true,
                 .dwt => self.dwt.writeRegister(address - ppb.dwt_base, value, self.cycles),
                 .control => switch (address - ppb.control_base) {
@@ -1559,7 +1610,8 @@ pub fn Processor(comptime options: Options) type {
                     else => |offset| self.scb_ns.writeRegister(offset, value),
                 }),
                 .revidr, .revidr_ns => |region| self.readRevidr(region == .revidr_ns) != null,
-                .nvic => self.writeNvic(address - ppb.nvic_base, value),
+                .nvic => self.writeNvic(address - ppb.nvic_base, self.spec.security and !self.state.secure, value),
+                .nvic_ns => self.spec.security and (!self.state.secure or self.writeNvic(address - ppb.nvic_base - ppb.alias, true, value)),
                 .ppb_unmapped => false,
             };
             return if (written) {} else null;
@@ -1570,9 +1622,9 @@ pub fn Processor(comptime options: Options) type {
             return unit.writeRegister(offset, value);
         }
 
-        fn nvicVisible(self: *Self, offset: u32) u32 {
+        fn nvicVisible(self: *Self, offset: u32, ns: bool) u32 {
             const implemented = self.nvic.implemented(offset);
-            if (!self.spec.security or self.state.secure) return implemented;
+            if (!ns) return implemented;
             return implemented & switch (offset) {
                 nvic_block.iser...nvic_block.iser + nvic_block.bank,
                 nvic_block.icer...nvic_block.icer + nvic_block.bank,
@@ -1594,28 +1646,28 @@ pub fn Processor(comptime options: Options) type {
             return mask;
         }
 
-        fn readNvic(self: *Self, offset: u32) ?u32 {
+        fn readNvic(self: *Self, offset: u32, ns: bool) ?u32 {
             if (offset & 3 != 0) return null;
             const word = switch (offset) {
                 nvic_block.ispr...nvic_block.ispr + nvic_block.bank => nvic_block.wordOf(self.pendingLines(), (offset - nvic_block.ispr) / 4),
                 nvic_block.icpr...nvic_block.icpr + nvic_block.bank => nvic_block.wordOf(self.pendingLines(), (offset - nvic_block.icpr) / 4),
                 nvic_block.iabr...nvic_block.iabr + nvic_block.bank => nvic_block.wordOf(@as(Lines, @truncate(self.active >> first_interrupt)), (offset - nvic_block.iabr) / 4),
-                nvic_block.itns...nvic_block.itns + nvic_block.bank => self.readItns((offset - nvic_block.itns) / 4) orelse return null,
+                nvic_block.itns...nvic_block.itns + nvic_block.bank => self.readItns((offset - nvic_block.itns) / 4, ns) orelse return null,
                 else => self.nvic.readRegister(offset) orelse return null,
             };
-            return word & self.nvicVisible(offset);
+            return word & self.nvicVisible(offset, ns);
         }
 
-        fn writeNvic(self: *Self, offset: u32, value: u32) bool {
+        fn writeNvic(self: *Self, offset: u32, ns: bool, value: u32) bool {
             if (offset & 3 != 0) return false;
-            const seen = value & self.nvicVisible(offset);
+            const seen = value & self.nvicVisible(offset, ns);
             switch (offset) {
                 nvic_block.ispr...nvic_block.ispr + nvic_block.bank => self.pending |= @as(Set, nvic_block.placed(Lines, seen, (offset - nvic_block.ispr) / 4)) << first_interrupt,
                 nvic_block.icpr...nvic_block.icpr + nvic_block.bank => self.pending &= ~(@as(Set, nvic_block.placed(Lines, seen, (offset - nvic_block.icpr) / 4)) << first_interrupt),
                 nvic_block.iabr...nvic_block.iabr + nvic_block.bank => {},
-                nvic_block.itns...nvic_block.itns + nvic_block.bank => return self.writeItns((offset - nvic_block.itns) / 4, value & self.nvic.implemented(offset)),
+                nvic_block.itns...nvic_block.itns + nvic_block.bank => return self.writeItns((offset - nvic_block.itns) / 4, ns, value & self.nvic.implemented(offset)),
                 nvic_block.ipr...nvic_block.last_ipr => {
-                    const kept = (self.nvic.readRegister(offset) orelse 0) & ~self.nvicVisible(offset);
+                    const kept = (self.nvic.readRegister(offset) orelse 0) & ~self.nvicVisible(offset, ns);
                     return self.nvic.writeRegister(offset, kept | seen);
                 },
                 else => return self.nvic.writeRegister(offset, seen),
@@ -1728,8 +1780,9 @@ pub fn Processor(comptime options: Options) type {
             return !ns or self.faultsNonSecure();
         }
 
-        fn sysTickVisible(self: *Self, ns: bool) bool {
-            return !ns or self.flags.sttns;
+        fn sysTickException(self: *Self, ns: bool) ?Index {
+            if (self.timerNs() != null) return if (ns) systick + ns_base else systick;
+            return if (!ns or self.flags.sttns) self.instance(systick) else null;
         }
 
         fn readIcsr(self: *Self, ns: bool) u32 {
@@ -1741,7 +1794,7 @@ pub fn Processor(comptime options: Options) type {
                 @as(u32, if (self.best()) |next| numberOf(next.n) else 0) << 12 |
                 @as(u32, @intFromBool(interrupts != 0)) << 22 |
                 (if (!ns and self.flags.sttns) scb_block.sttns else 0) |
-                (if (self.sysTickVisible(ns)) bit(self.pending, self.instance(systick)) else 0) << 26 |
+                (if (self.sysTickException(ns)) |tick| bit(self.pending, tick) else 0) << 26 |
                 bit(self.pending, pendsv + side) << 28 |
                 (if (self.nmiVisible(ns)) bit(self.pending, self.instance(nmi)) else 0) << 31;
         }
@@ -1805,12 +1858,12 @@ pub fn Processor(comptime options: Options) type {
             if (value & 1 << 30 != 0 and self.architecture().v8() and self.nmiVisible(ns)) self.pending &= ~one(self.instance(nmi));
             if (value & 1 << 28 != 0) self.pending |= one(pendsv + side);
             if (value & 1 << 27 != 0) self.pending &= ~one(pendsv + side);
-            if (self.sysTickVisible(ns)) {
-                const tick = one(self.instance(systick));
+            if (self.sysTickException(ns)) |n| {
+                const tick = one(n);
                 if (value & 1 << 26 != 0) self.pending |= tick;
                 if (value & 1 << 25 != 0) self.pending &= ~tick;
             }
-            if (self.spec.security and !ns) self.flags.sttns = value & scb_block.sttns != 0;
+            if (self.spec.security and !ns and self.timerNs() == null) self.flags.sttns = value & scb_block.sttns != 0;
             return true;
         }
 

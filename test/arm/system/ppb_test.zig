@@ -51,6 +51,16 @@ test "REVIDR is the word below the System Control Block and its alias the word b
     try std.testing.expectEqual(.scb, bus.region(0xe000_ed00));
 }
 
+test "the Non-secure aliases of the control words, the SysTick and the NVIC sit 0x20000 above them, v8-M D1.1.20 D1.1.21 D1.1.22" {
+    try std.testing.expectEqual(.control_ns, bus.region(0xe002_e000));
+    try std.testing.expectEqual(.control_ns, bus.region(0xe002_e00c));
+    try std.testing.expectEqual(.systick_ns, bus.region(0xe002_e010));
+    try std.testing.expectEqual(.systick_ns, bus.region(0xe002_e01c));
+    try std.testing.expectEqual(.nvic_ns, bus.region(0xe002_e100));
+    try std.testing.expectEqual(.nvic_ns, bus.region(0xe002_e5ec));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe002_e020));
+}
+
 test "the rest of the private peripheral bus is unmapped in this core" {
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_dffc));
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_ecf8));

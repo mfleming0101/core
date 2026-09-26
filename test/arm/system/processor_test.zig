@@ -3049,7 +3049,7 @@ test "the NVIC bits of an interrupt that targets Secure state are RAZ/WI from No
 
 test "with one SysTick and ICSR.STTNS clear, a Non-secure access to it is RAZ/WI, D1.2.241" {
     var m: Memory = .{};
-    var cpu = fast(.m33, &m);
+    var cpu = fast(.m23, &m);
     cpu.reset();
     _ = cpu.poke(4, 0xe000_e014, 1000);
     nonSecure(&cpu);
@@ -3088,7 +3088,7 @@ test "ICSR.PENDNMISET is RAZ/WI from Non-secure state while AIRCR.BFHFNMINS is z
 
 test "ICSR.PENDSTSET is RAZ/WI from Non-secure state while ICSR.STTNS is zero, D1.2.126" {
     var m = loaded();
-    var cpu = fast(.m33, &m);
+    var cpu = fast(.m23, &m);
     cpu.reset();
     nonSecure(&cpu);
     _ = cpu.poke(4, 0xe000_ed04, 1 << 26);
@@ -3215,7 +3215,7 @@ test "ICSR_S.STTNS hands the one SysTick to the Non-secure exception instance, E
             &.{ 0x04c1, 0x0000 },
             &.{0xbe00},
         });
-        var cpu = fast(.m33, &m);
+        var cpu = fast(.m23, &m);
         cpu.reset();
         launched(&cpu);
         _ = cpu.poke(4, 0xe000_ed04, side);
@@ -3933,4 +3933,97 @@ test "CPPWR.SU10 leaves the floating-point unit unusable, its NOCP UsageFault ta
     try std.testing.expect(cpu.state.secure);
     try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
     try std.testing.expectEqual(@as(u32, 0), cpu.scb_ns.get(scb_block.cfsr));
+}
+
+test "each of the M33's two SysTicks raises the SysTick of its own Security state, the Non-secure one programmed from Secure code at SYST_CSR_NS, v8-M RWLGH D1.2.241" {
+    for ([_]u16{ 0xe000, 0xe002 }) |high| {
+        var m = placed(&.{ 0x1000, 0x41, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x101 }, &.{ 0x40, 0x100, 0x43c, 0x4c0 }, &.{
+            &.{ 0x4803, 0x2101, 0x6041, 0x2103, 0x6001, 0xbf00, 0xbf00, 0xbe00, 0xe010, high },
+            &.{0xbe00},
+            &.{ 0x04c1, 0x0000 },
+            &.{0xbe00},
+        });
+        var cpu = fast(.m33, &m);
+        cpu.reset();
+        launched(&cpu);
+        try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 100 }).stop);
+        try std.testing.expectEqual(high == 0xe000, cpu.state.secure);
+        try std.testing.expectEqual(@as(u32, if (high == 0xe000) 0x100 else 0x4c0), cpu.state.pc);
+    }
+}
+
+test "with the two SysTicks of the Main Extension, ICSR.STTNS is RAZ/WI, PENDSTSET is banked and Non-secure code reaches its own timer, whose alias it reads as zero, v8-M D1.2.126 D1.2.243" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    cpu.reset();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed04, scb_block.sttns));
+    try std.testing.expectEqual(@as(u32, 0), cpu.peek(4, 0xe000_ed04).? & scb_block.sttns);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e014, 1000));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_e014, 7));
+    try std.testing.expectEqual(@as(u32, 1000), cpu.systick.rvr);
+    try std.testing.expectEqual(@as(u32, 7), cpu.systick_ns.?.rvr);
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?u32, 7), cpu.peek(4, 0xe000_e014));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_e014));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_e014, 9));
+    try std.testing.expectEqual(@as(u32, 7), cpu.systick_ns.?.rvr);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed04, 1 << 26));
+    try std.testing.expectEqual(Cpu.one(arm.systick + Cpu.ns_base), cpu.pending & (Cpu.one(arm.systick) | Cpu.one(arm.systick + Cpu.ns_base)));
+}
+
+test "the M23 fits a second SysTick only where the part sets systick_ns, its SYST_CALIB_NS from calibration_ns, and with one timer SYST_CSR_NS to SYST_CALIB_NS are RAZ/WI, M23 TRM Table 2-1 Table 5-1, M55 TRM C.3" {
+    var m = loaded();
+    var one = fast(.m23, &m);
+    try std.testing.expectEqual(@as(?void, {}), one.poke(4, 0xe000_e014, 1000));
+    try std.testing.expectEqual(@as(?u32, 0), one.peek(4, 0xe002_e014));
+    try std.testing.expectEqual(@as(?void, {}), one.poke(4, 0xe002_e014, 5));
+    try std.testing.expectEqual(@as(u32, 1000), one.systick.rvr);
+    try std.testing.expectEqual(@as(?void, {}), one.poke(4, 0xe000_ed04, scb_block.sttns));
+    try std.testing.expectEqual(scb_block.sttns, one.peek(4, 0xe000_ed04).? & scb_block.sttns);
+    var two = Cpu.init(&m, .m23, .{ .systick_ns = true, .calibration_ns = 0x4000_0010 }, .{});
+    try std.testing.expectEqual(@as(?void, {}), two.poke(4, 0xe002_e014, 5));
+    try std.testing.expectEqual(@as(u32, 5), two.systick_ns.?.rvr);
+    two.reset();
+    try std.testing.expectEqual(@as(?u32, 0xc000_0010), two.peek(4, 0xe002_e01c));
+    try std.testing.expectEqual(@as(?u32, 0x8000_0000), two.peek(4, 0xe000_e01c));
+    var plain = fast(.m4, &m);
+    try std.testing.expectEqual(@as(?u32, null), plain.peek(4, 0xe002_e010));
+}
+
+test "the NVIC alias shows Secure code the Non-secure view, ITNS reading zero, takes byte writes to priorities as the SCB alias does, and is RAZ/WI from the Non-secure state, v8-M D1.2.183 D1.2.186 D1.2.188, B8.3 RCFPK" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    cpu.reset();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e380, 2));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 3));
+    try std.testing.expectEqual(@as(?u32, 2), cpu.peek(4, 0xe002_e100));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_e380));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_e180, 3));
+    try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe000_e100));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(1, 0xe002_e401, 0x80));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(1, 0xe002_e400, 0x80));
+    try std.testing.expectEqual(@as(?u32, 0x8000), cpu.peek(4, 0xe000_e400));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(1, 0xe002_ed23, 0x80));
+    try std.testing.expectEqual(@as(u32, 0x8000_0000), cpu.scb_ns.get(scb_block.shpr3));
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_e400));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_e100, 3));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e100));
+}
+
+test "ICTR_NS, ACTLR_NS and CPPWR_NS show Secure code the Non-secure views and are RAZ/WI from the Non-secure state, v8-M D1.2.1 D1.2.15 D1.2.127" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    cpu.reset();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e008, 0x2000_0000));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_e008, 1));
+    try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe002_e008));
+    try std.testing.expectEqual(@as(?u32, 0x2000_0000), cpu.peek(4, 0xe000_e008));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e00c, 0x0030_0000));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_e00c));
+    try std.testing.expectEqual(cpu.peek(4, 0xe000_e004), cpu.peek(4, 0xe002_e004));
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_e004));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_e008, 0));
+    try std.testing.expectEqual(@as(u32, 1), cpu.icb.actlr[1]);
 }
