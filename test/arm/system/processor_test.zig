@@ -481,6 +481,25 @@ test "two M7 parts of one processor type carry the caches each was built with, a
     try std.testing.expectEqual(@as(?void, null), four.poke(4, 0xe000_ef50, 0));
 }
 
+test "the M55 and M85 bank CSSELR, CCSIDR and CCR IC and DC between the Security states and read one CLIDR, CTR and maintenance range through either, M55 and M85 TRM 5.6.1 5.6.2 5.6.3 6.5, v8-M D1.2.12 D1.2.18 D1.1.29" {
+    var m = loaded();
+    inline for (.{ .m55, .m85 }) |core| {
+        var cpu = Cpu.init(&m, core, .{ .data = .kb32, .instruction = .kb16 }, .{});
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed84, 1));
+        try std.testing.expectEqual(@as(?u32, 0xf01f_e009), cpu.peek(4, 0xe000_ed80));
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ed84));
+        try std.testing.expectEqual(@as(?u32, 0xf01f_e019), cpu.peek(4, 0xe002_ed80));
+        try std.testing.expectEqual(@as(?u32, 0x0920_0003), cpu.peek(4, 0xe002_ed78));
+        try std.testing.expectEqual(@as(?u32, 0x8303_c003), cpu.peek(4, 0xe002_ed7c));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed14, 0x0003_0201));
+        try std.testing.expectEqual(@as(?u32, 0x0003_0201), cpu.peek(4, 0xe000_ed14));
+        try std.testing.expectEqual(@as(?u32, 0x0000_0201), cpu.peek(4, 0xe002_ed14));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ef50, 0));
+        cpu.reset();
+        try std.testing.expectEqual(@as(?u32, 0xf01f_e019), cpu.peek(4, 0xe000_ed80));
+    }
+}
+
 test "the processor answers SysTick at 0xE000E010 itself and faults the rest of the private peripheral bus" {
     var m = loaded();
     var cpu = fast(.m0plus, &m);

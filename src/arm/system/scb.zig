@@ -237,10 +237,12 @@ pub const Profile = struct {
     present: u32,
     main: bool,
     floating_point: bool,
+    levels: u32,
     reset: [layout.len]u32,
     write_mask: [layout.len]u32,
 };
 
+const cache_type: u32 = 0x8303_c003;
 const data_ccsidr = [_]u32{ 0, 0xf003_e019, 0xf007_e019, 0xf00f_e019, 0xf01f_e019, 0xf03f_e019 };
 const instruction_ccsidr = [_]u32{ 0, 0xf007_e009, 0xf00f_e009, 0xf01f_e009, 0xf03f_e009, 0xf07f_e009 };
 
@@ -274,7 +276,7 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
         mvfr0 => .{ .reset = spec.mvfr[0], .write_mask = 0 },
         mvfr1 => .{ .reset = spec.mvfr[1], .write_mask = 0 },
         mvfr2 => .{ .reset = spec.mvfr[2], .write_mask = 0 },
-        ctr => .{ .reset = if (spec.caches) 0x8303_c003 else 0, .write_mask = 0 },
+        ctr => .{ .reset = if (spec.core == .m7) cache_type else 0, .write_mask = 0 },
         csselr => .{ .reset = 0, .write_mask = 1 },
         else => .{ .reset = 0, .write_mask = 0 },
     };
@@ -285,7 +287,7 @@ pub fn profileOf(comptime c: core.Core) Profile {
     @setEvalBranchQuota(200_000);
     const spec = core.spec(c);
     const main = spec.architecture.main();
-    var out: Profile = .{ .present = 0, .main = main, .floating_point = spec.floating_point, .reset = @splat(0), .write_mask = @splat(0) };
+    var out: Profile = .{ .present = 0, .main = main, .floating_point = spec.floating_point, .levels = if (c == .m7) 0x0900_0000 else 0x0920_0000, .reset = @splat(0), .write_mask = @splat(0) };
     for (layout, 0..) |slot, i| {
         const held = switch (slot.group) {
             .shared => true,
@@ -323,7 +325,8 @@ pub const Scb = struct {
     pub fn reset(self: *Self) void {
         self.words = self.profile.reset;
         const ctype = @as(u32, @intFromBool(self.caches.data != .none)) << 1 | @intFromBool(self.caches.instruction != .none);
-        self.words[comptime slot(clidr).?] = if (ctype == 0) 0 else 0x0900_0000 | ctype;
+        self.words[comptime slot(clidr).?] = if (ctype == 0) 0 else self.profile.levels | ctype;
+        if (ctype != 0) self.words[comptime slot(ctr).?] = cache_type;
         self.words[comptime slot(ccsidr).?] = self.selected(0);
     }
 
