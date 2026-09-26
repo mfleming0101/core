@@ -43,7 +43,7 @@ pub const mmfar: u32 = 0x34;
 pub const bfar: u32 = 0x38;
 /// AFSR, the auxiliary fault status register.
 pub const afsr: u32 = 0x3c;
-/// CLIDR, the cache levels a core with caches has.
+/// CLIDR, the cache levels, none on a v8-M core without caches.
 pub const clidr: u32 = 0x78;
 /// CTR, the cache type.
 pub const ctr: u32 = 0x7c;
@@ -190,7 +190,7 @@ pub const secureflt_ena: u32 = 1 << 19;
 /// The DEMCR bit that runs the DWT.
 pub const trcena: u32 = 1 << 24;
 
-const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_type } };
+const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_level, cache_type } };
 
 /// Every register the block holds, with the offset and the group that decides whether a core has it.
 pub const layout = [_]Slot{
@@ -218,7 +218,7 @@ pub const layout = [_]Slot{
     .{ .name = "MVFR0", .offset = mvfr0, .group = .floating },
     .{ .name = "MVFR1", .offset = mvfr1, .group = .floating },
     .{ .name = "MVFR2", .offset = mvfr2, .group = .floating },
-    .{ .name = "CLIDR", .offset = clidr, .group = .cache },
+    .{ .name = "CLIDR", .offset = clidr, .group = .cache_level },
     .{ .name = "CTR", .offset = ctr, .group = .cache_type },
     .{ .name = "CCSIDR", .offset = ccsidr, .group = .cache },
     .{ .name = "CSSELR", .offset = csselr, .group = .cache },
@@ -294,6 +294,7 @@ pub fn profileOf(comptime c: core.Core) Profile {
             .main => main,
             .floating => spec.floating_point,
             .cache => spec.caches,
+            .cache_level => spec.caches or spec.architecture.v8(),
             .cache_type => spec.architecture != .armv6m,
         };
         if (!held) continue;
@@ -316,7 +317,7 @@ pub const Scb = struct {
     /// A block at the reset values its profile and its part give; a core without the cache registers keeps an empty part.
     pub fn init(profile: *const Profile, part: core.Part) Self {
         var out: Self = .{ .profile = profile, .words = undefined, .part = .{} };
-        if (out.has(comptime slot(clidr).?)) out.part = part;
+        if (out.has(comptime slot(ccsidr).?)) out.part = part;
         out.reset();
         return out;
     }
@@ -423,7 +424,7 @@ pub const Scb = struct {
     fn answers(self: *const Self, offset: u32) bool {
         if (offset & 3 != 0) return false;
         if (self.profile.main and !self.profile.floating_point and offset -% fpccr < iciallu - fpccr) return true;
-        if (self.has(comptime slot(clidr).?) and offset -% iciallu <= bpiall - iciallu and offset != iciallu + 4) return true;
+        if (self.has(comptime slot(ccsidr).?) and offset -% iciallu <= bpiall - iciallu and offset != iciallu + 4) return true;
         return offset -% dhcsr < demcr - dhcsr;
     }
 
