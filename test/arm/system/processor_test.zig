@@ -3383,6 +3383,22 @@ test "the Non-secure alias of SHCSR reaches the Non-secure instances and the Sec
     try std.testing.expectEqual(@as(u64, (1 << 7) | (1 << 4) | (1 << 3)), cpu.active);
 }
 
+test "the Non-secure alias is RES0 to Non-secure software, reading zero and ignoring writes, and faults unprivileged, v8-M D1.2.9 D1.2.272 B8.2" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    cpu.reset();
+    cpu.state.secure = false;
+    cpu.reguard();
+    const vtor = cpu.peek(4, 0xe000_ed08);
+    try std.testing.expectEqual(@as(?u32, 0x0000_0201), cpu.peek(4, 0xe000_ed14));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ed14));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed08, 0x400));
+    try std.testing.expectEqual(vtor, cpu.peek(4, 0xe000_ed08));
+    cpu.state.control |= State.control_npriv;
+    try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe002_ed14));
+    try std.testing.expectEqual(@as(?void, null), cpu.poke(4, 0xe002_ed08, 0x400));
+}
+
 test "a HardFault software pends waits for a priority that lets it in where one the core forces locks the core up, B3.33" {
     var m = placed(&svc_vectors, &.{0x40}, &.{&.{ 0xbf00, 0xbe00 }});
     var cpu = fast(.m33, &m);

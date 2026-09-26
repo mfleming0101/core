@@ -1394,7 +1394,8 @@ pub fn Processor(comptime options: Options) type {
                     else => |offset| return answered(into, self.scs().readRegister(offset)),
                 },
                 .scb_ns => {
-                    if (!self.spec.security or !self.state.secure) return false;
+                    if (!self.spec.security) return false;
+                    if (!self.state.secure) return answered(into, 0);
                     return answered(into, switch (address - ppb.scb_base - ppb.alias) {
                         scb_block.icsr => self.readIcsr(true),
                         scb_block.shcsr => self.readShcsr(true),
@@ -1439,12 +1440,12 @@ pub fn Processor(comptime options: Options) type {
                     mpu_block.first...mpu_block.last => |offset| self.reprogram(self.mpuOf(self.state.secure), offset - mpu_block.first, value),
                     else => |offset| self.scs().writeRegister(offset, value),
                 },
-                .scb_ns => self.spec.security and self.state.secure and switch (address - ppb.scb_base - ppb.alias) {
+                .scb_ns => self.spec.security and (!self.state.secure or switch (address - ppb.scb_base - ppb.alias) {
                     scb_block.icsr => self.writeIcsr(true, value),
                     scb_block.shcsr => self.writeShcsr(true, value),
                     mpu_block.first...mpu_block.last => |offset| self.reprogram(&self.mpu_ns, offset - mpu_block.first, value),
                     else => |offset| self.scb_ns.writeRegister(offset, value),
-                },
+                }),
                 .nvic => self.writeNvic(address - ppb.nvic_base, value),
                 .ppb_unmapped => false,
             };
