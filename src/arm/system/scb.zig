@@ -306,18 +306,22 @@ pub fn profileOf(comptime c: core.Core) Profile {
     return out;
 }
 
-/// The block itself: a word per register the core has, over a profile shared by every instance, and what this part was built with.
+/// The block itself: a word per register the core has, over a profile shared by every instance, and the cache sizes of this part.
 pub const Scb = struct {
     const Self = @This();
 
     profile: *const Profile,
     words: [layout.len]u32,
-    part: core.Part,
+    data: core.CacheSize,
+    instruction: core.CacheSize,
 
-    /// A block at the reset values its profile and its part give; a core without the cache registers keeps an empty part.
+    /// A block at the reset values its profile and its part give; a core without the cache registers keeps no caches.
     pub fn init(profile: *const Profile, part: core.Part) Self {
-        var out: Self = .{ .profile = profile, .words = undefined, .part = .{} };
-        if (out.has(comptime slot(ccsidr).?)) out.part = part;
+        var out: Self = .{ .profile = profile, .words = undefined, .data = .none, .instruction = .none };
+        if (out.has(comptime slot(ccsidr).?)) {
+            out.data = part.data;
+            out.instruction = part.instruction;
+        }
         out.reset();
         return out;
     }
@@ -325,18 +329,18 @@ pub const Scb = struct {
     /// Returns every register to its reset value.
     pub fn reset(self: *Self) void {
         self.words = self.profile.reset;
-        const ctype = @as(u32, @intFromBool(self.part.data != .none)) << 1 | @intFromBool(self.part.instruction != .none);
+        const ctype = @as(u32, @intFromBool(self.data != .none)) << 1 | @intFromBool(self.instruction != .none);
         self.words[comptime slot(clidr).?] = if (ctype == 0) 0 else self.profile.levels | ctype;
         if (ctype != 0) self.words[comptime slot(ctr).?] = cache_type;
         self.words[comptime slot(ccsidr).?] = self.selected(0);
     }
 
     fn selected(self: *const Self, instruction: u32) u32 {
-        return if (instruction == 0) data_ccsidr[@intFromEnum(self.part.data)] else instruction_ccsidr[@intFromEnum(self.part.instruction)];
+        return if (instruction == 0) data_ccsidr[@intFromEnum(self.data)] else instruction_ccsidr[@intFromEnum(self.instruction)];
     }
 
     fn enables(self: *const Self) u32 {
-        return (if (self.part.data != .none) dc else 0) | (if (self.part.instruction != .none) ic else 0);
+        return (if (self.data != .none) dc else 0) | (if (self.instruction != .none) ic else 0);
     }
 
     fn has(self: *const Self, i: u8) bool {

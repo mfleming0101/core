@@ -358,7 +358,13 @@ pub fn Processor(comptime options: Options) type {
 
         /// Returns a running core to its reset state, which is also what SYSRESETREQ does.
         pub fn reset(self: *Self) void {
-            self.* = init(self.memory, self.spec.core, self.scb.part, self.trace);
+            self.* = init(self.memory, self.spec.core, self.built(), self.trace);
+        }
+
+        fn built(self: *const Self) core.Part {
+            var out: core.Part = .{ .data = self.scb.data, .instruction = self.scb.instruction };
+            if (M7 != void) self.m7.wiring(&out);
+            return out;
         }
 
         fn atReset(self: *Self) void {
@@ -1446,7 +1452,7 @@ pub fn Processor(comptime options: Options) type {
                     scb_block.shcsr => self.writeShcsr(self.spec.security and !self.state.secure, value),
                     scb_block.stir => self.trigger(value),
                     sau_block.first...sau_block.last => |offset| if (self.spec.security and !self.state.secure) true else self.sau.writeRegister(offset - sau_block.first, value),
-                    m7_block.first...m7_block.last => |offset| if (self.m7Control()) |block| block.writeRegister(self.scb.part, offset - m7_block.first, value) else false,
+                    m7_block.first...m7_block.last => |offset| if (self.m7Control()) |block| block.writeRegister(offset - m7_block.first, value) else false,
                     mpu_block.first...mpu_block.last => |offset| self.reprogram(self.mpuOf(self.state.secure), offset - mpu_block.first, value),
                     else => |offset| self.scs().writeRegister(offset, value),
                 },

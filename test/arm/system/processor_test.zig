@@ -481,7 +481,7 @@ test "two M7 parts of one processor type carry the caches each was built with, a
     try std.testing.expectEqual(@as(?void, null), four.poke(4, 0xe000_ef50, 0));
 }
 
-test "two M7 parts of one processor type read the TCM and AHBP sizes and enables each was wired with, keep them through a reset, and an M4 part refuses the addresses, M7 TRM 3.3.6 3.3.7 Table 3-1" {
+test "two M7 parts of one processor type read the TCM and AHBP sizes and enables each was wired with, keep them and their ECC through a reset, and an M4 part refuses the addresses, M7 TRM 3.3.6 3.3.7 3.3.8 3.3.11 Table 3-1" {
     var m = loaded();
     var wide = Cpu.init(&m, .m7, .{ .itcm = .{ .size = .kb64, .enabled = true }, .dtcm = .{ .size = .kb128, .enabled = true }, .ahbp = .{ .size = .mb512, .enabled = true } }, .{});
     var small = Cpu.init(&m, .m7, .{ .itcm = .{ .size = .kb4 }, .dtcm = .{ .size = .kb8, .read_modify_write = true } }, .{});
@@ -495,6 +495,13 @@ test "two M7 parts of one processor type read the TCM and AHBP sizes and enables
     try std.testing.expectEqual(@as(?u32, 0x38), wide.peek(4, 0xe000_ef90));
     wide.reset();
     try std.testing.expectEqual(@as(?u32, 0x39), wide.peek(4, 0xe000_ef90));
+    var checked = Cpu.init(&m, .m7, .{ .data = .kb16, .ecc = true }, .{});
+    try std.testing.expectEqual(@as(?void, {}), checked.poke(4, 0xe000_ef9c, 0x2));
+    try std.testing.expectEqual(@as(?void, {}), checked.poke(4, 0xe000_efb8, 0x1));
+    checked.reset();
+    try std.testing.expectEqual(@as(?u32, 0), checked.peek(4, 0xe000_ef9c));
+    try std.testing.expectEqual(@as(?void, {}), checked.poke(4, 0xe000_efb8, 0x1));
+    try std.testing.expectEqual(@as(?u32, 0x1), checked.peek(4, 0xe000_efb8));
     var four = Cpu.init(&m, .m4, .{ .itcm = .{ .size = .kb64, .enabled = true } }, .{});
     try std.testing.expectEqual(@as(?u32, null), four.peek(4, 0xe000_ef90));
     try std.testing.expectEqual(@as(?void, null), four.poke(4, 0xe000_ef90, 0));

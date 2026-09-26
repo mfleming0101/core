@@ -25,24 +25,50 @@ pub const iebr0: u32 = 0x20;
 /// DEBR0; DEBR1 follows it.
 pub const debr0: u32 = 0x28;
 
-const siwt: u32 = 1 << 0;
-const eccdis: u32 = 1 << 1;
-const forcewt: u32 = 1 << 2;
+const siwt: u8 = 1 << 0;
+const eccdis: u8 = 1 << 1;
+const forcewt: u8 = 1 << 2;
 
-/// The registers of one M7, with the TCM and AHBP controls kept in the part's own types.
+/// The registers of one M7, with the TCM and AHBP controls kept in the part's own types, and what the part wired them with.
 pub const Control = struct {
     const Self = @This();
 
+    wired: Wired,
     itcm: core.Tcm,
     dtcm: core.Tcm,
     ahbp: core.Ahbp,
-    cache: u32,
-    slave: u32,
+    cache: u8,
+    slave: u16,
     banks: [4]u32,
 
-    /// The registers at the reset values the part gives.
+    const Wired = struct { itcm: core.Tcm, dtcm: core.Tcm, ahbp: core.Ahbp, ecc: bool, cacheable: u8 };
+
+    /// The registers at the reset values the part gives, keeping its TCM, AHBP and ECC settings.
     pub fn init(part: core.Part) Self {
-        return .{ .itcm = part.itcm, .dtcm = part.dtcm, .ahbp = part.ahbp, .cache = if (ecc(part)) 0 else eccdis, .slave = 0x0000_0800, .banks = @splat(0) };
+        const checked = part.ecc and (part.data != .none or part.instruction != .none);
+        return .{
+            .wired = .{
+                .itcm = part.itcm,
+                .dtcm = part.dtcm,
+                .ahbp = part.ahbp,
+                .ecc = part.ecc,
+                .cacheable = (if (part.data != .none) forcewt | siwt else 0) | (if (checked) eccdis else 0),
+            },
+            .itcm = part.itcm,
+            .dtcm = part.dtcm,
+            .ahbp = part.ahbp,
+            .cache = if (checked) 0 else eccdis,
+            .slave = 0x0800,
+            .banks = @splat(0),
+        };
+    }
+
+    /// Puts the TCM, AHBP and ECC settings the part gave back into a part.
+    pub fn wiring(self: *const Self, part: *core.Part) void {
+        part.itcm = self.wired.itcm;
+        part.dtcm = self.wired.dtcm;
+        part.ahbp = self.wired.ahbp;
+        part.ecc = self.wired.ecc;
     }
 
     /// The word a register read answers, or null for a word Table 3-1 reserves.
@@ -60,18 +86,15 @@ pub const Control = struct {
     }
 
     /// Takes a register write, keeping the bits the part fixes; ABFSR has nothing for a write to clear.
-    pub fn writeRegister(self: *Self, part: core.Part, offset: u32, value: u32) bool {
+    pub fn writeRegister(self: *Self, offset: u32, value: u32) bool {
         switch (offset) {
             itcmcr => enable(&self.itcm, value),
             dtcmcr => enable(&self.dtcm, value),
             ahbpcr => self.ahbp.enabled = value & 1 != 0,
-            cacr => {
-                const mask = (if (part.data != .none) forcewt | siwt else 0) | (if (ecc(part)) eccdis else 0);
-                self.cache = (self.cache & ~mask) | (value & mask);
-            },
-            ahbscr => self.slave = value & 0x0000_ffff,
+            cacr => self.cache = (self.cache & ~self.wired.cacheable) | (@as(u8, @truncate(value)) & self.wired.cacheable),
+            ahbscr => self.slave = @truncate(value),
             abfsr => {},
-            iebr0, iebr0 + 4, debr0, debr0 + 4 => if (part.ecc) {
+            iebr0, iebr0 + 4, debr0, debr0 + 4 => if (self.wired.ecc) {
                 self.banks[(offset - iebr0) / 4] = value;
             },
             else => return false,
@@ -83,9 +106,5 @@ pub const Control = struct {
         tcm.enabled = value & 1 != 0;
         tcm.read_modify_write = value & 2 != 0;
         tcm.retry = value & 4 != 0;
-    }
-
-    fn ecc(part: core.Part) bool {
-        return part.ecc and (part.data != .none or part.instruction != .none);
     }
 };
