@@ -1,6 +1,7 @@
 comptime {
     _ = @import("test/arm/semihosting_test.zig");
     _ = @import("test/arm/system/dwt_test.zig");
+    _ = @import("test/arm/system/m7_test.zig");
     _ = @import("test/arm/system/mpu_test.zig");
     _ = @import("test/arm/system/nvic_test.zig");
     _ = @import("test/arm/system/ppb_test.zig");

@@ -38,8 +38,27 @@ pub const Spec = struct {
 /// The size of a level 1 cache, as M7 TRM Table 3-7 lists them.
 pub const CacheSize = enum { none, kb4, kb8, kb16, kb32, kb64 };
 
-/// The level 1 caches one part was built with, which the M7 TRM leaves to the part; a core that carries none ignores them.
-pub const Caches = struct { data: CacheSize = .none, instruction: CacheSize = .none };
+/// The size of a tightly-coupled memory, as the SZ encodings of M7 TRM Table 3-9 list them.
+pub const TcmSize = enum(u4) { none = 0, kb4 = 3, kb8, kb16, kb32, kb64, kb128, kb256, kb512, mb1, mb2, mb4, mb8, mb16 };
+
+/// One tightly-coupled memory as the part wires it: its size and the reset values of EN, RMW and RETEN, in the bits of CM7_ITCMCR and CM7_DTCMCR, M7 TRM 3.3.6.
+pub const Tcm = packed struct { enabled: bool = false, read_modify_write: bool = false, retry: bool = false, size: TcmSize = .none };
+
+/// The size of the AHB peripheral interface, as the SZ encodings of M7 TRM Table 3-10 list them.
+pub const AhbpSize = enum(u3) { none, mb64, mb128, mb256, mb512 };
+
+/// The AHB peripheral interface as the part wires it: its size and the reset value of EN, in the bits of CM7_AHBPCR, M7 TRM 3.3.7.
+pub const Ahbp = packed struct { enabled: bool = false, size: AhbpSize = .none };
+
+/// What one part was built with that the M7 TRM leaves to it, Table 1-1: its level 1 caches, its TCMs, its AHBP and whether its caches carry ECC; a core that carries none ignores them.
+pub const Part = struct {
+    data: CacheSize = .none,
+    instruction: CacheSize = .none,
+    itcm: Tcm = .{},
+    dtcm: Tcm = .{},
+    ahbp: Ahbp = .{},
+    ecc: bool = false,
+};
 
 /// The spec of a core, each entry read off its Technical Reference Manual: the cycle tables from its instruction set summary, M4 TRM 3.3, and the entry and exit cycles from its interrupt latency, M4 TRM 3.9.2.
 pub fn spec(comptime core: Core) Spec {

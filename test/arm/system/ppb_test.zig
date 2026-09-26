@@ -21,7 +21,7 @@ test "the sixteen bytes from 0xE000E000 hold ICTR and ACTLR, B3.2.24 B3.2.25" {
     try std.testing.expectEqual(.systick, bus.region(0xe000_e010));
 }
 
-test "the 636 bytes from 0xE000ED00 are the System Control Block, the cache maintenance operations included, B3.2.2 B2.2.7" {
+test "the 704 bytes from 0xE000ED00 are the System Control Block, the cache maintenance operations and the M7 control registers included, B3.2.2 B2.2.7, M7 TRM Table 3-1" {
     try std.testing.expectEqual(.scb, bus.region(0xe000_ed00));
     try std.testing.expectEqual(.scb, bus.region(0xe000_ed1c));
     try std.testing.expectEqual(.scb, bus.region(0xe000_ed3f));
@@ -32,7 +32,9 @@ test "the 636 bytes from 0xE000ED00 are the System Control Block, the cache main
     try std.testing.expectEqual(.scb, bus.region(0xe000_ef48));
     try std.testing.expectEqual(.scb, bus.region(0xe000_ef50));
     try std.testing.expectEqual(.scb, bus.region(0xe000_ef78));
-    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_ef7c));
+    try std.testing.expectEqual(.scb, bus.region(0xe000_ef90));
+    try std.testing.expectEqual(.scb, bus.region(0xe000_efbc));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_efc0));
 }
 
 test "the 4KB from 0xE0000000 are the ITM and the 4KB from 0xE0001000 the DWT, C1.7 C1.8" {

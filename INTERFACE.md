@@ -65,9 +65,12 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
 - `init` takes the bus, the core and the trace ring, and leaves the core at reset. On Arm the
   stack pointer and entry come from the vector table at address 0, so memory must be loaded
   first. On RISC-V the PC is the part's reset address.
-- On Arm, `init` also takes the part's caches after the core. Cache sizes belong to the part,
-  not the core: an M7 given `.{ .data = .kb32, .instruction = .kb32 }` reports those sizes,
-  `.{}` is a part without caches, and a core with no cache registers ignores them.
+- On Arm, `init` also takes the part after the core: what the part was built with, which the
+  core leaves to it. That is the cache sizes, and on the M7 also the TCM and AHBP sizes and
+  reset enables and whether the caches carry ECC. An M7 given
+  `.{ .data = .kb32, .instruction = .kb32, .itcm = .{ .size = .kb64, .enabled = true } }`
+  reports those, `.{}` is a part with none of them, and a core without the registers a field
+  sets ignores that field.
 - `reset()` returns a running core to that state, as an Arm SYSRESETREQ does.
 
 ### Running

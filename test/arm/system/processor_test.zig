@@ -481,6 +481,45 @@ test "two M7 parts of one processor type carry the caches each was built with, a
     try std.testing.expectEqual(@as(?void, null), four.poke(4, 0xe000_ef50, 0));
 }
 
+test "two M7 parts of one processor type read the TCM and AHBP sizes and enables each was wired with, keep them through a reset, and an M4 part refuses the addresses, M7 TRM 3.3.6 3.3.7 Table 3-1" {
+    var m = loaded();
+    var wide = Cpu.init(&m, .m7, .{ .itcm = .{ .size = .kb64, .enabled = true }, .dtcm = .{ .size = .kb128, .enabled = true }, .ahbp = .{ .size = .mb512, .enabled = true } }, .{});
+    var small = Cpu.init(&m, .m7, .{ .itcm = .{ .size = .kb4 }, .dtcm = .{ .size = .kb8, .read_modify_write = true } }, .{});
+    try std.testing.expectEqual(@as(?u32, 0x39), wide.peek(4, 0xe000_ef90));
+    try std.testing.expectEqual(@as(?u32, 0x41), wide.peek(4, 0xe000_ef94));
+    try std.testing.expectEqual(@as(?u32, 0x9), wide.peek(4, 0xe000_ef98));
+    try std.testing.expectEqual(@as(?u32, 0x18), small.peek(4, 0xe000_ef90));
+    try std.testing.expectEqual(@as(?u32, 0x22), small.peek(4, 0xe000_ef94));
+    try std.testing.expectEqual(@as(?u32, 0), small.peek(4, 0xe000_ef98));
+    try std.testing.expectEqual(@as(?void, {}), wide.poke(4, 0xe000_ef90, 0));
+    try std.testing.expectEqual(@as(?u32, 0x38), wide.peek(4, 0xe000_ef90));
+    wide.reset();
+    try std.testing.expectEqual(@as(?u32, 0x39), wide.peek(4, 0xe000_ef90));
+    var four = Cpu.init(&m, .m4, .{ .itcm = .{ .size = .kb64, .enabled = true } }, .{});
+    try std.testing.expectEqual(@as(?u32, null), four.peek(4, 0xe000_ef90));
+    try std.testing.expectEqual(@as(?void, null), four.poke(4, 0xe000_ef90, 0));
+}
+
+test "only the M7 answers 0xE000EF90 to 0xE000EFBC, the M7 refusing the words Table 3-1 reserves, and a processor type that lists no M7 holds no M7 control block, M7 TRM Table 3-1" {
+    var m = loaded();
+    const part: arm.Part = .{ .data = .kb32, .instruction = .kb32, .itcm = .{ .size = .kb64, .enabled = true }, .dtcm = .{ .size = .kb64, .enabled = true }, .ahbp = .{ .size = .mb64, .enabled = true }, .ecc = true };
+    var seven = Cpu.init(&m, .m7, part, .{});
+    for ([_]u32{ 0xe000_ef7c, 0xe000_ef80, 0xe000_ef84, 0xe000_ef88, 0xe000_ef8c, 0xe000_efa4, 0xe000_efac }) |address| {
+        try std.testing.expectEqual(@as(?u32, null), seven.peek(4, address));
+        try std.testing.expectEqual(@as(?void, null), seven.poke(4, address, 0));
+    }
+    for (every) |core| {
+        if (core == .m7) continue;
+        var cpu = Cpu.init(&m, core, part, .{});
+        var address: u32 = 0xe000_ef90;
+        while (address < 0xe000_efc0) : (address += 4) {
+            try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, address));
+            try std.testing.expectEqual(@as(?void, null), cpu.poke(4, address, 0));
+        }
+    }
+    try std.testing.expect(@FieldType(arm.Processor(.{ .cores = &.{.m4}, .Bus = Memory }), "m7") == void);
+}
+
 test "the M55 and M85 bank CSSELR, CCSIDR and CCR IC and DC between the Security states and read one CLIDR, CTR and maintenance range through either, M55 and M85 TRM 5.6.1 5.6.2 5.6.3 6.5, v8-M D1.2.12 D1.2.18 D1.1.29" {
     var m = loaded();
     inline for (.{ .m55, .m85 }) |core| {

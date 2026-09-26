@@ -1,16 +1,16 @@
 const std = @import("std");
 const register = @import("../../register.zig");
 const scb = @import("../../../src/arm/system/scb.zig");
-const Caches = @import("../../../src/arm/system/core.zig").Caches;
+const Part = @import("../../../src/arm/system/core.zig").Part;
 
 fn of(comptime c: anytype) scb.Scb {
     return fitted(c, .{});
 }
 
-fn fitted(comptime c: anytype, caches: Caches) scb.Scb {
+fn fitted(comptime c: anytype, part: Part) scb.Scb {
     return .init(&struct {
         const profile: scb.Profile = scb.profileOf(c);
-    }.profile, caches);
+    }.profile, part);
 }
 
 fn registersOf(comptime c: anytype) []const register.Register {

@@ -20,6 +20,7 @@ const scb_block = @import("scb.zig");
 const nvic_block = @import("nvic.zig");
 const dwt_block = @import("dwt.zig");
 const sau_block = @import("sau.zig");
+const m7_block = @import("m7.zig");
 const mpu_block = @import("mpu.zig");
 const trace = @import("../trace.zig");
 const regions = @import("../../memory/regions.zig");
@@ -159,6 +160,7 @@ pub fn Processor(comptime options: Options) type {
         for (options.cores, 0..) |c, i| out[i] = core.spec(c);
         break :blk out;
     };
+    const M7 = if (std.mem.indexOfScalar(core.Core, options.cores, .m7) != null) m7_block.Control else void;
     return struct {
         const Self = @This();
 
@@ -211,6 +213,7 @@ pub fn Processor(comptime options: Options) type {
         nvic: nvic_block.Nvic,
         dwt: dwt_block.Dwt,
         sau: sau_block.Sau,
+        m7: M7,
         mpu: mpu_block.Mpu,
         mpu_ns: mpu_block.Mpu,
         banked: State.Banked,
@@ -249,8 +252,8 @@ pub fn Processor(comptime options: Options) type {
             unreachable;
         }
 
-        /// A core of that part over the bus, with the caches the part was built with, reset through the vector table, with the ring attached.
-        pub fn init(memory: *options.Bus, c: core.Core, caches: core.Caches, ring: trace.Ring) Self {
+        /// A core of that part over the bus, with what the part was built with, reset through the vector table, with the ring attached.
+        pub fn init(memory: *options.Bus, c: core.Core, part: core.Part, ring: trace.Ring) Self {
             const at = slotOf(c);
             const spec = specs[at];
             var made: Self = .{
@@ -259,11 +262,12 @@ pub fn Processor(comptime options: Options) type {
                 .state = .{ .secure = spec.security, .fpscr = fp.fixedFields(spec.architecture, 0) },
                 .memory = memory,
                 .systick = .{},
-                .scb = .init(&profiles[at], caches),
-                .scb_ns = .init(&profiles[at], caches),
+                .scb = .init(&profiles[at], part),
+                .scb_ns = .init(&profiles[at], part),
                 .nvic = .init(spec.priority_bits),
                 .dwt = .init(spec.architecture.main()),
                 .sau = .init(spec.security, spec.architecture.main()),
+                .m7 = if (M7 == void) {} else .init(part),
                 .mpu = .init(spec.mpu_regions != 0, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .mpu_ns = .init(spec.mpu_regions != 0 and spec.security, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .banked = .{},
@@ -354,7 +358,7 @@ pub fn Processor(comptime options: Options) type {
 
         /// Returns a running core to its reset state, which is also what SYSRESETREQ does.
         pub fn reset(self: *Self) void {
-            self.* = init(self.memory, self.spec.core, self.scb.caches, self.trace);
+            self.* = init(self.memory, self.spec.core, self.scb.part, self.trace);
         }
 
         fn atReset(self: *Self) void {
@@ -608,6 +612,10 @@ pub fn Processor(comptime options: Options) type {
         pub fn mpuOf(self: *Self, secure: bool) *mpu_block.Mpu {
             if (!self.spec.security) return &self.mpu;
             return if (secure) &self.mpu else &self.mpu_ns;
+        }
+
+        fn m7Control(self: *Self) ?*m7_block.Control {
+            return if (M7 == void) null else if (self.spec.core == .m7) &self.m7 else null;
         }
 
         fn scs(self: *Self) *scb_block.Scb {
@@ -1390,6 +1398,7 @@ pub fn Processor(comptime options: Options) type {
                     scb_block.icsr => return answered(into, self.readIcsr(self.spec.security and !self.state.secure)),
                     scb_block.shcsr => return answered(into, self.readShcsr(self.spec.security and !self.state.secure)),
                     sau_block.first...sau_block.last => |offset| return answered(into, if (self.spec.security and !self.state.secure) 0 else self.sau.readRegister(offset - sau_block.first)),
+                    m7_block.first...m7_block.last => |offset| return answered(into, if (self.m7Control()) |block| block.readRegister(offset - m7_block.first) else null),
                     mpu_block.first...mpu_block.last => |offset| return answered(into, self.mpuOf(self.state.secure).readRegister(offset - mpu_block.first)),
                     else => |offset| return answered(into, self.scs().readRegister(offset)),
                 },
@@ -1437,6 +1446,7 @@ pub fn Processor(comptime options: Options) type {
                     scb_block.shcsr => self.writeShcsr(self.spec.security and !self.state.secure, value),
                     scb_block.stir => self.trigger(value),
                     sau_block.first...sau_block.last => |offset| if (self.spec.security and !self.state.secure) true else self.sau.writeRegister(offset - sau_block.first, value),
+                    m7_block.first...m7_block.last => |offset| if (self.m7Control()) |block| block.writeRegister(self.scb.part, offset - m7_block.first, value) else false,
                     mpu_block.first...mpu_block.last => |offset| self.reprogram(self.mpuOf(self.state.secure), offset - mpu_block.first, value),
                     else => |offset| self.scs().writeRegister(offset, value),
                 },

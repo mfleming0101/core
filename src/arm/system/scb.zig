@@ -8,8 +8,8 @@ const Stop = @import("isa").arm.Stop;
 
 /// Where the System Control Block begins.
 pub const base: u32 = 0xe000_ed00;
-/// How wide the block is, the STIR, floating-point and cache maintenance registers included.
-pub const size: u32 = 0x27c;
+/// How wide the window is, the STIR, floating-point and cache maintenance registers and the M7 control block included.
+pub const size: u32 = 0x2c0;
 
 /// CPUID, at an offset from the base.
 pub const cpuid: u32 = 0x00;
@@ -305,18 +305,18 @@ pub fn profileOf(comptime c: core.Core) Profile {
     return out;
 }
 
-/// The block itself: a word per register the core has, over a profile shared by every instance, and the caches of this part.
+/// The block itself: a word per register the core has, over a profile shared by every instance, and what this part was built with.
 pub const Scb = struct {
     const Self = @This();
 
     profile: *const Profile,
     words: [layout.len]u32,
-    caches: core.Caches,
+    part: core.Part,
 
-    /// A block at the reset values its profile and its caches give; a core without the cache registers keeps no caches.
-    pub fn init(profile: *const Profile, caches: core.Caches) Self {
-        var out: Self = .{ .profile = profile, .words = undefined, .caches = .{} };
-        if (out.has(comptime slot(clidr).?)) out.caches = caches;
+    /// A block at the reset values its profile and its part give; a core without the cache registers keeps an empty part.
+    pub fn init(profile: *const Profile, part: core.Part) Self {
+        var out: Self = .{ .profile = profile, .words = undefined, .part = .{} };
+        if (out.has(comptime slot(clidr).?)) out.part = part;
         out.reset();
         return out;
     }
@@ -324,18 +324,18 @@ pub const Scb = struct {
     /// Returns every register to its reset value.
     pub fn reset(self: *Self) void {
         self.words = self.profile.reset;
-        const ctype = @as(u32, @intFromBool(self.caches.data != .none)) << 1 | @intFromBool(self.caches.instruction != .none);
+        const ctype = @as(u32, @intFromBool(self.part.data != .none)) << 1 | @intFromBool(self.part.instruction != .none);
         self.words[comptime slot(clidr).?] = if (ctype == 0) 0 else self.profile.levels | ctype;
         if (ctype != 0) self.words[comptime slot(ctr).?] = cache_type;
         self.words[comptime slot(ccsidr).?] = self.selected(0);
     }
 
     fn selected(self: *const Self, instruction: u32) u32 {
-        return if (instruction == 0) data_ccsidr[@intFromEnum(self.caches.data)] else instruction_ccsidr[@intFromEnum(self.caches.instruction)];
+        return if (instruction == 0) data_ccsidr[@intFromEnum(self.part.data)] else instruction_ccsidr[@intFromEnum(self.part.instruction)];
     }
 
     fn enables(self: *const Self) u32 {
-        return (if (self.caches.data != .none) dc else 0) | (if (self.caches.instruction != .none) ic else 0);
+        return (if (self.part.data != .none) dc else 0) | (if (self.part.instruction != .none) ic else 0);
     }
 
     fn has(self: *const Self, i: u8) bool {
