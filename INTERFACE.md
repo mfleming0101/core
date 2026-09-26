@@ -67,7 +67,8 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
   first. On RISC-V the PC is the part's reset address.
 - On Arm, `init` also takes the part after the core: what the part was built with, which the
   core leaves to it. That is the cache sizes, and on the M7 also the TCM and AHBP sizes and
-  reset enables and whether the caches carry ECC. It is also the MPU region count of each
+  reset enables and whether the caches carry ECC; the M55 and M85 read the TCM and AHBP
+  sizes and reset enables, and ECC, into ITCMCR, DTCMCR, PAHBCR and MSCR. It is also the MPU region count of each
   Security state, `mpu_regions` and `mpu_ns_regions`, the SAU region count `sau_regions`, the
   `priority_bits` and the number of external `interrupts`, each lowered to a value the core's
   TRM lists or clamped to its range. Left null, the core keeps its default: 8 MPU and SAU

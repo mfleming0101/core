@@ -22,6 +22,7 @@ const dwt_block = @import("dwt.zig");
 const sau_block = @import("sau.zig");
 const m7_block = @import("m7.zig");
 const icb_block = @import("icb.zig");
+const impdef_block = @import("impdef.zig");
 const mpu_block = @import("mpu.zig");
 const trace = @import("../trace.zig");
 const regions = @import("../../memory/regions.zig");
@@ -123,6 +124,9 @@ pub fn Processor(comptime options: Options) type {
         break :blk out;
     };
     const M7 = if (std.mem.indexOfScalar(core.Core, options.cores, .m7) != null) m7_block.Control else void;
+    const Impdef = for (options.cores) |c| {
+        if (c == .m55 or c == .m85) break impdef_block.Block;
+    } else void;
     const choices = blk: {
         var out: [options.cores.len]core.Choices = undefined;
         for (options.cores, 0..) |c, i| out[i] = core.choicesOf(c);
@@ -242,6 +246,7 @@ pub fn Processor(comptime options: Options) type {
         dwt: dwt_block.Dwt,
         sau: sau_block.Sau,
         m7: M7,
+        impdef: Impdef,
         mpu: Mpu,
         mpu_ns: MpuNs,
         banked: State.Banked,
@@ -315,6 +320,7 @@ pub fn Processor(comptime options: Options) type {
                 .dwt = .init(spec.architecture.main()),
                 .sau = .init(spec.security, spec.architecture.main(), part.sau_regions.?),
                 .m7 = if (M7 == void) {} else .init(part),
+                .impdef = if (Impdef == void) {} else .init(c, part),
                 .mpu = .init(part.mpu_regions.?, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .mpu_ns = if (MpuNs == void) {} else .init(part.mpu_ns_regions.?, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .banked = .{},
@@ -405,7 +411,9 @@ pub fn Processor(comptime options: Options) type {
 
         /// Returns a running core to its reset state, which is also what SYSRESETREQ does.
         pub fn reset(self: *Self) void {
+            const before = self.impdef;
             self.* = build(self.memory, self.spec.core, self.built(), self.trace);
+            if (Impdef != void) self.impdef.keep(&before);
         }
 
         fn built(self: *const Self) core.Part {
@@ -423,6 +431,9 @@ pub fn Processor(comptime options: Options) type {
                 .calibration = self.systick.calibration & SysTick.calibrated,
             };
             if (M7 != void) self.m7.wiring(&out);
+            if (Impdef != void) {
+                if (self.spec.core == .m55 or self.spec.core == .m85) self.impdef.wiring(&out);
+            }
             if (SysTickNs != void) {
                 if (self.systick_ns) |timer| {
                     out.systick_ns = true;
@@ -689,6 +700,28 @@ pub fn Processor(comptime options: Options) type {
 
         fn nonSecureMpu(self: *Self) ?*Mpu {
             return if (MpuNs == void) null else &self.mpu_ns;
+        }
+
+        fn impdefBlock(self: *Self) ?*Impdef {
+            if (self.spec.core != .m55 and self.spec.core != .m85) return null;
+            return &self.impdef;
+        }
+
+        fn impdefHidden(self: *Self, offset: u32) bool {
+            if (!self.spec.security or self.state.secure) return false;
+            return impdef_block.secureOnly(offset) or !self.faultsNonSecure();
+        }
+
+        fn writeImpdef(self: *Self, offset: u32, value: u32) bool {
+            if (Impdef == void) return false;
+            const block = self.impdefBlock() orelse return false;
+            if (block.readRegister(offset) == null) return false;
+            if (self.impdefHidden(offset)) return true;
+            if (offset == impdef_block.eventspr) {
+                if (value & impdef_block.event != 0) self.event();
+                if (value & impdef_block.nmi != 0) self.raise(self.instance(nmi));
+            }
+            return block.writeRegister(offset, value);
         }
 
         fn m7Control(self: *Self) ?*m7_block.Control {
@@ -1538,6 +1571,12 @@ pub fn Processor(comptime options: Options) type {
                 .revidr, .revidr_ns => |region| return answered(into, self.readRevidr(region == .revidr_ns)),
                 .nvic => return answered(into, self.readNvic(address - ppb.nvic_base, self.spec.security and !self.state.secure)),
                 .nvic_ns => return self.spec.security and answered(into, if (self.state.secure) self.readNvic(address - ppb.nvic_base - ppb.alias, true) else 0),
+                .impdef => {
+                    if (Impdef == void) return false;
+                    const block = self.impdefBlock() orelse return false;
+                    const word = block.readRegister(address - impdef_block.base) orelse return false;
+                    return answered(into, if (self.impdefHidden(address - impdef_block.base)) 0 else word);
+                },
                 .ppb_unmapped => return false,
             }
         }
@@ -1612,6 +1651,7 @@ pub fn Processor(comptime options: Options) type {
                 .revidr, .revidr_ns => |region| self.readRevidr(region == .revidr_ns) != null,
                 .nvic => self.writeNvic(address - ppb.nvic_base, self.spec.security and !self.state.secure, value),
                 .nvic_ns => self.spec.security and (!self.state.secure or self.writeNvic(address - ppb.nvic_base - ppb.alias, true, value)),
+                .impdef => self.writeImpdef(address - impdef_block.base, value),
                 .ppb_unmapped => false,
             };
             return if (written) {} else null;

@@ -4027,3 +4027,97 @@ test "ICTR_NS, ACTLR_NS and CPPWR_NS show Secure code the Non-secure views and a
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_e008, 0));
     try std.testing.expectEqual(@as(u32, 1), cpu.icb.actlr[1]);
 }
+
+test "MSCR and the TCM and P-AHB controls reset from the part and keep only the bits software may write, the M85 alone with PFCR, M55 and M85 TRM Table 5-27 Table 5-28 Table 5-42, M85 TRM Table 5-29" {
+    var m = loaded();
+    const part: arm.Part = .{ .data = .kb32, .instruction = .kb32, .ecc = true, .itcm = .{ .size = .kb64, .enabled = true }, .dtcm = .{ .size = .kb128 }, .ahbp = .{ .size = .mb64, .enabled = true } };
+    var cpu = Cpu.init(&m, .m55, part, .{});
+    try std.testing.expectEqual(@as(?u32, 0x300a), cpu.peek(4, 0xe001_e000));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e000, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?u32, 0x1301e), cpu.peek(4, 0xe001_e000));
+    try std.testing.expectEqual(@as(?u32, 0x39), cpu.peek(4, 0xe001_e010));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e010, 0));
+    try std.testing.expectEqual(@as(?u32, 0x38), cpu.peek(4, 0xe001_e010));
+    try std.testing.expectEqual(@as(?u32, 0x40), cpu.peek(4, 0xe001_e014));
+    try std.testing.expectEqual(@as(?u32, 3), cpu.peek(4, 0xe001_e018));
+    try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe001_e004));
+    cpu.reset();
+    try std.testing.expectEqual(@as(?u32, 0x300a), cpu.peek(4, 0xe001_e000));
+    try std.testing.expectEqual(@as(?u32, 0x39), cpu.peek(4, 0xe001_e010));
+    var bare = fast(.m85, &m);
+    try std.testing.expectEqual(@as(?u32, 0), bare.peek(4, 0xe001_e000));
+    try std.testing.expectEqual(@as(?void, {}), bare.poke(4, 0xe001_e004, 0xff));
+    try std.testing.expectEqual(@as(?u32, 0), bare.peek(4, 0xe001_e004));
+    var cached = Cpu.init(&m, .m85, .{ .data = .kb32 }, .{});
+    try std.testing.expectEqual(@as(?u32, 1), cached.peek(4, 0xe001_e004));
+    try std.testing.expectEqual(@as(?void, {}), cached.poke(4, 0xe001_e004, 0xff));
+    try std.testing.expectEqual(@as(?u32, 0x81), cached.peek(4, 0xe001_e004));
+    var other = fast(.m4, &m);
+    try std.testing.expectEqual(@as(?u32, null), other.peek(4, 0xe001_e000));
+}
+
+test "the error banks lock one entry of each pair, and they and the power-state requests outlast a Warm reset, M55 TRM 5.13 Table 5-23 to Table 5-25 5.17, M85 TRM Table 5-25" {
+    var m = loaded();
+    var cpu = Cpu.init(&m, .m55, .{ .data = .kb32, .instruction = .kb32, .ecc = true }, .{});
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e100, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e104, 3));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e110, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e120, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?u32, 0xc001_ffff), cpu.peek(4, 0xe001_e100));
+    try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe001_e104));
+    try std.testing.expectEqual(@as(?u32, 0xc002_0003), cpu.peek(4, 0xe001_e110));
+    try std.testing.expectEqual(@as(?u32, 0xdfff_ffff), cpu.peek(4, 0xe001_e120));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e124));
+    try std.testing.expectEqual(@as(?u32, 0x333), cpu.peek(4, 0xe001_e300));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e300, 0));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e500, 0));
+    cpu.reset();
+    try std.testing.expectEqual(@as(?u32, 0xc001_ffff), cpu.peek(4, 0xe001_e100));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e300));
+    try std.testing.expectEqual(@as(?u32, 3), cpu.peek(4, 0xe001_e500));
+    var unchecked = fast(.m55, &m);
+    try std.testing.expectEqual(@as(?void, {}), unchecked.poke(4, 0xe001_e100, 1));
+    try std.testing.expectEqual(@as(?u32, 0), unchecked.peek(4, 0xe001_e100));
+    try std.testing.expectEqual(@as(?u32, 0x33), unchecked.peek(4, 0xe001_e300));
+    var m85 = Cpu.init(&m, .m85, .{ .ecc = true }, .{});
+    try std.testing.expectEqual(@as(?void, {}), m85.poke(4, 0xe001_e128, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?u32, 0xdfff_fffb), m85.peek(4, 0xe001_e128));
+    try std.testing.expectEqual(@as(?u32, null), m85.peek(4, 0xe001_e124));
+}
+
+test "the implementation defined registers read zero and ignore writes from the Non-secure state while AIRCR.BFHFNMINS is zero, and the TCM gate controls always do, M55 TRM 5.17.1 5.21.1" {
+    var m = loaded();
+    var cpu = fast(.m55, &m);
+    cpu.reset();
+    _ = cpu.poke(4, 0xe000_edd8, 1);
+    _ = cpu.poke(4, 0xe000_eddc, 0xe001_e000);
+    _ = cpu.poke(4, 0xe000_ede0, 0xe001_ffe1);
+    _ = cpu.poke(4, 0xe000_edd8, 0);
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e300));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e300, 0));
+    cpu.state.secure = true;
+    cpu.reguard();
+    try std.testing.expectEqual(@as(?u32, 0x33), cpu.peek(4, 0xe001_e300));
+    _ = cpu.poke(4, 0xe000_ed0c, @as(u32, scb_block.vectkey) << 16 | scb_block.bfhfnmins);
+    cpu.state.secure = false;
+    cpu.reguard();
+    try std.testing.expectEqual(@as(?u32, 0x33), cpu.peek(4, 0xe001_e300));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e500));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e500, 0));
+    cpu.state.secure = true;
+    cpu.reguard();
+    try std.testing.expectEqual(@as(?u32, 3), cpu.peek(4, 0xe001_e500));
+}
+
+test "EVENTSPR behaves as an RXEV event and as an NMI, M55 TRM 5.22.1" {
+    var m = loaded();
+    var cpu = fast(.m55, &m);
+    cpu.reset();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e400, 1));
+    try std.testing.expect(cpu.flags.event);
+    try std.testing.expectEqual(@as(Cpu.Set, 0), cpu.pending & Cpu.one(arm.nmi));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe001_e400, 2));
+    try std.testing.expect(cpu.pending & Cpu.one(arm.nmi) != 0);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe001_e400));
+}

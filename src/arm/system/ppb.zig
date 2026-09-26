@@ -18,6 +18,7 @@ pub const ictr: u32 = 0x04;
 const scb = @import("scb.zig");
 const nvic = @import("nvic.zig");
 const dwt = @import("dwt.zig");
+const impdef = @import("impdef.zig");
 /// Where the System Control Block begins.
 pub const scb_base = scb.base;
 /// REVIDR, the word below the System Control Block, v8-M D1.2.222.
@@ -34,7 +35,7 @@ const itm_size: u32 = 0x1000;
 pub const alias: u32 = 0x2_0000;
 
 /// Which block answers an address, or memory where the address is outside the peripheral bus.
-pub const Region = enum { memory, systick, systick_ns, control, control_ns, scb, scb_ns, revidr, revidr_ns, nvic, nvic_ns, itm, dwt, ppb_unmapped };
+pub const Region = enum { memory, systick, systick_ns, control, control_ns, scb, scb_ns, revidr, revidr_ns, nvic, nvic_ns, itm, dwt, impdef, ppb_unmapped };
 
 /// Routes an address to the block that answers it; nothing in the peripheral bus is ever folded.
 pub fn region(address: u32) Region {
@@ -51,5 +52,6 @@ pub fn region(address: u32) Region {
     if (address -% (nvic.base + alias) < nvic.size) return .nvic_ns;
     if (address -% itm_base < itm_size) return .itm;
     if (address -% dwt.base < dwt.size) return .dwt;
+    if (address -% impdef.base < impdef.size) return .impdef;
     return .ppb_unmapped;
 }
