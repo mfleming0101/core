@@ -1159,6 +1159,10 @@ pub fn Processor(comptime options: Options) type {
             }
         }
 
+        fn lazyNonSecure(self: *Self) bool {
+            return self.scb.get(scb_block.fpccr) & scb_block.fp_secure == 0 and self.lazyFpFrame() != null;
+        }
+
         fn readiness(self: *Self) u32 {
             var value: u32 = 0;
             if (self.executionPriority() > -1) value |= scb_block.hfrdy;
@@ -1180,14 +1184,14 @@ pub fn Processor(comptime options: Options) type {
             self.restand();
         }
 
-        /// Whether CPACR, NSACR for Non-secure code, and CPPWR.SU10 let this code reach the floating-point coprocessor; a refusal by NSACR, or by SU10 under SUS10, marks the NOCP UsageFault for the Secure state, v8-M RDXYK and IsCPEnabled.
+        /// Whether CPACR, NSACR for Non-secure code or for a Non-secure lazy frame, and CPPWR.SU10 let this code reach the floating-point coprocessor; a refusal by NSACR, or by SU10 under SUS10, marks the NOCP UsageFault for the Secure state, v8-M RDXYK RYTQC and IsCPEnabled.
         pub fn coprocessorEnabled(self: *Self) bool {
             if (!self.architecture().main() or self.scs().get(scb_block.cpacr) & scb_block.cp10 == 0) return false;
             return !self.spec.security or self.securityPermits();
         }
 
         fn securityPermits(self: *Self) bool {
-            if (!self.state.secure and self.scb.get(scb_block.nsacr) & scb_block.nsacr_cp10 == 0) {
+            if (self.scb.get(scb_block.nsacr) & scb_block.nsacr_cp10 == 0 and (!self.state.secure or self.lazyNonSecure())) {
                 self.flags.nocp_secure = true;
                 return false;
             }
@@ -2141,7 +2145,8 @@ pub fn Processor(comptime options: Options) type {
             const forced = wide_frame or self.alignsStack();
             const misaligned = if (forced) (sp.* >> 2) & 1 else 0;
             const callee_fp = wide_frame and s.secure and self.treatAsSecure();
-            sp.* = (sp.* -% frameSize(wide_frame, callee_fp)) & ~(if (forced) @as(u32, 4) else 0);
+            const barred = wide_frame and self.security() and !s.secure and self.scb.get(scb_block.nsacr) & scb_block.nsacr_cp10 == 0;
+            sp.* = (sp.* -% frameSize(wide_frame and !barred, callee_fp)) & ~(if (forced) @as(u32, 4) else 0);
             const frame = sp.*;
             const stacked_sfpa: u32 = if (s.secure) (s.control & State.control_sfpa) << 17 else 0;
             const words = [8]u32{ s.r[0], s.r[1], s.r[2], s.r[3], s.r[12], s.lr, s.pc, (s.xpsr & ~(frame_align | frame_sfpa)) | (misaligned << 9) | stacked_sfpa };
@@ -2151,6 +2156,12 @@ pub fn Processor(comptime options: Options) type {
                 self.store(4, at, word) orelse return self.stacked();
             }
             if (!wide_frame) return null;
+            if (barred) {
+                self.scb.fault(.no_coprocessor, 0);
+                self.flags.nocp_secure = true;
+                defer self.flags.nocp_secure = false;
+                return self.escalated(.no_coprocessor);
+            }
             if (self.lazyFpEnabled()) {
                 self.setLazyFp(frame + 0x20);
                 return null;
@@ -2249,13 +2260,19 @@ pub fn Processor(comptime options: Options) type {
             const process = thread and s.control & State.control_spsel != 0;
             const sp: *u32 = if (process) &s.psp else &s.msp;
             s.exclusive = null;
-            if (secured and exc_return & secure_stack != 0 and exc_return & (secure_target | default_callee) != secure_target | default_callee) {
+            const callee = secured and exc_return & secure_stack != 0 and exc_return & (secure_target | default_callee) != secure_target | default_callee;
+            if (callee) {
                 self.touch(sp.*);
                 const mark = self.load(4, sp.*) orelse return self.faultAt(s.pc, .data_fault);
                 if (mark != signature | (exc_return >> 4 & 1)) {
                     self.sau.flag(sau_block.invis);
                     return self.escalate(.secure_fault, exc_return);
                 }
+            }
+            if (self.architecture().v8() and main_profile and exc_return & basic_frame == 0 and self.lazyFpFrame() == null) {
+                if (self.coprocessorRefused(!thread or s.control & State.control_npriv == 0, s.secure)) |target| return self.refuseCoprocessor(target, exc_return);
+            }
+            if (callee) {
                 if (self.popCallee(sp)) |stop| return stop;
             }
             var words: [8]u32 = undefined;

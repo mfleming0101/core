@@ -4341,3 +4341,85 @@ test "a clearing return while FPCCR_S.LSPACT is set takes the LSERR SecureFault 
         try std.testing.expectEqual(@as(u32, 0x1234), cpu.state.fp[0]);
     }
 }
+
+fn nsacrFrameImage() Memory {
+    return placed(&.{ 0x1000, 0x481, 0, 0, 0, 0, 0x81, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xa1 }, &.{ 0x42c, 0x480, 0x4a0, 0x80, 0xa0 }, &.{
+        &.{ 0x04a1, 0x0000 },
+        &.{ 0xdf00, 0xbe00 },
+        &.{ 0xbf00, 0x4770 },
+        &.{0xbe00},
+        &.{ 0xbf00, 0xee30, 0x0a00, 0xbe00 },
+    });
+}
+
+fn floatingThread(cpu: *Cpu, nsacr: u32, fpccr: u32, irq: bool) !void {
+    cpu.reset();
+    launched(cpu);
+    if (irq) {
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e400, 0x80));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 1));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e200, 1));
+    }
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed8c, nsacr));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ef34, fpccr));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed24, scb_block.usgfaultena));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed88, scb_block.cp10));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed88, scb_block.cp10));
+    cpu.state.secure = false;
+    cpu.reguard();
+    cpu.bank();
+    cpu.state.msp = 0x700;
+    cpu.state.control |= State.control_fpca;
+    cpu.state.fp[0] = 0x2222;
+}
+
+test "an exception taken from Non-secure code with CONTROL.FPCA set while NSACR.CP10 is zero stacks no floating-point frame, reserves no lazy one, and takes the Secure NOCP UsageFault, v8-M RLGNS E2.1.335" {
+    for ([_]u32{ 0, 0xc00 }) |nsacr| {
+        var m = nsacrFrameImage();
+        var cpu = fast(.m33, &m);
+        try floatingThread(&cpu, nsacr, 0xc000_0004, false);
+        try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+        if (nsacr == 0) {
+            try std.testing.expect(cpu.state.secure);
+            try std.testing.expectEqual(@as(u32, 0x80), cpu.state.pc);
+            try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
+            try std.testing.expectEqual(@as(u32, 0x6e0), cpu.banked.msp);
+            try std.testing.expectEqual(@as(u32, 0), cpu.scb_ns.get(scb_block.fpccr) & scb_block.lspact);
+        } else {
+            try std.testing.expect(!cpu.state.secure);
+            try std.testing.expectEqual(@as(u32, 0x482), cpu.state.pc);
+            try std.testing.expectEqual(@as(u32, 0), cpu.scb.get(scb_block.cfsr));
+        }
+    }
+}
+
+test "an exception return to Non-secure code whose floating-point frame NSACR.CP10 refuses takes the Secure NOCP UsageFault before unstacking it and leaves the registers, v8-M RRXJC RWCSC E2.1.330" {
+    var m = nsacrFrameImage();
+    var cpu = fast(.m33, &m);
+    try floatingThread(&cpu, 0xc00, 0x8000_0004, false);
+    try std.testing.expectEqual(@as(?arm.Stop, null), cpu.run(.{ .instructions = 2 }).stop);
+    try std.testing.expectEqual(@as(u32, 0x4a2), cpu.state.pc);
+    cpu.scb.put(scb_block.nsacr, 0);
+    cpu.state.fp[0] = 0x1111;
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+    try std.testing.expect(cpu.state.secure);
+    try std.testing.expectEqual(@as(u32, 0x80), cpu.state.pc);
+    try std.testing.expectEqual(@as(u32, 6), cpu.state.xpsr & State.ipsr_mask);
+    try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
+    try std.testing.expectEqual(@as(u32, 0x1111), cpu.state.fp[0]);
+}
+
+test "a Secure floating-point instruction that would fill a Non-secure lazy frame NSACR.CP10 refuses takes the Secure NOCP UsageFault and leaves the frame reserved, v8-M RYTQC E2.1.331" {
+    var m = nsacrFrameImage();
+    var cpu = fast(.m33, &m);
+    try floatingThread(&cpu, 0xc00, 0xc000_0004, true);
+    try std.testing.expectEqual(@as(?arm.Stop, null), cpu.run(.{ .instructions = 1 }).stop);
+    try std.testing.expectEqual(@as(u32, 0xa2), cpu.state.pc);
+    try std.testing.expectEqual(scb_block.lspact, cpu.scb_ns.get(scb_block.fpccr) & scb_block.lspact);
+    cpu.scb.put(scb_block.nsacr, 0);
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+    try std.testing.expectEqual(@as(u32, 0x80), cpu.state.pc);
+    try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
+    try std.testing.expectEqual(scb_block.lspact, cpu.scb_ns.get(scb_block.fpccr) & scb_block.lspact);
+    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, m.bytes[cpu.scb_ns.get(scb_block.fpcar)..][0..4], .little));
+}
