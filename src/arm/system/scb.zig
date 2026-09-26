@@ -121,6 +121,8 @@ pub const sttns: u32 = 1 << 24;
 pub const sevonpend: u32 = 1 << 4;
 /// The SCR bit that keeps SLEEPDEEP from the Non-secure state, itself Secure only, v8-M D1.2.230.
 pub const sleepdeeps: u32 = 1 << 3;
+/// The SCR bit that asks for deep sleep, one bit for both Security states.
+pub const sleepdeep: u32 = 1 << 2;
 
 /// The key an AIRCR write must carry to take effect.
 pub const vectkey: u32 = 0x05fa;
@@ -194,7 +196,7 @@ pub const secureflt_ena: u32 = 1 << 19;
 /// The DEMCR bit that runs the DWT.
 pub const trcena: u32 = 1 << 24;
 
-const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_level, cache_type, baseline, sleep } };
+const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_type, baseline, sleep } };
 
 /// Every register the block holds, with the offset and the group that decides whether a core has it.
 pub const layout = [_]Slot{
@@ -222,7 +224,7 @@ pub const layout = [_]Slot{
     .{ .name = "MVFR0", .offset = mvfr0, .group = .floating },
     .{ .name = "MVFR1", .offset = mvfr1, .group = .floating },
     .{ .name = "MVFR2", .offset = mvfr2, .group = .floating },
-    .{ .name = "CLIDR", .offset = clidr, .group = .cache_level },
+    .{ .name = "CLIDR", .offset = clidr, .group = .cache },
     .{ .name = "CTR", .offset = ctr, .group = .cache_type },
     .{ .name = "CCSIDR", .offset = ccsidr, .group = .cache },
     .{ .name = "CSSELR", .offset = csselr, .group = .cache },
@@ -242,6 +244,7 @@ pub const Profile = struct {
     present: u32,
     main: bool,
     floating_point: bool,
+    caches: bool,
     levels: u32,
     reset: [layout.len]u32,
     write_mask: [layout.len]u32,
@@ -292,20 +295,20 @@ pub fn profileOf(comptime c: core.Core) Profile {
     @setEvalBranchQuota(200_000);
     const spec = core.spec(c);
     const main = spec.architecture.main();
-    var out: Profile = .{ .present = 0, .main = main, .floating_point = spec.floating_point, .levels = if (c == .m7) 0x0900_0000 else 0x0920_0000, .reset = @splat(0), .write_mask = @splat(0) };
+    var out: Profile = .{ .present = 0, .main = main, .floating_point = spec.floating_point, .caches = spec.caches, .levels = if (c == .m7) 0x0900_0000 else 0x0920_0000, .reset = @splat(0), .write_mask = @splat(0) };
     for (layout, 0..) |slot, i| {
         const held = switch (slot.group) {
             .shared => true,
-            .main => main,
-            .floating => spec.floating_point,
-            .cache => spec.caches,
-            .cache_level => spec.caches or spec.architecture.v8(),
+            .main => main or spec.architecture.v8(),
+            .floating => spec.floating_point or spec.architecture.v8(),
+            .cache => spec.caches or spec.architecture.v8(),
             .cache_type => spec.architecture != .armv6m,
             .baseline => spec.architecture == .armv8m_base,
             .sleep => c != .m1,
         };
         if (!held) continue;
-        const v = valuesOf(spec, slot);
+        const res0 = (slot.group == .main and !main) or (slot.group == .floating and !spec.floating_point);
+        const v = if (res0) .{ .reset = 0, .write_mask = 0 } else valuesOf(spec, slot);
         out.present |= @as(u32, 1) << @intCast(i);
         out.reset[i] = v.reset;
         out.write_mask[i] = v.write_mask;
@@ -322,10 +325,10 @@ pub const Scb = struct {
     data: core.CacheSize,
     instruction: core.CacheSize,
 
-    /// A block at the reset values its profile and its part give; a core without the cache registers keeps no caches.
+    /// A block at the reset values its profile and its part give; a core without caches keeps none.
     pub fn init(profile: *const Profile, part: core.Part) Self {
         var out: Self = .{ .profile = profile, .words = undefined, .data = .none, .instruction = .none };
-        if (out.has(comptime slot(ccsidr).?)) {
+        if (profile.caches) {
             out.data = part.data;
             out.instruction = part.instruction;
         }

@@ -1577,7 +1577,7 @@ test "an interrupt the NVIC has not enabled ends a WFE only where SCR.SEVONPEND 
     }
 }
 
-test "SCR holds SEVONPEND, SLEEPDEEP and SLEEPONEXIT on the M0 and M0+, and on Armv8-M also SLEEPDEEPS, which Non-secure software reads as zero; the M1, whose TRM names no sleep control, has none, v6-M B3.2.7 Table B3-4, M0 and M0+ TRM 5.1.2, v8-M D1.2.230, M23 TRM 6.1" {
+test "SCR holds SEVONPEND, SLEEPDEEP and SLEEPONEXIT on the M0 and M0+, and on Armv8-M banks SEVONPEND and SLEEPONEXIT but keeps one SLEEPDEEP, which SLEEPDEEPS, Secure only, hides from Non-secure software; the M1, whose TRM names no sleep control, has none, v6-M B3.2.7 Table B3-4, M0 and M0+ TRM 5.1.2, v8-M D1.2.230, M23 TRM 6.1" {
     var m = loaded();
     inline for (.{ .m0, .m0plus, .m23, .m33 }, .{ 0x16, 0x16, 0x1e, 0x1e }) |core, held| {
         var cpu = fast(core, &m);
@@ -1586,11 +1586,16 @@ test "SCR holds SEVONPEND, SLEEPDEEP and SLEEPONEXIT on the M0 and M0+, and on A
         try std.testing.expectEqual(@as(?u32, held), cpu.peek(4, 0xe000_ed10));
         if (core == .m23 or core == .m33) {
             try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed10, 0xffff_ffff));
-            try std.testing.expectEqual(@as(?u32, 0x16), cpu.peek(4, 0xe002_ed10));
-            try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed10, 0));
+            try std.testing.expectEqual(@as(?u32, 0x12), cpu.peek(4, 0xe002_ed10));
+            try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed10, 0x02));
+            try std.testing.expectEqual(@as(?u32, 0x02), cpu.peek(4, 0xe000_ed10));
+            try std.testing.expectEqual(@as(?u32, 0x12), cpu.peek(4, 0xe002_ed10));
             nonSecure(&cpu);
-            try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed10, 0xffff_ffff));
-            try std.testing.expectEqual(@as(?u32, 0x16), cpu.peek(4, 0xe000_ed10));
+            try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed10, 0x04));
+            try std.testing.expectEqual(@as(?u32, 0x04), cpu.peek(4, 0xe000_ed10));
+            cpu.state.secure = true;
+            cpu.reguard();
+            try std.testing.expectEqual(@as(?u32, 0x06), cpu.peek(4, 0xe000_ed10));
         }
     }
     var m1 = fast(.m1, &m);
@@ -3147,6 +3152,24 @@ test "Secure software pends an interrupt through STIR_NS and requests a reset th
     _ = cpu.step();
     try std.testing.expectEqual(entry, cpu.state.pc);
     try std.testing.expectEqual(@as(Cpu.Set, 0), cpu.pending);
+}
+
+test "AIRCR keeps one PRIS and one BFHFNMINS for both Security states, PRIS reading zero and BFHFNMINS read-only from Non-secure state, while PRIGROUP is banked, v8-M D1.2.3" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    cpu.reset();
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed0c, 0x05fa_6300));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_0300), cpu.peek(4, 0xe000_ed0c));
+    cpu.state.secure = true;
+    cpu.reguard();
+    try std.testing.expectEqual(@as(?u32, 0xfa05_0000), cpu.peek(4, 0xe000_ed0c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed0c, 0x05fa_6000));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_6000), cpu.peek(4, 0xe000_ed0c));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_2300), cpu.peek(4, 0xe002_ed0c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed0c, 0x05fa_0000));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_2000), cpu.peek(4, 0xe002_ed0c));
+    try std.testing.expectEqual(@as(?u32, 0xfa05_6000), cpu.peek(4, 0xe000_ed0c));
 }
 
 test "a Non-secure STIR write ignores an interrupt that targets Secure state, as NVIC_ISPR does, v8-M D1.2.239" {

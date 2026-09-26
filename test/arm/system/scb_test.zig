@@ -220,13 +220,12 @@ test "an M55 or M85 built without caches keeps the identification registers, wit
     }
 }
 
-test "a core without caches still refuses the cache identification and maintenance addresses, but for CTR on the M3, M4, M23 and M33 and CLIDR on the M23 and M33, M4 TRM 4.1, v8-M D1.2.12 D1.2.18" {
-    inline for (.{ .m0, .m0plus, .m1, .m23, .m3, .m4, .m33 }) |core| {
+test "an Armv6-M or Armv7-M core without caches still refuses the cache identification and maintenance addresses, but for CTR on the M3 and M4, M4 TRM 4.1, v7-M B4.8.4" {
+    inline for (.{ .m0, .m0plus, .m1, .m3, .m4 }) |core| {
         var block = fitted(core, .{ .data = .kb32, .instruction = .kb32 });
         var offset = scb.clidr;
         while (offset <= scb.csselr) : (offset += 4) {
-            if (offset == scb.ctr and (core == .m3 or core == .m4 or core == .m23 or core == .m33)) continue;
-            if (offset == scb.clidr and (core == .m23 or core == .m33)) continue;
+            if (offset == scb.ctr and (core == .m3 or core == .m4)) continue;
             try std.testing.expectEqual(@as(?u32, null), block.readRegister(offset));
             try std.testing.expect(!block.writeRegister(offset, 0));
         }
@@ -263,6 +262,32 @@ test "the M23 and M33 implement CLIDR with no cache levels, reading zero whateve
         try std.testing.expect(block.writeRegister(scb.clidr, 0xffff_ffff));
         try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.clidr));
     }
+}
+
+test "the M23 and M33, with no caches, still implement CCSIDR and CSSELR, CCSIDR reading zero, and take every cache maintenance write, as v8-M always implements them, v8-M D1.2.10 D1.2.17 D1.2.124 D1.2.8" {
+    inline for (.{ .m23, .m33 }) |core| {
+        var block = fitted(core, .{ .data = .kb32, .instruction = .kb32 });
+        try std.testing.expect(block.writeRegister(scb.csselr, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 1), block.readRegister(scb.csselr));
+        try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.ccsidr));
+        var offset = scb.iciallu;
+        while (offset <= scb.bpiall) : (offset += 4) {
+            if (offset == scb.iciallu + 4) continue;
+            try std.testing.expect(block.writeRegister(offset, 0xffff_ffff));
+            try std.testing.expectEqual(@as(?u32, 0), block.readRegister(offset));
+        }
+    }
+}
+
+test "without the Main Extension or a floating-point unit the M23 reads the Main and floating-point registers as zero and ignores writes, v8-M D1.2.11 D1.2.123 D1.2.166 D1.2.6 D1.2.234 D1.2.14 D1.2.239 D1.2.178 D1.2.100 D1.2.99 D1.2.102, and AFSR, which v8-M always implements, D1.2.2" {
+    var block = of(.m23);
+    inline for (.{ scb.cfsr, scb.hfsr, scb.mmfar, scb.bfar, scb.shpr1, scb.cpacr, scb.stir, scb.mvfr0, scb.mvfr1, scb.mvfr2, scb.fpccr, scb.fpcar, scb.fpdscr, scb.afsr }) |offset| {
+        try std.testing.expect(block.writeRegister(offset, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0), block.readRegister(offset));
+    }
+    block.fault(.data_fault, 0x40);
+    try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.cfsr));
+    try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.bfar));
 }
 
 test "CPACR holds the CP10 and CP11 access bits and reads zero for every other coprocessor, D1.2.14" {

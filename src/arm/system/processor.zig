@@ -1454,6 +1454,7 @@ pub fn Processor(comptime options: Options) type {
                 .scb => switch (address - ppb.scb_base) {
                     scb_block.icsr => return answered(into, self.readIcsr(self.spec.security and !self.state.secure)),
                     scb_block.shcsr => return answered(into, self.readShcsr(self.spec.security and !self.state.secure)),
+                    scb_block.aircr, scb_block.scr => |offset| return answered(into, self.readView(self.spec.security and !self.state.secure, offset)),
                     sau_block.first...sau_block.last => |offset| return answered(into, if (self.spec.security and !self.state.secure) 0 else self.sau.readRegister(offset - sau_block.first)),
                     m7_block.first...m7_block.last => |offset| return answered(into, if (self.m7Control()) |block| block.readRegister(offset - m7_block.first) else null),
                     mpu_block.first...mpu_block.last => |offset| return answered(into, self.mpuOf(self.state.secure).readRegister(offset - mpu_block.first)),
@@ -1465,6 +1466,7 @@ pub fn Processor(comptime options: Options) type {
                     return answered(into, switch (address - ppb.scb_base - ppb.alias) {
                         scb_block.icsr => self.readIcsr(true),
                         scb_block.shcsr => self.readShcsr(true),
+                        scb_block.aircr, scb_block.scr => |offset| self.readView(true, offset),
                         mpu_block.first...mpu_block.last => |offset| self.nonSecureMpu().?.readRegister(offset - mpu_block.first),
                         else => |offset| self.scb_ns.readRegister(offset),
                     });
@@ -1499,11 +1501,11 @@ pub fn Processor(comptime options: Options) type {
                     else => false,
                 },
                 .scb => switch (address - ppb.scb_base) {
-                    scb_block.aircr => self.writeAircr(self.scs(), value),
+                    scb_block.aircr => self.writeAircr(self.spec.security and !self.state.secure, value),
                     scb_block.icsr => self.writeIcsr(self.spec.security and !self.state.secure, value),
                     scb_block.shcsr => self.writeShcsr(self.spec.security and !self.state.secure, value),
                     scb_block.stir => self.trigger(value),
-                    scb_block.scr => |offset| self.scs().writeRegister(offset, if (self.spec.security and !self.state.secure) value & ~scb_block.sleepdeeps else value),
+                    scb_block.scr => |offset| self.writeView(self.spec.security and !self.state.secure, offset, value),
                     scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => |offset| self.scs().writeRegister(offset, value & self.nvic.lanes),
                     sau_block.first...sau_block.last => |offset| if (self.spec.security and !self.state.secure) true else self.sau.writeRegister(offset - sau_block.first, value),
                     m7_block.first...m7_block.last => |offset| if (self.m7Control()) |block| block.writeRegister(offset - m7_block.first, value) else false,
@@ -1511,11 +1513,11 @@ pub fn Processor(comptime options: Options) type {
                     else => |offset| self.scs().writeRegister(offset, value),
                 },
                 .scb_ns => self.spec.security and (!self.state.secure or switch (address - ppb.scb_base - ppb.alias) {
-                    scb_block.aircr => self.writeAircr(&self.scb_ns, value),
+                    scb_block.aircr => self.writeAircr(true, value),
                     scb_block.icsr => self.writeIcsr(true, value),
                     scb_block.shcsr => self.writeShcsr(true, value),
                     scb_block.stir => self.trigger(value),
-                    scb_block.scr => |offset| self.scb_ns.writeRegister(offset, value & ~scb_block.sleepdeeps),
+                    scb_block.scr => |offset| self.writeView(true, offset, value),
                     mpu_block.first...mpu_block.last => |offset| self.reprogram(self.nonSecureMpu().?, offset - mpu_block.first, value),
                     scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => |offset| self.scb_ns.writeRegister(offset, value & self.nvic.lanes),
                     else => |offset| self.scb_ns.writeRegister(offset, value),
@@ -1585,7 +1587,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn trigger(self: *Self, value: u32) bool {
-            if (!self.architecture().main()) return false;
+            if (!self.architecture().main()) return self.architecture().v8();
             const line = value & 0x1ff;
             if (line >= self.nvic.count) return true;
             const n: Index = @intCast(first_interrupt + line);
@@ -1704,9 +1706,36 @@ pub fn Processor(comptime options: Options) type {
                 (if (self.nmiVisible(ns)) bit(self.pending, self.instance(nmi)) else 0) << 31;
         }
 
-        fn writeAircr(self: *Self, block: *scb_block.Scb, value: u32) bool {
+        fn writeAircr(self: *Self, ns: bool, value: u32) bool {
             if (value >> 16 == scb_block.vectkey and value & scb_block.sysresetreq != 0) self.due |= reset_due;
-            return block.writeRegister(scb_block.aircr, value);
+            return self.writeView(ns, scb_block.aircr, value);
+        }
+
+        const Shared = struct { held: u32 = 0, readable: u32 = 0, writable: u32 = 0 };
+
+        fn sharedOf(self: *Self, offset: u32) Shared {
+            return switch (offset) {
+                scb_block.aircr => .{ .held = scb_block.pris | scb_block.bfhfnmins, .readable = scb_block.bfhfnmins },
+                scb_block.scr => blk: {
+                    const open: u32 = if (self.scb.get(scb_block.scr) & scb_block.sleepdeeps != 0) 0 else scb_block.sleepdeep;
+                    break :blk .{ .held = scb_block.sleepdeeps | scb_block.sleepdeep, .readable = open, .writable = open };
+                },
+                else => .{},
+            };
+        }
+
+        fn readView(self: *Self, ns: bool, offset: u32) ?u32 {
+            if (!ns) return self.scb.readRegister(offset);
+            const shared = self.sharedOf(offset);
+            const word = self.scb_ns.readRegister(offset) orelse return null;
+            return (word & ~shared.held) | (self.scb.readRegister(offset).? & shared.readable);
+        }
+
+        fn writeView(self: *Self, ns: bool, offset: u32, value: u32) bool {
+            if (!ns) return self.scb.writeRegister(offset, value);
+            const shared = self.sharedOf(offset);
+            if (shared.writable != 0) _ = self.scb.writeRegister(offset, (self.scb.readRegister(offset).? & ~shared.writable) | (value & shared.writable));
+            return self.scb_ns.writeRegister(offset, value & ~shared.held);
         }
 
         fn writeIcsr(self: *Self, ns: bool, value: u32) bool {
