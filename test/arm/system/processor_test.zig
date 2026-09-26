@@ -3422,6 +3422,17 @@ test "the Non-secure alias of SHCSR reaches the Non-secure instances and the Sec
     try std.testing.expectEqual(@as(u64, (1 << 7) | (1 << 4) | (1 << 3)), cpu.active);
 }
 
+test "the M33 banks CTR, Secure software reading zero through CTR and CTR_NS and Non-secure software through CTR, v8-M D1.2.18, M33 TRM Table 3-1" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    cpu.reset();
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_ed7c));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ed7c));
+    cpu.state.secure = false;
+    cpu.reguard();
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_ed7c));
+}
+
 test "the Non-secure alias is RES0 to Non-secure software, reading zero and ignoring writes, and faults unprivileged, v8-M D1.2.9 D1.2.272 B8.2" {
     var m = loaded();
     var cpu = fast(.m33, &m);

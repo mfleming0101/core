@@ -206,12 +206,12 @@ test "an M55 or M85 built without caches keeps the identification registers, wit
     }
 }
 
-test "a core without caches still refuses the cache identification and maintenance addresses, but for CTR on the M3 and M4, M4 TRM 4.1" {
+test "a core without caches still refuses the cache identification and maintenance addresses, but for CTR on the M3, M4, M23 and M33, M4 TRM 4.1, v8-M D1.2.18" {
     inline for (.{ .m0, .m0plus, .m1, .m23, .m3, .m4, .m33 }) |core| {
         var block = fitted(core, .{ .data = .kb32, .instruction = .kb32 });
         var offset = scb.clidr;
         while (offset <= scb.csselr) : (offset += 4) {
-            if (offset == scb.ctr and (core == .m3 or core == .m4)) continue;
+            if (offset == scb.ctr and (core == .m3 or core == .m4 or core == .m23 or core == .m33)) continue;
             try std.testing.expectEqual(@as(?u32, null), block.readRegister(offset));
             try std.testing.expect(!block.writeRegister(offset, 0));
         }
@@ -225,6 +225,15 @@ test "a core without caches still refuses the cache identification and maintenan
 
 test "the M3 and M4 implement CTR in the format with no caches, reading zero and ignoring writes, v7-M B4.8.4" {
     inline for (.{ .m3, .m4 }) |core| {
+        var block = fitted(core, .{ .data = .kb32, .instruction = .kb32 });
+        try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.ctr));
+        try std.testing.expect(block.writeRegister(scb.ctr, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.ctr));
+    }
+}
+
+test "the M23 and M33 implement CTR in the format with no cache type information, reading zero and ignoring writes, v8-M D1.2.18, M33 TRM Table 3-1" {
+    inline for (.{ .m23, .m33 }) |core| {
         var block = fitted(core, .{ .data = .kb32, .instruction = .kb32 });
         try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.ctr));
         try std.testing.expect(block.writeRegister(scb.ctr, 0xffff_ffff));

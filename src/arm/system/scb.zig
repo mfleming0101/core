@@ -294,7 +294,7 @@ pub fn profileOf(comptime c: core.Core) Profile {
             .main => main,
             .floating => spec.floating_point,
             .cache => spec.caches,
-            .cache_type => spec.caches or spec.architecture == .armv7m or spec.architecture == .armv7em,
+            .cache_type => spec.architecture != .armv6m,
         };
         if (!held) continue;
         const v = valuesOf(spec, slot);
