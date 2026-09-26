@@ -527,7 +527,7 @@ test "only the M7 answers 0xE000EF90 to 0xE000EFBC, the M7 refusing the words Ta
     try std.testing.expect(@FieldType(arm.Processor(.{ .cores = &.{.m4}, .Bus = Memory }), "m7") == void);
 }
 
-test "MPU_TYPE reads the region count each part was built with, lowered to one its core's TRM lists, per Security state, and kept through a reset, M7 TRM Table 1-1, M4 TRM 1.4 2.2, M0 TRM Table 1-1, M23 TRM Table 1-1, v8-M D1.2.176" {
+test "MPU_TYPE reads the region count each part was built with, lowered to one its core's TRM lists, per Security state, and kept through a reset, M7 TRM Table 1-1, M4 TRM 1.4 2.2, M0 TRM Table 1-1, M23 TRM Table 2-1, v8-M D1.2.176" {
     var m = loaded();
     const cases = [_]struct { core: arm.Core, part: arm.Part, secure: u32, non_secure: ?u32 }{
         .{ .core = .m7, .part = .{}, .secure = 8, .non_secure = null },
@@ -628,7 +628,7 @@ test "an M33, M55 or M85 part carries up to 480 interrupts: ICTR reads 0b1110, I
     }
 }
 
-test "ICTR is always implemented on Armv8-M, the M23 reading its lines in groups of 32, v8-M D1.2.127" {
+test "ICTR is always implemented on Armv8-M, the M23 reading its lines in groups of 32, v8-M D1.2.127, M23 TRM Table 6-1" {
     var m = loaded();
     var cpu = Cpu.init(&m, .m23, .{}, .{});
     try std.testing.expectEqual(@as(?u32, 7), cpu.peek(4, 0xe000_e004));
@@ -636,7 +636,7 @@ test "ICTR is always implemented on Armv8-M, the M23 reading its lines in groups
     try std.testing.expectEqual(@as(?u32, 1), few.peek(4, 0xe000_e004));
 }
 
-test "SAU_TYPE reads the region count each part was built with, lowered to one its core's TRM lists, and kept through a reset, M23 TRM Table 1-1, M33 TRM 1.3, v8-M D1.2.229" {
+test "SAU_TYPE reads the region count each part was built with, lowered to one its core's TRM lists, and kept through a reset, M23 TRM Table 2-1, M33 TRM 1.3, v8-M D1.2.229" {
     var m = loaded();
     for ([_]arm.Core{ .m23, .m33 }) |core| {
         for ([_]u8{ 0, 4, 5, 8, 9 }, [_]u32{ 0, 4, 4, 8, 8 }) |asked, count| {
