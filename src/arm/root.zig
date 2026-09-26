@@ -15,10 +15,6 @@ pub const Run = @import("system/processor.zig").Run;
 pub const Limit = @import("system/processor.zig").Limit;
 /// Which bound ended a run: its budget, its deadline, the core stopping, or the core sleeping.
 pub const Ended = @import("system/processor.zig").Ended;
-/// A set of exception numbers, one bit each.
-pub const Set = @import("system/processor.zig").Set;
-/// The set holding one exception number.
-pub const one = @import("system/processor.zig").one;
 /// The NMI exception number.
 pub const nmi = @import("system/processor.zig").nmi;
 /// The PendSV exception number.
@@ -27,8 +23,6 @@ pub const pendsv = @import("system/processor.zig").pendsv;
 pub const systick = @import("system/processor.zig").systick;
 /// The exception number of IRQ 0, which every line is offset by.
 pub const first_interrupt = @import("system/processor.zig").first_interrupt;
-/// Where the Non-secure aliases of the exception numbers begin.
-pub const ns_base = @import("system/processor.zig").ns_base;
 /// The Cortex-M cores this half models.
 pub const Core = @import("system/core.zig").Core;
 /// The spec of a core, selected at compile time.

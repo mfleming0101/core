@@ -60,8 +60,6 @@ pub const Run = struct { instructions: u64, cycles: u64, latency: u64, stop: ?St
 
 /// One exception number; a Non-secure alias is its Secure number plus ns_base.
 pub const Index = u9;
-/// A set of exception numbers, both banks in one word.
-pub const Set = u272;
 
 /// NMI.
 pub const nmi: Index = 2;
@@ -77,9 +75,6 @@ pub const pendsv: Index = 14;
 pub const systick: Index = 15;
 /// IRQ 0, which every interrupt line is offset by.
 pub const first_interrupt: Index = 16;
-const exceptions: u32 = first_interrupt + nvic_block.lines;
-/// Where the Non-secure aliases begin, above every Secure exception number.
-pub const ns_base: Index = exceptions;
 const restricted: i16 = 0x80;
 
 const return_to_handler: u32 = 0xffff_fff1;
@@ -99,42 +94,8 @@ const signature: u32 = 0xfefa_125a;
 
 const Next = struct { n: Index, priority: i16 };
 
-/// The set holding one exception number.
-pub fn one(i: Index) Set {
-    return @as(Set, 1) << i;
-}
-
-fn nameOf(i: Index) []const u8 {
-    return switch (numberOf(i)) {
-        1 => "Reset",
-        nmi => "NMI",
-        hard_fault => "HardFault",
-        mem_manage => "MemManage",
-        bus_fault => "BusFault",
-        usage_fault => "UsageFault",
-        secure_fault => "SecureFault",
-        svcall => "SVCall",
-        12 => "DebugMonitor",
-        pendsv => "PendSV",
-        systick => "SysTick",
-        else => "IRQ",
-    };
-}
-
-fn numberOf(i: Index) Index {
-    return if (i >= ns_base) i - ns_base else i;
-}
-
 fn frameSize(wide_frame: bool, callee_fp: bool) u32 {
     return state_frame + (if (wide_frame) fp_caller_frame else 0) + (if (callee_fp) fp_callee_frame else 0);
-}
-
-fn bit(set: Set, n: Index) u32 {
-    return @truncate((set >> n) & 1);
-}
-
-fn summary(set: Set) u32 {
-    return @as(u32, @truncate(set & 3)) | @as(u32, @intFromBool(set >> 2 != 0)) << 2;
 }
 
 /// Builds the core type: one struct answering the host contract over the caller's bus.
@@ -174,8 +135,55 @@ pub fn Processor(comptime options: Options) type {
     const MpuNs = for (choices) |c| {
         if (c.mpu_ns_regions.most() != 0) break Mpu;
     } else void;
+    const lines = blk: {
+        var most: u16 = nvic_block.lines;
+        for (choices) |c| most = @max(most, c.interrupts.most());
+        break :blk most;
+    };
+    const Nvic = nvic_block.Nvic(lines);
     return struct {
         const Self = @This();
+
+        /// A set of the interrupt lines the listed cores may carry, one bit each: 480 where one of them is an M33, M55 or M85, else 240.
+        pub const Lines = Nvic.Lines;
+        /// Where the Non-secure aliases begin, above every Secure exception number.
+        pub const ns_base: Index = first_interrupt + lines;
+        /// A set of exception numbers, both banks in one word.
+        pub const Set = std.meta.Int(.unsigned, @as(u16, ns_base) + first_interrupt);
+
+        /// The set holding one exception number.
+        pub fn one(i: Index) Set {
+            return @as(Set, 1) << @intCast(i);
+        }
+
+        fn nameOf(i: Index) []const u8 {
+            return switch (numberOf(i)) {
+                1 => "Reset",
+                nmi => "NMI",
+                hard_fault => "HardFault",
+                mem_manage => "MemManage",
+                bus_fault => "BusFault",
+                usage_fault => "UsageFault",
+                secure_fault => "SecureFault",
+                svcall => "SVCall",
+                12 => "DebugMonitor",
+                pendsv => "PendSV",
+                systick => "SysTick",
+                else => "IRQ",
+            };
+        }
+
+        fn numberOf(i: Index) Index {
+            return if (i >= ns_base) i - ns_base else i;
+        }
+
+        fn bit(set: Set, n: Index) u32 {
+            return @truncate((set >> @intCast(n)) & 1);
+        }
+
+        fn summary(set: Set) u32 {
+            return @as(u32, @truncate(set & 3)) | @as(u32, @intFromBool(set >> 2 != 0)) << 2;
+        }
 
         /// The union of the decode groups the listed cores need, which prunes the tree.
         pub const allowed: decode.Groups = blk: {
@@ -223,14 +231,14 @@ pub fn Processor(comptime options: Options) type {
         systick: SysTick,
         scb: scb_block.Scb,
         scb_ns: scb_block.Scb,
-        nvic: nvic_block.Nvic,
+        nvic: Nvic,
         dwt: dwt_block.Dwt,
         sau: sau_block.Sau,
         m7: M7,
         mpu: Mpu,
         mpu_ns: MpuNs,
         banked: State.Banked,
-        itns: nvic_block.Lines,
+        itns: Lines,
         flags: Flags,
         active: Set,
         pending: Set,
@@ -279,7 +287,7 @@ pub fn Processor(comptime options: Options) type {
             out.mpu_ns_regions = if (part.mpu_ns_regions) |n| @intCast(choice.mpu_ns_regions.fit(n)) else if (spec.security) spec.mpu_regions else 0;
             out.sau_regions = if (part.sau_regions) |n| @intCast(choice.sau_regions.fit(n)) else if (spec.security) sau_block.regions else 0;
             out.priority_bits = if (part.priority_bits) |n| @intCast(choice.priority_bits.fit(n)) else spec.priority_bits;
-            out.interrupts = @min(if (part.interrupts) |n| choice.interrupts.fit(n) else choice.interrupts.most(), nvic_block.lines);
+            out.interrupts = if (part.interrupts) |n| choice.interrupts.fit(n) else @min(choice.interrupts.most(), nvic_block.lines);
             return out;
         }
 
@@ -633,7 +641,7 @@ pub fn Processor(comptime options: Options) type {
 
         fn targetsSecure(self: *Self, n: Index) bool {
             if (!self.spec.security or n < first_interrupt) return true;
-            return self.itns & @as(nvic_block.Lines, 1) << @intCast(n - first_interrupt) == 0;
+            return self.itns & @as(Lines, 1) << @intCast(n - first_interrupt) == 0;
         }
 
         fn readItns(self: *Self, word: u32) ?u32 {
@@ -643,7 +651,7 @@ pub fn Processor(comptime options: Options) type {
 
         fn writeItns(self: *Self, word: u32, value: u32) bool {
             if (!self.spec.security) return false;
-            if (self.state.secure) self.itns = (self.itns & ~nvic_block.placed(0xffff_ffff, word)) | nvic_block.placed(value, word);
+            if (self.state.secure) self.itns = (self.itns & ~nvic_block.placed(Lines, 0xffff_ffff, word)) | nvic_block.placed(Lines, value, word);
             return true;
         }
 
@@ -803,7 +811,7 @@ pub fn Processor(comptime options: Options) type {
             const elapsed: u32 = @intCast(@min(self.cycles - self.serviced, std.math.maxInt(u32)));
             self.serviced = self.cycles;
             if (self.systick.advance(elapsed)) self.raise(if (self.spec.security and self.flags.sttns) systick + ns_base else systick);
-            if (self.memory.interrupts()) |lines| self.pendAll(lines);
+            if (self.memory.interrupts()) |raised| self.pendAll(raised);
             self.schedule();
             if (self.cycles >= self.deadline) self.due |= bound_due;
         }
@@ -816,13 +824,13 @@ pub fn Processor(comptime options: Options) type {
 
         /// Raises one interrupt line.
         pub fn pend(self: *Self, line: nvic_block.Line) void {
-            if (line >= nvic_block.lines) return;
-            self.pendAll(@as(nvic_block.Lines, 1) << line);
+            if (line >= lines) return;
+            self.pendAll(@as(Lines, 1) << @intCast(line));
         }
 
         /// Raises a whole set of lines, waking a sleeping core if one of them can be taken.
-        pub fn pendAll(self: *Self, lines: nvic_block.Lines) void {
-            self.pending |= @as(Set, lines & self.nvic.present()) << first_interrupt;
+        pub fn pendAll(self: *Self, raised: Lines) void {
+            self.pending |= @as(Set, raised & self.nvic.present()) << first_interrupt;
             self.pended();
             self.due = (self.due & kept_due) | summary(self.pending);
             if (self.due & asleep_due != 0 and self.woken()) self.due &= ~asleep_due;
@@ -851,8 +859,8 @@ pub fn Processor(comptime options: Options) type {
 
         /// Whether the NVIC enable bit for a line is set.
         pub fn enabled(self: *const Self, line: nvic_block.Line) bool {
-            if (line >= nvic_block.lines) return false;
-            return self.nvic.enabled & @as(nvic_block.Lines, 1) << line != 0;
+            if (line >= lines) return false;
+            return self.nvic.enabled & @as(Lines, 1) << @intCast(line) != 0;
         }
 
         /// Executes to a budget, a deadline, a stop or a sleep; a ring attached takes a second copy of the loop.
@@ -967,7 +975,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn unreachable_(self: *const Self, w: *std.Io.Writer) !void {
-            var waiting = @as(nvic_block.Lines, @truncate(self.pending >> first_interrupt)) & ~self.nvic.enabled;
+            var waiting = @as(Lines, @truncate(self.pending >> first_interrupt)) & ~self.nvic.enabled;
             while (waiting != 0) : (waiting &= waiting - 1) {
                 const line: nvic_block.Line = @intCast(@ctz(waiting));
                 try w.print("IRQ {d} is pending in NVIC_ISPR{d}={x:0>8} and its bit in NVIC_ISER{d}={x:0>8} was never written, so the core will not take it.\n", .{
@@ -978,7 +986,7 @@ pub fn Processor(comptime options: Options) type {
             }
         }
 
-        fn pendingLines(self: *const Self) nvic_block.Lines {
+        fn pendingLines(self: *const Self) Lines {
             return @truncate(self.pending >> first_interrupt);
         }
 
@@ -1438,7 +1446,7 @@ pub fn Processor(comptime options: Options) type {
                 .itm => return answered(into, 0),
                 .dwt => return answered(into, self.dwt.readRegister(address - ppb.dwt_base, self.cycles)),
                 .control => return answered(into, switch (address - ppb.control_base) {
-                    ppb.ictr => if (self.architecture().main()) (@as(u32, self.nvic.count) + 31) / 32 - 1 else 0,
+                    ppb.ictr => if (self.architecture() != .armv6m) (@as(u32, self.nvic.count) + 31) / 32 - 1 else 0,
                     ppb.actlr => 0,
                     else => null,
                 }),
@@ -1527,7 +1535,7 @@ pub fn Processor(comptime options: Options) type {
                 nvic_block.icpr...nvic_block.icpr + nvic_block.bank,
                 nvic_block.iabr...nvic_block.iabr + nvic_block.bank,
                 => nvic_block.wordOf(self.itns, (offset % 0x80) / 4),
-                nvic_block.ipr...nvic_block.ipr + 0xec => self.visibleLanes(offset - nvic_block.ipr),
+                nvic_block.ipr...nvic_block.last_ipr => self.visibleLanes(offset - nvic_block.ipr),
                 else => 0xffff_ffff,
             };
         }
@@ -1536,7 +1544,7 @@ pub fn Processor(comptime options: Options) type {
             var mask: u32 = 0;
             for (0..4) |i| {
                 const line = first + @as(u32, @intCast(i));
-                if (line < nvic_block.lines and !self.targetsSecure(@intCast(first_interrupt + line))) mask |= @as(u32, 0xff) << @intCast(i * 8);
+                if (line < lines and !self.targetsSecure(@intCast(first_interrupt + line))) mask |= @as(u32, 0xff) << @intCast(i * 8);
             }
             return mask;
         }
@@ -1544,9 +1552,9 @@ pub fn Processor(comptime options: Options) type {
         fn readNvic(self: *Self, offset: u32) ?u32 {
             if (offset & 3 != 0) return null;
             const word = switch (offset) {
-                nvic_block.ispr...nvic_block.ispr + nvic_block.bank => nvic_block.wordOf(@truncate(self.pending >> first_interrupt), (offset - nvic_block.ispr) / 4),
-                nvic_block.icpr...nvic_block.icpr + nvic_block.bank => nvic_block.wordOf(@truncate(self.pending >> first_interrupt), (offset - nvic_block.icpr) / 4),
-                nvic_block.iabr...nvic_block.iabr + nvic_block.bank => nvic_block.wordOf(@truncate(self.active >> first_interrupt), (offset - nvic_block.iabr) / 4),
+                nvic_block.ispr...nvic_block.ispr + nvic_block.bank => nvic_block.wordOf(self.pendingLines(), (offset - nvic_block.ispr) / 4),
+                nvic_block.icpr...nvic_block.icpr + nvic_block.bank => nvic_block.wordOf(self.pendingLines(), (offset - nvic_block.icpr) / 4),
+                nvic_block.iabr...nvic_block.iabr + nvic_block.bank => nvic_block.wordOf(@as(Lines, @truncate(self.active >> first_interrupt)), (offset - nvic_block.iabr) / 4),
                 nvic_block.itns...nvic_block.itns + nvic_block.bank => self.readItns((offset - nvic_block.itns) / 4) orelse return null,
                 else => self.nvic.readRegister(offset) orelse return null,
             };
@@ -1557,11 +1565,11 @@ pub fn Processor(comptime options: Options) type {
             if (offset & 3 != 0) return false;
             const seen = value & self.nvicVisible(offset);
             switch (offset) {
-                nvic_block.ispr...nvic_block.ispr + nvic_block.bank => self.pending |= @as(Set, nvic_block.placed(seen, (offset - nvic_block.ispr) / 4)) << first_interrupt,
-                nvic_block.icpr...nvic_block.icpr + nvic_block.bank => self.pending &= ~(@as(Set, nvic_block.placed(seen, (offset - nvic_block.icpr) / 4)) << first_interrupt),
+                nvic_block.ispr...nvic_block.ispr + nvic_block.bank => self.pending |= @as(Set, nvic_block.placed(Lines, seen, (offset - nvic_block.ispr) / 4)) << first_interrupt,
+                nvic_block.icpr...nvic_block.icpr + nvic_block.bank => self.pending &= ~(@as(Set, nvic_block.placed(Lines, seen, (offset - nvic_block.icpr) / 4)) << first_interrupt),
                 nvic_block.iabr...nvic_block.iabr + nvic_block.bank => {},
                 nvic_block.itns...nvic_block.itns + nvic_block.bank => return self.writeItns((offset - nvic_block.itns) / 4, value & self.nvic.implemented(offset)),
-                nvic_block.ipr...nvic_block.ipr + 0xec => {
+                nvic_block.ipr...nvic_block.last_ipr => {
                     const kept = (self.nvic.readRegister(offset) orelse 0) & ~self.nvicVisible(offset);
                     return self.nvic.writeRegister(offset, kept | seen);
                 },
@@ -1673,7 +1681,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn readIcsr(self: *Self, ns: bool) u32 {
-            const interrupts: nvic_block.Lines = @truncate(self.pending >> first_interrupt);
+            const interrupts: Lines = @truncate(self.pending >> first_interrupt);
             const to_base: u32 = if (!self.architecture().main()) 0 else @intFromBool(@popCount(self.active) < 2);
             const side: Index = if (ns) ns_base else 0;
             return (self.state.xpsr & State.ipsr_mask) |
@@ -1736,7 +1744,7 @@ pub fn Processor(comptime options: Options) type {
                 svcall => @intCast(self.scbOf(secure).get(scb_block.shpr2) >> 24),
                 pendsv => @intCast((self.scbOf(secure).get(scb_block.shpr3) >> 16) & 0xff),
                 systick => @intCast(self.scbOf(secure).get(scb_block.shpr3) >> 24),
-                first_interrupt...first_interrupt + nvic_block.lines - 1 => self.nvic.priority(@intCast(n - first_interrupt)),
+                first_interrupt...first_interrupt + lines - 1 => self.nvic.priority(@intCast(n - first_interrupt)),
                 else => 256,
             };
         }
@@ -1966,7 +1974,7 @@ pub fn Processor(comptime options: Options) type {
             const secured = self.security();
             const shape: u32 = if (secured) 0x0fff_ff80 else if (main_profile) 0x0fff_ffe0 else 0x0fff_fff0;
             if (exc_return & shape != shape) return self.lockAt(.exception_return);
-            if (number >= exceptions) return self.refuse(number, exc_return);
+            if (number >= ns_base) return self.refuse(number, exc_return);
             const n: Index = if (secured and number < first_interrupt and exc_return & secure_target == 0) @intCast(number + ns_base) else @intCast(number);
             if (self.active & one(n) == 0) return self.refuse(number, exc_return);
             switch (if (secured) exc_return & 0xe | 1 else exc_return & 0xf) {
@@ -2068,7 +2076,7 @@ pub fn Processor(comptime options: Options) type {
 
         fn refuse(self: *Self, number: u32, exc_return: u32) ?Stop {
             if (!self.architecture().main()) return self.lockAt(.exception_return);
-            if (number < exceptions) self.active &= ~one(@intCast(number));
+            if (number < ns_base) self.active &= ~one(@intCast(number));
             self.scs().fault(.exception_return, 0);
             return self.escalate(.exception_return, exc_return);
         }

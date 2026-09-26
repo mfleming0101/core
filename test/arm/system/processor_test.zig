@@ -606,6 +606,36 @@ test "a part that gives no interrupt count has the 32 its TRM allows at most on 
     try std.testing.expect(cpu.pending != 0);
 }
 
+test "an M33, M55 or M85 part carries up to 480 interrupts: ICTR reads 0b1110, ISER14 and IPR119 reach the last line, and STIR pends it, M33 TRM 1.3 Table 5-2, M55 and M85 TRM Table 3-4, v8-M D1.2.127 D1.2.185 D1.2.186" {
+    var m = loaded();
+    for ([_]arm.Core{ .m33, .m55, .m85 }) |core| {
+        var cpu = Cpu.init(&m, core, .{ .interrupts = 500 }, .{});
+        try std.testing.expectEqual(@as(?u32, 14), cpu.peek(4, 0xe000_e004));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e138, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0xffff_ffff), cpu.peek(4, 0xe000_e138));
+        try std.testing.expect(cpu.enabled(479));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e13c, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e13c));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e5dc, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0xf0f0_f0f0), cpu.peek(4, 0xe000_e5dc));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e5e0, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e5e0));
+        cpu.pend(480);
+        try std.testing.expectEqual(@as(Cpu.Set, 0), cpu.pending);
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ef00, 479));
+        try std.testing.expectEqual(@as(?u32, 1 << 31), cpu.peek(4, 0xe000_e238));
+        try std.testing.expectEqual(@as(?u32, 495), (cpu.peek(4, 0xe000_ed04).? >> 12) & 0x1ff);
+    }
+}
+
+test "ICTR is always implemented on Armv8-M, the M23 reading its lines in groups of 32, v8-M D1.2.127" {
+    var m = loaded();
+    var cpu = Cpu.init(&m, .m23, .{}, .{});
+    try std.testing.expectEqual(@as(?u32, 7), cpu.peek(4, 0xe000_e004));
+    var few = Cpu.init(&m, .m23, .{ .interrupts = 33 }, .{});
+    try std.testing.expectEqual(@as(?u32, 1), few.peek(4, 0xe000_e004));
+}
+
 test "SAU_TYPE reads the region count each part was built with, lowered to one its core's TRM lists, and kept through a reset, M23 TRM Table 1-1, M33 TRM 1.3, v8-M D1.2.229" {
     var m = loaded();
     for ([_]arm.Core{ .m23, .m33 }) |core| {
@@ -2200,7 +2230,7 @@ test "unprivileged code takes a BusFault on the private peripheral bus, except a
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed14, scb_block.stkalign | scb_block.usersetmpend));
     cpu.state.control |= State.control_npriv;
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ef00, 3));
-    try std.testing.expectEqual(arm.one(arm.first_interrupt + 3), cpu.pending);
+    try std.testing.expectEqual(Cpu.one(arm.first_interrupt + 3), cpu.pending);
     try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe000_ed14));
 }
 
@@ -3017,7 +3047,7 @@ test "ICSR.PENDNMISET is RAZ/WI from Non-secure state while AIRCR.BFHFNMINS is z
     cpu.reset();
     nonSecure(&cpu);
     _ = cpu.poke(4, 0xe000_ed04, 1 << 31);
-    try std.testing.expectEqual(@as(arm.Set, 0), cpu.pending & arm.one(arm.nmi));
+    try std.testing.expectEqual(@as(Cpu.Set, 0), cpu.pending & Cpu.one(arm.nmi));
     try std.testing.expectEqual(@as(u32, 0), cpu.peek(4, 0xe000_ed04).? & 1 << 31);
     cpu.state.secure = true;
     cpu.reguard();
@@ -3025,7 +3055,7 @@ test "ICSR.PENDNMISET is RAZ/WI from Non-secure state while AIRCR.BFHFNMINS is z
     cpu.state.secure = false;
     cpu.reguard();
     _ = cpu.poke(4, 0xe000_ed04, 1 << 31);
-    try std.testing.expect(cpu.pending & arm.one(arm.nmi + arm.ns_base) != 0);
+    try std.testing.expect(cpu.pending & Cpu.one(arm.nmi + Cpu.ns_base) != 0);
     try std.testing.expectEqual(@as(u32, 1 << 31), cpu.peek(4, 0xe000_ed04).? & 1 << 31);
 }
 
@@ -3035,15 +3065,15 @@ test "ICSR.PENDSTSET is RAZ/WI from Non-secure state while ICSR.STTNS is zero, D
     cpu.reset();
     nonSecure(&cpu);
     _ = cpu.poke(4, 0xe000_ed04, 1 << 26);
-    const either = arm.one(arm.systick) | arm.one(arm.systick + arm.ns_base);
-    try std.testing.expectEqual(@as(arm.Set, 0), cpu.pending & either);
+    const either = Cpu.one(arm.systick) | Cpu.one(arm.systick + Cpu.ns_base);
+    try std.testing.expectEqual(@as(Cpu.Set, 0), cpu.pending & either);
     cpu.state.secure = true;
     cpu.reguard();
     _ = cpu.poke(4, 0xe000_ed04, scb_block.sttns);
     cpu.state.secure = false;
     cpu.reguard();
     _ = cpu.poke(4, 0xe000_ed04, 1 << 26);
-    try std.testing.expect(cpu.pending & arm.one(arm.systick + arm.ns_base) != 0);
+    try std.testing.expect(cpu.pending & Cpu.one(arm.systick + Cpu.ns_base) != 0);
 }
 
 test "ICSR.ISRPENDING reports an external interrupt and not a pending PendSV, D1.2.126" {
@@ -3063,7 +3093,7 @@ test "Secure software pends the Non-secure PendSV through the ICSR_NS alias, D1.
     var cpu = fast(.m33, &m);
     cpu.reset();
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed04, 1 << 28));
-    try std.testing.expect(cpu.pending & arm.one(arm.pendsv + arm.ns_base) != 0);
+    try std.testing.expect(cpu.pending & Cpu.one(arm.pendsv + Cpu.ns_base) != 0);
     try std.testing.expectEqual(@as(u32, 1 << 28), cpu.peek(4, 0xe002_ed04).? & 1 << 28);
     try std.testing.expectEqual(@as(u32, 0), cpu.peek(4, 0xe000_ed04).? & 1 << 28);
 }
@@ -3277,7 +3307,7 @@ test "the unit stands aside while the execution priority is negative, which FAUL
                 cpu.banked.faultmask = true;
             },
             2 => cpu.active |= 1 << 2,
-            else => cpu.active |= arm.one(arm.ns_base + 3),
+            else => cpu.active |= Cpu.one(Cpu.ns_base + 3),
         }
         try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 20 }).stop);
         try std.testing.expectEqual(@as(?u32, 5), m.peek(4, 0x800));
@@ -3512,7 +3542,7 @@ test "the Non-secure alias of SHCSR reaches the Non-secure instances and the Sec
     try std.testing.expectEqual(@as(?u32, (1 << 4) | (1 << 0)), cpu.peek(4, 0xe000_ed24));
     try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ed24));
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed24, (1 << 4) | (1 << 0)));
-    try std.testing.expectEqual((1 << 7) | (1 << 4) | arm.one(arm.ns_base + 4), cpu.active);
+    try std.testing.expectEqual((1 << 7) | (1 << 4) | Cpu.one(Cpu.ns_base + 4), cpu.active);
     try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe002_ed24));
     cpu.active |= @as(u64, 1) << 3;
     try std.testing.expectEqual(@as(?u32, (1 << 4) | (1 << 2) | (1 << 0)), cpu.peek(4, 0xe000_ed24));

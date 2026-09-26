@@ -50,7 +50,7 @@ pub const AhbpSize = enum(u3) { none, mb64, mb128, mb256, mb512 };
 /// The AHB peripheral interface as the part wires it: its size and the reset value of EN, in the bits of CM7_AHBPCR, M7 TRM 3.3.7.
 pub const Ahbp = packed struct { enabled: bool = false, size: AhbpSize = .none };
 
-/// What one part was built with that its core's TRM leaves to it: the M7 level 1 caches, TCMs, AHBP and ECC of M7 TRM Table 1-1, the MPU and SAU region counts, the priority bits and the external interrupts; a core that carries none ignores them, and a value left null is the core's default.
+/// What one part was built with that its core's TRM leaves to it: the level 1 caches of the M7, M55 and M85, the M7 TCMs, AHBP and ECC of M7 TRM Table 1-1, the MPU and SAU region counts, the priority bits and the external interrupts; a core that carries none ignores them, and a value left null is the core's default.
 pub const Part = struct {
     data: CacheSize = .none,
     instruction: CacheSize = .none,

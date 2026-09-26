@@ -10,7 +10,7 @@ const contract = @import("../contract.zig");
 /// The size of a device access; the values are the byte counts themselves.
 pub const Width = enum(u3) { byte = 1, half = 2, word = 4 };
 
-/// How many interrupt lines the bus carries: the most any Arm core here is built with, and more than either ESP32 has.
+/// How many interrupt lines the bus carries: the most an Arm core other than the M33, M55 and M85 is built with, and more than either ESP32 has.
 pub const lines = 240;
 /// A set of interrupt lines, one bit per line.
 pub const Lines = u240;

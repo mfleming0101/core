@@ -73,7 +73,7 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
   TRM lists or clamped to its range. Left null, the core keeps its default: 8 MPU and SAU
   regions, or no MPU on the M0 and M1; 2 priority bits on the M0, M0+, M1 and M23, 4 on the
   rest; and 32 interrupts on the M0, M0+ and M1 and 240 on the rest, which is also the most
-  the library carries. An M7 given
+  any core but the M33, M55 and M85 may have; those three take up to 480. An M7 given
   `.{ .data = .kb32, .instruction = .kb32, .itcm = .{ .size = .kb64, .enabled = true } }`
   reports those, `.{}` is a part with none of them, and a core without the registers a field
   sets ignores that field.
@@ -137,9 +137,12 @@ Devices on a `Regions` bus raise lines themselves. Devices outside the bus pend 
 | `pendAll(mask)` | A `Lines` mask, one bit per line |
 | `enabled(line)` | Arm: the NVIC enable bit is set. RISC-V: the source is routed, unmasked and above the threshold |
 
-`Line` is a `u8` and `Lines` a `u240`. Arm carries 240 external interrupts, and a line beyond
-the part's `interrupts` never pends; the ESP32-C3 has 62
-matrix sources and the C6 77.
+On the bus and on RISC-V, `Line` is a `u8` and `Lines` a `u240`. An Arm `Processor` type
+takes a `u9` line and has its own `Lines`, with `Set`, `one` and `ns_base` over the exception
+numbers beside it: a `u240` where its cores carry at most 240 external interrupts, and a
+`u480` where one of them is an M33, M55 or M85. A bus device raises the first 240; `pend`,
+`pendAll`, NVIC_ISPR and STIR reach the rest. A line beyond the part's `interrupts` never
+pends; the ESP32-C3 has 62 matrix sources and the C6 77.
 
 ### Peek and poke
 
