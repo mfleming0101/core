@@ -202,7 +202,8 @@ pub fn Processor(comptime options: Options) type {
             escalated: bool = false,
             event: bool = false,
             for_event: bool = false,
-            _: u4 = 0,
+            refused_by_nsacr: bool = false,
+            _: u3 = 0,
         };
 
         const stopped: Set = 1 << 0;
@@ -408,6 +409,7 @@ pub fn Processor(comptime options: Options) type {
                 .sau_regions = self.sau.count,
                 .priority_bits = self.priorityBits(),
                 .interrupts = self.nvic.count,
+                .revidr = self.scb.revision,
             };
             if (M7 != void) self.m7.wiring(&out);
             return out;
@@ -550,7 +552,8 @@ pub fn Processor(comptime options: Options) type {
             }
             const kind = self.override orelse stop;
             self.override = null;
-            self.scs().fault(kind, self.last_access);
+            defer self.flags.refused_by_nsacr = false;
+            self.scbOf(self.state.secure or self.flags.refused_by_nsacr).fault(kind, self.last_access);
             return self.escalated(kind);
         }
 
@@ -687,7 +690,7 @@ pub fn Processor(comptime options: Options) type {
                 .undefined_instruction, .not_t32_state, .unaligned_access, .divide_by_zero, .no_coprocessor, .authentication_failure, .not_branch_target, .tail_predication, .exception_return => .{ usage_fault, scb_block.usgfaultena },
                 else => return null,
             };
-            const i = self.instance(n);
+            const i = if (self.flags.refused_by_nsacr) n else self.instance(n);
             if (self.scbOf(!self.spec.security or i < ns_base).get(scb_block.shcsr) & enable == 0) return null;
             if (self.priority(i) >= self.executionPriority()) return null;
             return i;
@@ -1095,9 +1098,12 @@ pub fn Processor(comptime options: Options) type {
             self.restand();
         }
 
-        /// Whether CPACR lets this code reach the floating-point coprocessor.
+        /// Whether CPACR, and NSACR for Non-secure code, let this code reach the floating-point coprocessor; a refusal by NSACR marks the NOCP UsageFault for the Secure state, v8-M RDXYK and IsCPEnabled.
         pub fn coprocessorEnabled(self: *Self) bool {
-            return self.architecture().main() and self.scs().get(scb_block.cpacr) & scb_block.cp10 != 0;
+            if (!self.architecture().main() or self.scs().get(scb_block.cpacr) & scb_block.cp10 == 0) return false;
+            if (self.state.secure or !self.spec.security or self.scb.get(scb_block.nsacr) & scb_block.nsacr_cp10 != 0) return true;
+            self.flags.refused_by_nsacr = true;
+            return false;
         }
 
         inline fn permits(self: *Self, address: u32, comptime wanted: contract.Kind) ?contract.Failure {
@@ -1454,7 +1460,7 @@ pub fn Processor(comptime options: Options) type {
                 .scb => switch (address - ppb.scb_base) {
                     scb_block.icsr => return answered(into, self.readIcsr(self.spec.security and !self.state.secure)),
                     scb_block.shcsr => return answered(into, self.readShcsr(self.spec.security and !self.state.secure)),
-                    scb_block.aircr, scb_block.scr => |offset| return answered(into, self.readView(self.spec.security and !self.state.secure, offset)),
+                    scb_block.aircr, scb_block.scr, scb_block.nsacr => |offset| return answered(into, self.readView(self.spec.security and !self.state.secure, offset)),
                     sau_block.first...sau_block.last => |offset| return answered(into, if (self.spec.security and !self.state.secure) 0 else self.sau.readRegister(offset - sau_block.first)),
                     m7_block.first...m7_block.last => |offset| return answered(into, if (self.m7Control()) |block| block.readRegister(offset - m7_block.first) else null),
                     mpu_block.first...mpu_block.last => |offset| return answered(into, self.mpuOf(self.state.secure).readRegister(offset - mpu_block.first)),
@@ -1466,14 +1472,23 @@ pub fn Processor(comptime options: Options) type {
                     return answered(into, switch (address - ppb.scb_base - ppb.alias) {
                         scb_block.icsr => self.readIcsr(true),
                         scb_block.shcsr => self.readShcsr(true),
-                        scb_block.aircr, scb_block.scr => |offset| self.readView(true, offset),
+                        scb_block.aircr, scb_block.scr, scb_block.nsacr => |offset| self.readView(true, offset),
                         mpu_block.first...mpu_block.last => |offset| self.nonSecureMpu().?.readRegister(offset - mpu_block.first),
                         else => |offset| self.scb_ns.readRegister(offset),
                     });
                 },
+                .revidr, .revidr_ns => |region| return answered(into, self.readRevidr(region == .revidr_ns)),
                 .nvic => return answered(into, self.readNvic(address - ppb.nvic_base)),
                 .ppb_unmapped => return false,
             }
+        }
+
+        fn readRevidr(self: *Self, aliased: bool) ?u32 {
+            return switch (self.architecture()) {
+                .armv6m, .armv7m, .armv7em => null,
+                .armv8m_base, .armv8m_main => 0,
+                .armv8_1m_main => if (self.state.secure and !aliased) self.scb.revision else null,
+            };
         }
 
         fn wordPpb(self: *Self, address: u32) ?u32 {
@@ -1505,7 +1520,7 @@ pub fn Processor(comptime options: Options) type {
                     scb_block.icsr => self.writeIcsr(self.spec.security and !self.state.secure, value),
                     scb_block.shcsr => self.writeShcsr(self.spec.security and !self.state.secure, value),
                     scb_block.stir => self.trigger(value),
-                    scb_block.scr => |offset| self.writeView(self.spec.security and !self.state.secure, offset, value),
+                    scb_block.scr, scb_block.nsacr => |offset| self.writeView(self.spec.security and !self.state.secure, offset, value),
                     scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => |offset| self.scs().writeRegister(offset, value & self.nvic.lanes),
                     sau_block.first...sau_block.last => |offset| if (self.spec.security and !self.state.secure) true else self.sau.writeRegister(offset - sau_block.first, value),
                     m7_block.first...m7_block.last => |offset| if (self.m7Control()) |block| block.writeRegister(offset - m7_block.first, value) else false,
@@ -1517,11 +1532,12 @@ pub fn Processor(comptime options: Options) type {
                     scb_block.icsr => self.writeIcsr(true, value),
                     scb_block.shcsr => self.writeShcsr(true, value),
                     scb_block.stir => self.trigger(value),
-                    scb_block.scr => |offset| self.writeView(true, offset, value),
+                    scb_block.scr, scb_block.nsacr => |offset| self.writeView(true, offset, value),
                     mpu_block.first...mpu_block.last => |offset| self.reprogram(self.nonSecureMpu().?, offset - mpu_block.first, value),
                     scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => |offset| self.scb_ns.writeRegister(offset, value & self.nvic.lanes),
                     else => |offset| self.scb_ns.writeRegister(offset, value),
                 }),
+                .revidr, .revidr_ns => |region| self.readRevidr(region == .revidr_ns) != null,
                 .nvic => self.writeNvic(address - ppb.nvic_base, value),
                 .ppb_unmapped => false,
             };
@@ -1716,6 +1732,7 @@ pub fn Processor(comptime options: Options) type {
         fn sharedOf(self: *Self, offset: u32) Shared {
             return switch (offset) {
                 scb_block.aircr => .{ .held = scb_block.pris | scb_block.bfhfnmins, .readable = scb_block.bfhfnmins },
+                scb_block.nsacr => .{ .held = 0xffff_ffff },
                 scb_block.scr => blk: {
                     const open: u32 = if (self.scb.get(scb_block.scr) & scb_block.sleepdeeps != 0) 0 else scb_block.sleepdeep;
                     break :blk .{ .held = scb_block.sleepdeeps | scb_block.sleepdeep, .readable = open, .writable = open };

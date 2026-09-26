@@ -45,9 +45,15 @@ test "the 4KB from 0xE0000000 are the ITM and the 4KB from 0xE0001000 the DWT, C
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_2000));
 }
 
+test "REVIDR is the word below the System Control Block and its alias the word below the alias, v8-M D1.2.222" {
+    try std.testing.expectEqual(.revidr, bus.region(0xe000_ecfc));
+    try std.testing.expectEqual(.revidr_ns, bus.region(0xe002_ecfc));
+    try std.testing.expectEqual(.scb, bus.region(0xe000_ed00));
+}
+
 test "the rest of the private peripheral bus is unmapped in this core" {
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_dffc));
-    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_ecfc));
+    try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe000_ecf8));
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe004_0000));
     try std.testing.expectEqual(.ppb_unmapped, bus.region(0xe00f_fffc));
 }

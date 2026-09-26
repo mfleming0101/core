@@ -24,6 +24,8 @@ const nvic = @import("nvic.zig");
 const dwt = @import("dwt.zig");
 /// Where the System Control Block begins.
 pub const scb_base = scb.base;
+/// REVIDR, the word below the System Control Block, v8-M D1.2.222.
+pub const revidr: u32 = 0xe000_ecfc;
 /// Where the NVIC registers begin.
 pub const nvic_base = nvic.base;
 /// Where the DWT registers begin.
@@ -36,7 +38,7 @@ const itm_size: u32 = 0x1000;
 pub const alias: u32 = 0x2_0000;
 
 /// Which block answers an address, or memory where the address is outside the peripheral bus.
-pub const Region = enum { memory, systick, control, scb, scb_ns, nvic, itm, dwt, ppb_unmapped };
+pub const Region = enum { memory, systick, control, scb, scb_ns, revidr, revidr_ns, nvic, itm, dwt, ppb_unmapped };
 
 /// Routes an address to the block that answers it; nothing in the peripheral bus is ever folded.
 pub fn region(address: u32) Region {
@@ -45,6 +47,8 @@ pub fn region(address: u32) Region {
     if (address -% control_base < control_size) return .control;
     if (address -% scb.base < scb.size) return .scb;
     if (address -% (scb.base + alias) < scb.size) return .scb_ns;
+    if (address -% revidr < 4) return .revidr;
+    if (address -% (revidr + alias) < 4) return .revidr_ns;
     if (address -% nvic.base < nvic.size) return .nvic;
     if (address -% itm_base < itm_size) return .itm;
     if (address -% dwt.base < dwt.size) return .dwt;

@@ -220,12 +220,12 @@ test "an M55 or M85 built without caches keeps the identification registers, wit
     }
 }
 
-test "an Armv6-M or Armv7-M core without caches still refuses the cache identification and maintenance addresses, but for CTR on the M3 and M4, M4 TRM 4.1, v7-M B4.8.4" {
+test "an Armv6-M or Armv7-M core without caches still refuses the cache identification and maintenance addresses, but for CLIDR, CTR and CSSELR on the M3 and M4, v6-M D3.6.1, v7-M B4.8.1 B4.8.2 B4.8.3 B4.8.4" {
     inline for (.{ .m0, .m0plus, .m1, .m3, .m4 }) |core| {
         var block = fitted(core, .{ .data = .kb32, .instruction = .kb32 });
         var offset = scb.clidr;
         while (offset <= scb.csselr) : (offset += 4) {
-            if (offset == scb.ctr and (core == .m3 or core == .m4)) continue;
+            if (offset != scb.ccsidr and (core == .m3 or core == .m4)) continue;
             try std.testing.expectEqual(@as(?u32, null), block.readRegister(offset));
             try std.testing.expect(!block.writeRegister(offset, 0));
         }
@@ -234,6 +234,18 @@ test "an Armv6-M or Armv7-M core without caches still refuses the cache identifi
             try std.testing.expectEqual(@as(?u32, null), block.readRegister(offset));
             try std.testing.expect(!block.writeRegister(offset, 0));
         }
+    }
+}
+
+test "the M3 and M4 have CLIDR reading no cache at any level and a CSSELR that holds its selection, v7-M B4.8.1 B4.8.3" {
+    inline for (.{ .m3, .m4 }) |core| {
+        var block = of(core);
+        try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.clidr));
+        try std.testing.expect(block.writeRegister(scb.clidr, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.clidr));
+        try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.csselr));
+        try std.testing.expect(block.writeRegister(scb.csselr, 1));
+        try std.testing.expectEqual(@as(?u32, 1), block.readRegister(scb.csselr));
     }
 }
 
@@ -324,7 +336,7 @@ test "the registers ARMv6-M reserves are absent and their addresses still fault,
 
 test "ICSR belongs to the processor and unallocated words of the block fault" {
     var block = of(.m4);
-    inline for (.{ scb.icsr, 0x40, 0x84, 0x8c, 0x22 }) |offset| {
+    inline for (.{ scb.icsr, 0xd0, 0x8c, 0x22 }) |offset| {
         try std.testing.expect(block.readRegister(offset) == null);
         try std.testing.expect(!block.writeRegister(offset, 1));
     }
@@ -398,4 +410,58 @@ test "the debug registers read zero and DEMCR keeps TRCENA, C1.6.2 to C1.6.5" {
     try std.testing.expectEqual(@as(u32, 0), block.readRegister(scb.demcr).?);
     try std.testing.expect(block.writeRegister(scb.demcr, 0xffff_ffff));
     try std.testing.expectEqual(scb.trcena, block.readRegister(scb.demcr).?);
+}
+
+fn expectFeatures(block: *scb.Scb, words: [14]?u32) !void {
+    for (words, 0..) |word, i| {
+        const offset = scb.id_pfr0 + 4 * @as(u32, @intCast(i));
+        try std.testing.expectEqual(word, block.readRegister(offset));
+        try std.testing.expectEqual(word != null, block.writeRegister(offset, 0xffff_ffff));
+        try std.testing.expectEqual(word, block.readRegister(offset));
+    }
+}
+
+test "ID_PFR0 to ID_ISAR5 read their TRM tables and ignore writes, M3 and M4 TRM Table 4-1, M7 TRM Table 3-1, M33 TRM Table 3-1, M55 and M85 TRM Table 5-1, v7-M Table B4-1" {
+    var m3 = of(.m3);
+    try expectFeatures(&m3, .{ 0x30, 0x200, 0x0010_0000, 0, 0x0010_0030, 0, 0x0100_0000, 0, 0x0110_0110, 0x0211_1000, 0x2111_2231, 0x0111_1110, 0x0131_0132, 0 });
+    var m4 = of(.m4);
+    try expectFeatures(&m4, .{ 0x30, 0x200, 0x0010_0000, 0, 0x0010_0030, 0, 0x0100_0000, 0, 0x0114_1110, 0x0211_2000, 0x2123_2231, 0x0111_1131, 0x0131_0132, 0 });
+    var m7 = of(.m7);
+    try expectFeatures(&m7, .{ 0x30, 0x200, 0x0010_0000, 0, 0x0010_0030, 0, 0x0100_0000, 0, 0x0110_1110, 0x0211_2000, 0x2023_2231, 0x0111_1131, 0x0131_0132, 0 });
+    var m33 = of(.m33);
+    try expectFeatures(&m33, .{ null, null, 0x0020_0000, 0, 0x0010_1f40, 0, 0x0100_0000, 0, 0x0110_1110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 });
+    var m55 = of(.m55);
+    try expectFeatures(&m55, .{ 0x2000_0030, 0x230, 0x1020_0000, 0, 0x0011_1040, 0, 0x0100_0000, 0x11, 0x0110_3110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 });
+    var m85 = of(.m85);
+    try expectFeatures(&m85, .{ 0x2000_0030, 0x230, 0x1020_0000, 0, 0x0011_1040, 0, 0x0100_0000, 0x11, 0x0110_3110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0x0040_0000 });
+}
+
+test "the feature registers are reserved on Armv6-M and RES0 on the M23, v6-M D3.6.1, v8-M D1.2.140" {
+    inline for (.{ .m0, .m0plus, .m1 }) |core| {
+        var block = of(core);
+        try expectFeatures(&block, @splat(null));
+    }
+    var m23 = of(.m23);
+    try expectFeatures(&m23, @splat(0));
+}
+
+test "an M7 with a TCM reads TCM support in ID_MMFR0, M7 TRM Table 3-1 footnote h, v7-M B4.5.1" {
+    var tcm = fitted(.m7, .{ .dtcm = .{ .size = .kb64 } });
+    try std.testing.expectEqual(@as(?u32, 0x0011_0030), tcm.readRegister(scb.id_mmfr0));
+    var bare = of(.m7);
+    try std.testing.expectEqual(@as(?u32, 0x0010_0030), bare.readRegister(scb.id_mmfr0));
+}
+
+test "NSACR holds CP10 and CP11 on the M33, M55 and M85, is RES0 on the M23 and absent before Armv8-M, v8-M D1.2.181" {
+    inline for (.{ .m33, .m55, .m85 }) |core| {
+        var block = of(core);
+        try std.testing.expectEqual(@as(?u32, 0), block.readRegister(scb.nsacr));
+        try std.testing.expect(block.writeRegister(scb.nsacr, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0xc00), block.readRegister(scb.nsacr));
+    }
+    var m23 = of(.m23);
+    try std.testing.expect(m23.writeRegister(scb.nsacr, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?u32, 0), m23.readRegister(scb.nsacr));
+    var m4 = of(.m4);
+    try std.testing.expectEqual(@as(?u32, null), m4.readRegister(scb.nsacr));
 }

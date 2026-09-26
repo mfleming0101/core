@@ -73,7 +73,8 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
   TRM lists or clamped to its range. Left null, the core keeps its default: 8 MPU and SAU
   regions, or no MPU on the M0 and M1; 2 priority bits on the M0, M0+, M1 and M23, 4 on the
   rest; and 32 interrupts on the M0, M0+ and M1 and 240 on the rest, which is also the most
-  any core but the M33, M55 and M85 may have; those three take up to 480. An M7 given
+  any core but the M33, M55 and M85 may have; those three take up to 480. On the M55 and M85
+  it is also `revidr`, the REVIDRNUM the part ties off, which REVIDR reads. An M7 given
   `.{ .data = .kb32, .instruction = .kb32, .itcm = .{ .size = .kb64, .enabled = true } }`
   reports those, `.{}` is a part with none of them, and a core without the registers a field
   sets ignores that field.

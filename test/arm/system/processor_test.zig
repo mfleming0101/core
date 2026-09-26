@@ -477,7 +477,7 @@ test "two M7 parts of one processor type carry the caches each was built with, a
     try std.testing.expectEqual(@as(?u32, 0xf003_e019), f750.peek(4, 0xe000_ed80));
     try std.testing.expectEqual(@as(?u32, 0xf01f_e019), h723.peek(4, 0xe000_ed80));
     var four = Cpu.init(&m, .m4, .{ .data = .kb32, .instruction = .kb32 }, .{});
-    try std.testing.expectEqual(@as(?u32, null), four.peek(4, 0xe000_ed78));
+    try std.testing.expectEqual(@as(?u32, null), four.peek(4, 0xe000_ed80));
     try std.testing.expectEqual(@as(?void, null), four.poke(4, 0xe000_ef50, 0));
 }
 
@@ -3698,4 +3698,58 @@ test "a HardFault software pends waits for a priority that lets it in where one 
     try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
     try std.testing.expect(!cpu.state.lockup);
     try std.testing.expectEqual(@as(u64, 1 << 3), cpu.pending);
+}
+
+fn nsacrImage() Memory {
+    return placed(&.{ 0xc00, 0x41, 0, 0, 0, 0, 0x801 }, &.{ 0x40, 0x800 }, &.{ &.{ 0xee30, 0x0a00, 0xbe00 }, &.{0xbe00} });
+}
+
+fn floatingNonSecure(cpu: *Cpu, nsacr: u32) !void {
+    cpu.reset();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed8c, nsacr));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed24, scb_block.usgfaultena));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed88, 0x00f0_0000));
+    nonSecure(cpu);
+    cpu.state.msp = 0x400;
+}
+
+test "NSACR is Secure only, RAZ/WI to the Non-secure state and through the alias, and a Non-secure floating-point instruction it refuses takes the Secure UsageFault, v8-M D1.2.181 RCFPK RDXYK" {
+    var m = nsacrImage();
+    var cpu = fast(.m33, &m);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed8c, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?u32, 0xc00), cpu.peek(4, 0xe000_ed8c));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ed8c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed8c, 0));
+    try std.testing.expectEqual(@as(?u32, 0xc00), cpu.peek(4, 0xe000_ed8c));
+    try floatingNonSecure(&cpu, 0);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_ed8c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed8c, 0xc00));
+    try std.testing.expectEqual(@as(u32, 0), cpu.scb.get(scb_block.nsacr));
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+    try std.testing.expect(cpu.state.secure);
+    try std.testing.expectEqual(@as(u32, 6), cpu.state.xpsr & State.ipsr_mask);
+    try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
+    try std.testing.expectEqual(@as(u32, 0), cpu.scb_ns.get(scb_block.cfsr));
+    try floatingNonSecure(&cpu, 0xc00);
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+    try std.testing.expect(!cpu.state.secure);
+    try std.testing.expectEqual(@as(u32, 0x44), cpu.state.pc);
+}
+
+test "REVIDR reads the part's REVIDRNUM on the M55 and M85 through a reset, reads as zero on the M23 and M33 and faults before Armv8-M, M55 and M85 TRM 5.7, v8-M D1.2.222" {
+    var m = loaded();
+    var fifty = Cpu.init(&m, .m55, .{ .revidr = 5 }, .{});
+    try std.testing.expectEqual(@as(?u32, 5), fifty.peek(4, 0xe000_ecfc));
+    try std.testing.expectEqual(@as(?void, {}), fifty.poke(4, 0xe000_ecfc, 0));
+    fifty.reset();
+    try std.testing.expectEqual(@as(?u32, 5), fifty.peek(4, 0xe000_ecfc));
+    var eighty = Cpu.init(&m, .m85, .{ .revidr = 9 }, .{});
+    try std.testing.expectEqual(@as(?u32, 9), eighty.peek(4, 0xe000_ecfc));
+    inline for (.{ .m23, .m33 }) |core| {
+        var cpu = Cpu.init(&m, core, .{ .revidr = 5 }, .{});
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_ecfc));
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ecfc));
+    }
+    var four = Cpu.init(&m, .m4, .{}, .{});
+    try std.testing.expectEqual(@as(?u32, null), four.peek(4, 0xe000_ecfc));
 }

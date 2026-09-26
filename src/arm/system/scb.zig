@@ -43,7 +43,11 @@ pub const mmfar: u32 = 0x34;
 pub const bfar: u32 = 0x38;
 /// AFSR, the auxiliary fault status register.
 pub const afsr: u32 = 0x3c;
-/// CLIDR, the cache levels, none on a v8-M core without caches.
+/// ID_PFR0, the first of the fourteen feature registers that run to ID_ISAR5.
+pub const id_pfr0: u32 = 0x40;
+/// ID_MMFR0, whose TCM field on the M7 follows the part.
+pub const id_mmfr0: u32 = 0x50;
+/// CLIDR, the cache levels, none on a core without caches.
 pub const clidr: u32 = 0x78;
 /// CTR, the cache type.
 pub const ctr: u32 = 0x7c;
@@ -53,7 +57,7 @@ pub const ccsidr: u32 = 0x80;
 pub const csselr: u32 = 0x84;
 /// CPACR, which enables the coprocessors.
 pub const cpacr: u32 = 0x88;
-/// NSACR, RES0 on the M23 for want of the Main Extension.
+/// NSACR, RES0 on the M23 for want of the Main Extension and RAZ/WI to the Non-secure state.
 pub const nsacr: u32 = 0x8c;
 /// Where the MPU registers begin within this window.
 pub const mpu_type: u32 = 0x90;
@@ -83,6 +87,8 @@ pub const iciallu: u32 = 0x250;
 pub const bpiall: u32 = 0x278;
 /// The CPACR field that enables the floating-point coprocessor.
 pub const cp10: u32 = 0x3 << 20;
+/// The NSACR bit that lets the Non-secure state reach the floating-point coprocessor, v8-M D1.2.181.
+pub const nsacr_cp10: u32 = 1 << 10;
 /// The FPCCR bit that saves floating-point state automatically on exception entry.
 pub const aspen: u32 = 1 << 31;
 /// The FPCCR bit that makes that saving lazy.
@@ -196,7 +202,7 @@ pub const secureflt_ena: u32 = 1 << 19;
 /// The DEMCR bit that runs the DWT.
 pub const trcena: u32 = 1 << 24;
 
-const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_type, baseline, sleep } };
+const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_id, armv8, sleep } };
 
 /// Every register the block holds, with the offset and the group that decides whether a core has it.
 pub const layout = [_]Slot{
@@ -224,11 +230,11 @@ pub const layout = [_]Slot{
     .{ .name = "MVFR0", .offset = mvfr0, .group = .floating },
     .{ .name = "MVFR1", .offset = mvfr1, .group = .floating },
     .{ .name = "MVFR2", .offset = mvfr2, .group = .floating },
-    .{ .name = "CLIDR", .offset = clidr, .group = .cache },
-    .{ .name = "CTR", .offset = ctr, .group = .cache_type },
+    .{ .name = "CLIDR", .offset = clidr, .group = .cache_id },
+    .{ .name = "CTR", .offset = ctr, .group = .cache_id },
     .{ .name = "CCSIDR", .offset = ccsidr, .group = .cache },
-    .{ .name = "CSSELR", .offset = csselr, .group = .cache },
-    .{ .name = "NSACR", .offset = nsacr, .group = .baseline },
+    .{ .name = "CSSELR", .offset = csselr, .group = .cache_id },
+    .{ .name = "NSACR", .offset = nsacr, .group = .armv8 },
 };
 
 const absent: u8 = layout.len;
@@ -246,6 +252,8 @@ pub const Profile = struct {
     floating_point: bool,
     caches: bool,
     levels: u32,
+    features: [14]?u32,
+    tcms: bool,
     reset: [layout.len]u32,
     write_mask: [layout.len]u32,
 };
@@ -278,6 +286,7 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
         scr => .{ .reset = 0, .write_mask = 0x0000_0016 | (if (spec.security) sleepdeeps else 0) },
         mmfar, bfar => .{ .reset = 0, .write_mask = 0xffff_ffff },
         cpacr => .{ .reset = 0, .write_mask = if (spec.floating_point) 0x00f0_0000 else 0 },
+        nsacr => .{ .reset = 0, .write_mask = if (spec.floating_point) 0x0000_0c00 else 0 },
         fpccr => .{ .reset = if (spec.security) 0xc000_0004 else 0xc000_0000, .write_mask = if (spec.security) 0xfc00_07ff else 0xc000_017b },
         fpcar => .{ .reset = 0, .write_mask = 0xffff_fff8 },
         fpdscr => .{ .reset = if (wide_default) 0x0004_0000 else 0, .write_mask = if (wide_default) 0x07c8_0000 else 0x07c0_0000 },
@@ -290,24 +299,45 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
     };
 }
 
+/// ID_PFR0 to ID_ISAR5 of a core, null where the core has none: Armv6-M reserves them, v6-M D3.6.1; the M23 has them RES0 for want of the Main Extension, v8-M D1.2.140; the M3, M4 and M7 read their TRM tables, M3 and M4 TRM Table 4-1, M7 TRM Table 3-1, with ID_ISAR5 RAZ, v7-M Table B4-1; the M33, M55 and M85 read theirs, M33 TRM Table 3-1, M55 and M85 TRM Table 5-1, with debug fitted, no coprocessor interface and no CDE, the M33 with DSP and the M85 with PACBTI. The M33 TRM gives ID_PFR0 and ID_PFR1 values its notes contradict, so the M33 has neither.
+fn featuresOf(comptime c: core.Core) [14]?u32 {
+    const armv7: [14]?u32 = .{ 0x30, 0x200, 0x0010_0000, 0, 0x0010_0030, 0, 0x0100_0000, 0, 0x0110_0110, 0x0211_1000, 0x2111_2231, 0x0111_1110, 0x0131_0132, 0 };
+    const armv8_1: [14]?u32 = .{ 0x2000_0030, 0x230, 0x1020_0000, 0, 0x0011_1040, 0, 0x0100_0000, 0x11, 0x0110_3110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 };
+    var out = armv7;
+    switch (c) {
+        .m0, .m0plus, .m1 => return @splat(null),
+        .m23 => return @splat(0),
+        .m3 => {},
+        .m4 => out[8..12].* = .{ 0x0114_1110, 0x0211_2000, 0x2123_2231, 0x0111_1131 },
+        .m7 => out[8..12].* = .{ 0x0110_1110, 0x0211_2000, 0x2023_2231, 0x0111_1131 },
+        .m33 => out = .{ null, null, 0x0020_0000, 0, 0x0010_1f40, 0, 0x0100_0000, 0, 0x0110_1110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 },
+        .m55 => out = armv8_1,
+        .m85 => {
+            out = armv8_1;
+            out[13] = 0x0040_0000;
+        },
+    }
+    return out;
+}
+
 /// The profile of a core, built at compile time from its spec.
 pub fn profileOf(comptime c: core.Core) Profile {
     @setEvalBranchQuota(200_000);
     const spec = core.spec(c);
     const main = spec.architecture.main();
-    var out: Profile = .{ .present = 0, .main = main, .floating_point = spec.floating_point, .caches = spec.caches, .levels = if (c == .m7) 0x0900_0000 else 0x0920_0000, .reset = @splat(0), .write_mask = @splat(0) };
+    var out: Profile = .{ .present = 0, .main = main, .floating_point = spec.floating_point, .caches = spec.caches, .levels = if (c == .m7) 0x0900_0000 else 0x0920_0000, .features = featuresOf(c), .tcms = c == .m7, .reset = @splat(0), .write_mask = @splat(0) };
     for (layout, 0..) |slot, i| {
         const held = switch (slot.group) {
             .shared => true,
             .main => main or spec.architecture.v8(),
             .floating => spec.floating_point or spec.architecture.v8(),
             .cache => spec.caches or spec.architecture.v8(),
-            .cache_type => spec.architecture != .armv6m,
-            .baseline => spec.architecture == .armv8m_base,
+            .cache_id => spec.architecture != .armv6m,
+            .armv8 => spec.architecture.v8(),
             .sleep => c != .m1,
         };
         if (!held) continue;
-        const res0 = (slot.group == .main and !main) or (slot.group == .floating and !spec.floating_point);
+        const res0 = ((slot.group == .main or slot.group == .armv8) and !main) or (slot.group == .floating and !spec.floating_point);
         const v = if (res0) .{ .reset = 0, .write_mask = 0 } else valuesOf(spec, slot);
         out.present |= @as(u32, 1) << @intCast(i);
         out.reset[i] = v.reset;
@@ -316,7 +346,7 @@ pub fn profileOf(comptime c: core.Core) Profile {
     return out;
 }
 
-/// The block itself: a word per register the core has, over a profile shared by every instance, and the cache sizes of this part.
+/// The block itself: a word per register the core has, over a profile shared by every instance, and the cache sizes, TCMs and REVIDR of this part.
 pub const Scb = struct {
     const Self = @This();
 
@@ -324,10 +354,19 @@ pub const Scb = struct {
     words: [layout.len]u32,
     data: core.CacheSize,
     instruction: core.CacheSize,
+    tcm: bool,
+    revision: u4,
 
     /// A block at the reset values its profile and its part give; a core without caches keeps none.
     pub fn init(profile: *const Profile, part: core.Part) Self {
-        var out: Self = .{ .profile = profile, .words = undefined, .data = .none, .instruction = .none };
+        var out: Self = .{
+            .profile = profile,
+            .words = undefined,
+            .data = .none,
+            .instruction = .none,
+            .tcm = profile.tcms and (part.itcm.size != .none or part.dtcm.size != .none),
+            .revision = part.revidr,
+        };
         if (profile.caches) {
             out.data = part.data;
             out.instruction = part.instruction;
@@ -410,13 +449,20 @@ pub const Scb = struct {
     pub fn readRegister(self: *Self, offset: u32) ?u32 {
         const i = index(offset);
         if (i != absent and self.has(i)) return self.words[i];
+        if (self.feature(offset)) |word| return word;
         return if (self.answers(offset)) 0 else null;
+    }
+
+    fn feature(self: *const Self, offset: u32) ?u32 {
+        if (offset -% id_pfr0 >= clidr - id_pfr0 or offset & 3 != 0) return null;
+        const word = self.profile.features[(offset - id_pfr0) / 4] orelse return null;
+        return if (offset == id_mmfr0 and self.tcm) word | 1 << 16 else word;
     }
 
     /// Takes a register write, keeping the writable bits; a status register is cleared by what it is written.
     pub fn writeRegister(self: *Self, offset: u32, value: u32) bool {
         const i = index(offset);
-        if (i == absent or !self.has(i)) return self.answers(offset);
+        if (i == absent or !self.has(i)) return self.feature(offset) != null or self.answers(offset);
         if (offset == aircr and value >> 16 != vectkey) return true;
         if (offset == clidr or offset == ccsidr or offset == ctr) return true;
         if (offset == csselr) self.words[comptime slot(ccsidr).?] = self.selected(value & 1);
