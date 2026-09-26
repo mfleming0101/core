@@ -3098,6 +3098,70 @@ test "Secure software pends the Non-secure PendSV through the ICSR_NS alias, D1.
     try std.testing.expectEqual(@as(u32, 0), cpu.peek(4, 0xe000_ed04).? & 1 << 28);
 }
 
+test "ICSR.PENDNMICLR clears a pending NMI on Armv8-M, and Armv7-M reserves the bit, v8-M D1.2.126, v7-M B3.2.4" {
+    var m = loaded();
+    inline for (.{ .m23, .m33, .m4 }, .{ false, false, true }) |core, kept| {
+        var cpu = fast(core, &m);
+        cpu.reset();
+        _ = cpu.poke(4, 0xe000_ed04, 1 << 31);
+        try std.testing.expect(cpu.pending & Cpu.one(arm.nmi) != 0);
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed04, 1 << 30));
+        try std.testing.expectEqual(kept, cpu.pending & Cpu.one(arm.nmi) != 0);
+    }
+}
+
+test "Secure software pends an interrupt through STIR_NS and requests a reset through AIRCR_NS, since neither STIR nor SYSRESETREQ is banked, v8-M D1.2.239 D1.2.3" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    cpu.reset();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ef00, 3));
+    try std.testing.expectEqual(Cpu.one(arm.first_interrupt + 3), cpu.pending);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ef00));
+    const entry = cpu.state.pc;
+    _ = cpu.run(.{ .instructions = 2 });
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed0c, 0x05fa_0004));
+    _ = cpu.step();
+    try std.testing.expectEqual(entry, cpu.state.pc);
+    try std.testing.expectEqual(@as(Cpu.Set, 0), cpu.pending);
+}
+
+test "a Non-secure STIR write ignores an interrupt that targets Secure state, as NVIC_ISPR does, v8-M D1.2.239" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    cpu.reset();
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ef00, 3));
+    try std.testing.expectEqual(@as(Cpu.Set, 0), cpu.pending);
+    cpu.state.secure = true;
+    cpu.reguard();
+    _ = cpu.poke(4, 0xe000_e380, 1 << 3);
+    cpu.state.secure = false;
+    cpu.reguard();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ef00, 3));
+    try std.testing.expectEqual(Cpu.one(arm.first_interrupt + 3), cpu.pending);
+}
+
+test "a core without the Main Extension has no STIR to pend an interrupt through, and ARMv6-M reserves its address, v6-M D3.6.1, v8-M D1.2.239" {
+    var m = loaded();
+    inline for (.{ .m0, .m0plus, .m1, .m23 }) |core| {
+        var cpu = fast(core, &m);
+        cpu.reset();
+        const written = cpu.poke(4, 0xe000_ef00, 3);
+        if (core != .m23) try std.testing.expectEqual(@as(?void, null), written);
+        try std.testing.expectEqual(@as(Cpu.Set, 0), cpu.pending);
+    }
+}
+
+test "the M23 reads NSACR and CPPWR as zero and ignores writes, as v8-M makes them RES0 without the Main Extension, v8-M D1.2.181 D1.2.15" {
+    var m = loaded();
+    var cpu = fast(.m23, &m);
+    cpu.reset();
+    inline for (.{ 0xe000_ed8c, 0xe000_e00c }) |address| {
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, address, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, address));
+    }
+}
+
 test "ICSR_S.STTNS hands the one SysTick to the Non-secure exception instance, E2.1.123" {
     for ([_]u32{ 0, scb_block.sttns }) |side| {
         var m = placed(&.{ 0x1000, 0x41, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x101 }, &.{ 0x40, 0x100, 0x43c, 0x4c0 }, &.{

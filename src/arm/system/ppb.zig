@@ -17,6 +17,8 @@ const control_size: u32 = 0x10;
 pub const ictr: u32 = 0x04;
 /// The Auxiliary Control Register, at an offset from the control base.
 pub const actlr: u32 = 0x08;
+/// The Coprocessor Power Control Register, at an offset from the control base, RES0 on the M23 for want of the Main Extension.
+pub const cppwr: u32 = 0x0c;
 const scb = @import("scb.zig");
 const nvic = @import("nvic.zig");
 const dwt = @import("dwt.zig");

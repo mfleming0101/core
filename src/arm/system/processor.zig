@@ -1448,6 +1448,7 @@ pub fn Processor(comptime options: Options) type {
                 .control => return answered(into, switch (address - ppb.control_base) {
                     ppb.ictr => if (self.architecture() != .armv6m) (@as(u32, self.nvic.count) + 31) / 32 - 1 else 0,
                     ppb.actlr => 0,
+                    ppb.cppwr => if (self.architecture() == .armv8m_base) 0 else null,
                     else => null,
                 }),
                 .scb => switch (address - ppb.scb_base) {
@@ -1494,10 +1495,11 @@ pub fn Processor(comptime options: Options) type {
                 .dwt => self.dwt.writeRegister(address - ppb.dwt_base, value, self.cycles),
                 .control => switch (address - ppb.control_base) {
                     ppb.ictr, ppb.actlr => true,
+                    ppb.cppwr => self.architecture() == .armv8m_base,
                     else => false,
                 },
                 .scb => switch (address - ppb.scb_base) {
-                    scb_block.aircr => self.writeAircr(value),
+                    scb_block.aircr => self.writeAircr(self.scs(), value),
                     scb_block.icsr => self.writeIcsr(self.spec.security and !self.state.secure, value),
                     scb_block.shcsr => self.writeShcsr(self.spec.security and !self.state.secure, value),
                     scb_block.stir => self.trigger(value),
@@ -1508,8 +1510,10 @@ pub fn Processor(comptime options: Options) type {
                     else => |offset| self.scs().writeRegister(offset, value),
                 },
                 .scb_ns => self.spec.security and (!self.state.secure or switch (address - ppb.scb_base - ppb.alias) {
+                    scb_block.aircr => self.writeAircr(&self.scb_ns, value),
                     scb_block.icsr => self.writeIcsr(true, value),
                     scb_block.shcsr => self.writeShcsr(true, value),
+                    scb_block.stir => self.trigger(value),
                     mpu_block.first...mpu_block.last => |offset| self.reprogram(self.nonSecureMpu().?, offset - mpu_block.first, value),
                     scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => |offset| self.scb_ns.writeRegister(offset, value & self.nvic.lanes),
                     else => |offset| self.scb_ns.writeRegister(offset, value),
@@ -1579,8 +1583,12 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn trigger(self: *Self, value: u32) bool {
+            if (!self.architecture().main()) return false;
             const line = value & 0x1ff;
-            if (line < self.nvic.count) self.pending |= one(@intCast(first_interrupt + line));
+            if (line >= self.nvic.count) return true;
+            const n: Index = @intCast(first_interrupt + line);
+            if (self.spec.security and !self.state.secure and self.targetsSecure(n)) return true;
+            self.pending |= one(n);
             return true;
         }
 
@@ -1694,14 +1702,15 @@ pub fn Processor(comptime options: Options) type {
                 (if (self.nmiVisible(ns)) bit(self.pending, self.instance(nmi)) else 0) << 31;
         }
 
-        fn writeAircr(self: *Self, value: u32) bool {
+        fn writeAircr(self: *Self, block: *scb_block.Scb, value: u32) bool {
             if (value >> 16 == scb_block.vectkey and value & scb_block.sysresetreq != 0) self.due |= reset_due;
-            return self.scs().writeRegister(scb_block.aircr, value);
+            return block.writeRegister(scb_block.aircr, value);
         }
 
         fn writeIcsr(self: *Self, ns: bool, value: u32) bool {
             const side: Index = if (ns) ns_base else 0;
             if (value & 1 << 31 != 0 and self.nmiVisible(ns)) self.pending |= one(self.instance(nmi));
+            if (value & 1 << 30 != 0 and self.architecture().v8() and self.nmiVisible(ns)) self.pending &= ~one(self.instance(nmi));
             if (value & 1 << 28 != 0) self.pending |= one(pendsv + side);
             if (value & 1 << 27 != 0) self.pending &= ~one(pendsv + side);
             if (self.sysTickVisible(ns)) {

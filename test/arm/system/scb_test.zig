@@ -192,6 +192,20 @@ test "the M55 and M85 with caches read CLIDR with LoUIS, CTR in the Armv7 format
     }
 }
 
+test "CLIDR, CTR and CCSIDR ignore writes on every core that has them, with or without caches, v7-M B4.8.1 B4.8.2 B4.8.4, v8-M D1.2.10 D1.2.12 D1.2.18" {
+    inline for (.{ .m3, .m4, .m7, .m23, .m33, .m55, .m85 }) |core| {
+        inline for (.{ Part{}, Part{ .data = .kb32, .instruction = .kb32 } }) |part| {
+            var block = fitted(core, part);
+            inline for (.{ scb.clidr, scb.ctr, scb.ccsidr }) |offset| {
+                if (block.readRegister(offset)) |was| {
+                    try std.testing.expect(block.writeRegister(offset, ~was));
+                    try std.testing.expectEqual(was, block.readRegister(offset).?);
+                }
+            }
+        }
+    }
+}
+
 test "an M55 or M85 built without caches keeps the identification registers, with CLIDR, CTR and each CCSIDR reading zero and IC and DC held clear, M55 and M85 TRM 5.6 5.6.1 5.6.3, v8-M D1.2.9" {
     inline for (.{ .m55, .m85 }) |core| {
         var block = of(core);

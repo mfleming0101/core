@@ -53,6 +53,8 @@ pub const ccsidr: u32 = 0x80;
 pub const csselr: u32 = 0x84;
 /// CPACR, which enables the coprocessors.
 pub const cpacr: u32 = 0x88;
+/// NSACR, RES0 on the M23 for want of the Main Extension.
+pub const nsacr: u32 = 0x8c;
 /// Where the MPU registers begin within this window.
 pub const mpu_type: u32 = 0x90;
 /// Where the MPU registers end.
@@ -190,7 +192,7 @@ pub const secureflt_ena: u32 = 1 << 19;
 /// The DEMCR bit that runs the DWT.
 pub const trcena: u32 = 1 << 24;
 
-const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_level, cache_type } };
+const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_level, cache_type, baseline } };
 
 /// Every register the block holds, with the offset and the group that decides whether a core has it.
 pub const layout = [_]Slot{
@@ -222,6 +224,7 @@ pub const layout = [_]Slot{
     .{ .name = "CTR", .offset = ctr, .group = .cache_type },
     .{ .name = "CCSIDR", .offset = ccsidr, .group = .cache },
     .{ .name = "CSSELR", .offset = csselr, .group = .cache },
+    .{ .name = "NSACR", .offset = nsacr, .group = .baseline },
 };
 
 const absent: u8 = layout.len;
@@ -296,6 +299,7 @@ pub fn profileOf(comptime c: core.Core) Profile {
             .cache => spec.caches,
             .cache_level => spec.caches or spec.architecture.v8(),
             .cache_type => spec.architecture != .armv6m,
+            .baseline => spec.architecture == .armv8m_base,
         };
         if (!held) continue;
         const v = valuesOf(spec, slot);
@@ -408,7 +412,7 @@ pub const Scb = struct {
         const i = index(offset);
         if (i == absent or !self.has(i)) return self.answers(offset);
         if (offset == aircr and value >> 16 != vectkey) return true;
-        if (offset == clidr or offset == ccsidr) return true;
+        if (offset == clidr or offset == ccsidr or offset == ctr) return true;
         if (offset == csselr) self.words[comptime slot(ccsidr).?] = self.selected(value & 1);
         const mask = self.profile.write_mask[i] | (if (offset == ccr) self.enables() else 0);
         self.words[i] = if (clearedByWrite(offset)) self.words[i] & ~value else (value & mask) | (self.profile.reset[i] & ~mask);
