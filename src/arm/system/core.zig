@@ -50,7 +50,7 @@ pub const AhbpSize = enum(u3) { none, mb64, mb128, mb256, mb512 };
 /// The AHB peripheral interface as the part wires it: its size and the reset value of EN, in the bits of CM7_AHBPCR, M7 TRM 3.3.7.
 pub const Ahbp = packed struct { enabled: bool = false, size: AhbpSize = .none };
 
-/// What one part was built with that the M7 TRM leaves to it, Table 1-1: its level 1 caches, its TCMs, its AHBP and whether its caches carry ECC; a core that carries none ignores them.
+/// What one part was built with that its core's TRM leaves to it: the M7 level 1 caches, TCMs, AHBP and ECC of M7 TRM Table 1-1, and the MPU region counts; a core that carries none ignores them, and a count left null is the core's default.
 pub const Part = struct {
     data: CacheSize = .none,
     instruction: CacheSize = .none,
@@ -58,7 +58,49 @@ pub const Part = struct {
     dtcm: Tcm = .{},
     ahbp: Ahbp = .{},
     ecc: bool = false,
+    mpu_regions: ?u8 = null,
+    mpu_ns_regions: ?u8 = null,
 };
+
+/// The values a part may choose for one option, as its TRM lists them.
+pub const Choice = union(enum) {
+    only: []const u16,
+
+    /// The most a part may choose.
+    pub fn most(self: Choice) u16 {
+        return switch (self) {
+            .only => |values| values[values.len - 1],
+        };
+    }
+
+    /// A part's value lowered to the nearest value listed, the least where none is below it.
+    pub fn fit(self: Choice, value: u16) u16 {
+        switch (self) {
+            .only => |values| {
+                var out = values[0];
+                for (values) |v| {
+                    if (v <= value) out = v;
+                }
+                return out;
+            },
+        }
+    }
+};
+
+/// What a part of one core may choose, each from its TRM's configuration options.
+pub const Choices = struct { mpu_regions: Choice, mpu_ns_regions: Choice };
+
+/// The choices of a core: no MPU on the M0, M0 TRM Table 1-1, or the M1, M1 TRM Table 1-1; none or eight regions on the M0+, M0+ TRM Table 1-1, and the M3 and M4, M3 and M4 TRM 1.4 2.2; none, eight or sixteen on the M7, M7 TRM Table 1-1; and none to sixteen in fours for each Security state on the M23, M23 TRM Table 1-1, the M33, M33 TRM 1.3, and the M55 and M85, M55 and M85 TRM Table 3-4.
+pub fn choicesOf(comptime core: Core) Choices {
+    const none: Choice = .{ .only = &.{0} };
+    const fours: Choice = .{ .only = &.{ 0, 4, 8, 12, 16 } };
+    return switch (core) {
+        .m0, .m1 => .{ .mpu_regions = none, .mpu_ns_regions = none },
+        .m0plus, .m3, .m4 => .{ .mpu_regions = .{ .only = &.{ 0, 8 } }, .mpu_ns_regions = none },
+        .m7 => .{ .mpu_regions = .{ .only = &.{ 0, 8, 16 } }, .mpu_ns_regions = none },
+        .m23, .m33, .m55, .m85 => .{ .mpu_regions = fours, .mpu_ns_regions = fours },
+    };
+}
 
 /// The spec of a core, each entry read off its Technical Reference Manual: the cycle tables from its instruction set summary, M4 TRM 3.3, and the entry and exit cycles from its interrupt latency, M4 TRM 3.9.2.
 pub fn spec(comptime core: Core) Spec {

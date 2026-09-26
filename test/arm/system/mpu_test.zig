@@ -1,24 +1,25 @@
 const std = @import("std");
 const mpu = @import("../../../src/arm/system/mpu.zig");
+const Unit = mpu.Mpu(8);
 
-fn v8() mpu.Mpu {
-    return .init(true, true, false);
+fn v8() Unit {
+    return .init(8, true, false);
 }
 
-fn v81() mpu.Mpu {
-    return .init(true, true, true);
+fn v81() Unit {
+    return .init(8, true, true);
 }
 
-fn v7() mpu.Mpu {
-    return .init(true, false, false);
+fn v7() Unit {
+    return .init(8, false, false);
 }
 
 test "MPU_TYPE names the regions the core has, and a core without one reads zero and ignores writes, D1.2.176" {
     var block = v8();
-    try std.testing.expectEqual(@as(u32, @as(u32, mpu.regions) << 8), block.readRegister(mpu.mpu_type).?);
+    try std.testing.expectEqual(@as(u32, 8 << 8), block.readRegister(mpu.mpu_type).?);
     try std.testing.expect(block.writeRegister(mpu.mpu_type, 0xffff_ffff));
-    try std.testing.expectEqual(@as(u32, @as(u32, mpu.regions) << 8), block.readRegister(mpu.mpu_type).?);
-    var absent: mpu.Mpu = .init(false, true, false);
+    try std.testing.expectEqual(@as(u32, 8 << 8), block.readRegister(mpu.mpu_type).?);
+    var absent: Unit = .init(0, true, false);
     var offset = mpu.mpu_type;
     while (offset <= mpu.last) : (offset += 4) {
         try std.testing.expectEqual(@as(u32, 0), absent.readRegister(offset).?);
@@ -26,6 +27,21 @@ test "MPU_TYPE names the regions the core has, and a core without one reads zero
     }
     try std.testing.expectEqual(@as(?u32, null), absent.readRegister(mpu.last + 4));
     try std.testing.expectEqual(@as(?u32, null), block.readRegister(mpu.ctrl + 2));
+}
+
+test "a part with fewer regions than the unit holds names its own count in MPU_TYPE, and the regions beyond it never match, D1.2.176 B10.1" {
+    var block: mpu.Mpu(16) = .init(12, true, false);
+    try std.testing.expectEqual(@as(u32, 12 << 8), block.readRegister(mpu.mpu_type).?);
+    try std.testing.expect(block.writeRegister(mpu.rnr, 0xff));
+    try std.testing.expectEqual(@as(u32, 15), block.readRegister(mpu.rnr).?);
+    try std.testing.expect(block.writeRegister(mpu.rnr, 12));
+    try std.testing.expect(block.writeRegister(mpu.rbar, 0x2000_0000));
+    try std.testing.expect(block.writeRegister(mpu.rlar, 0x2000_ffe1));
+    try std.testing.expect(!block.permits(0x2000_0000, true, .read));
+    try std.testing.expect(block.writeRegister(mpu.rnr, 11));
+    try std.testing.expect(block.writeRegister(mpu.rbar, 0x2000_0000));
+    try std.testing.expect(block.writeRegister(mpu.rlar, 0x2000_ffe1));
+    try std.testing.expect(block.permits(0x2000_0000, true, .read));
 }
 
 test "MPU_CTRL keeps only the three bits it defines, D1.2.168" {
@@ -95,7 +111,7 @@ test "the memory attribute indirection registers belong to PMSAv8 alone, D1.2.16
     try std.testing.expectEqual(@as(u32, 0), seven.readRegister(mpu.mair0).?);
 }
 
-fn region(block: *mpu.Mpu, n: u32, base: u32, limit: u32, attributes: u32) void {
+fn region(block: *Unit, n: u32, base: u32, limit: u32, attributes: u32) void {
     _ = block.writeRegister(mpu.rnr, n);
     _ = block.writeRegister(mpu.rbar, base | attributes);
     _ = block.writeRegister(mpu.rlar, limit | mpu.region_enable);
@@ -172,7 +188,7 @@ test "a disabled region covers nothing, D1.2.173" {
     try std.testing.expect(block.permits(0x2000_0000, true, .read));
 }
 
-fn sized(block: *mpu.Mpu, n: u32, base: u32, power: u32, attributes: u32) void {
+fn sized(block: *Unit, n: u32, base: u32, power: u32, attributes: u32) void {
     _ = block.writeRegister(mpu.rnr, n);
     _ = block.writeRegister(mpu.rbar, base);
     _ = block.writeRegister(mpu.rlar, attributes | (power << mpu.size_shift) | mpu.region_enable);

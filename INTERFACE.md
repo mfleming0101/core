@@ -67,7 +67,9 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
   first. On RISC-V the PC is the part's reset address.
 - On Arm, `init` also takes the part after the core: what the part was built with, which the
   core leaves to it. That is the cache sizes, and on the M7 also the TCM and AHBP sizes and
-  reset enables and whether the caches carry ECC. An M7 given
+  reset enables and whether the caches carry ECC. It is also the MPU region count of each
+  Security state, `mpu_regions` and `mpu_ns_regions`, lowered to a count the core's TRM lists;
+  left null, the core keeps its default of 8, or none on the M0 and M1. An M7 given
   `.{ .data = .kb32, .instruction = .kb32, .itcm = .{ .size = .kb64, .enabled = true } }`
   reports those, `.{}` is a part with none of them, and a core without the registers a field
   sets ignores that field.
@@ -299,7 +301,7 @@ if (Cpu.semihosting.trapped(&cpu)) {
 | | Arm | RISC-V |
 |---|---|---|
 | Exceptions | NVIC with priorities, grouping, banking and the Security Extension; SysTick; SVCall and PendSV; faults through CFSR and friends | Machine-mode traps through `mtvec`; the interrupt matrix routes sources to interrupts with priorities and a threshold |
-| Protection | MPU with 8 regions per security state; SAU with 8 regions | PMP with 16 entries |
+| Protection | MPU with the part's regions per security state, 8 by default; SAU with 8 regions | PMP with 16 entries |
 | Private registers | The private peripheral bus at `0xE000_0000`: SysTick, NVIC, SCB, MPU, SAU, DWT | The interrupt matrix and controller windows of the part |
 | `Run.latency` | Present | Absent |
 | Sleep | `WFI` and `WFE`, with `SEV` and the event register | `WFI` |

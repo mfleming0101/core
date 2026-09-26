@@ -527,6 +527,28 @@ test "only the M7 answers 0xE000EF90 to 0xE000EFBC, the M7 refusing the words Ta
     try std.testing.expect(@FieldType(arm.Processor(.{ .cores = &.{.m4}, .Bus = Memory }), "m7") == void);
 }
 
+test "MPU_TYPE reads the region count each part was built with, lowered to one its core's TRM lists, per Security state, and kept through a reset, M7 TRM Table 1-1, M4 TRM 1.4 2.2, M0 TRM Table 1-1, M23 TRM Table 1-1, v8-M D1.2.176" {
+    var m = loaded();
+    const cases = [_]struct { core: arm.Core, part: arm.Part, secure: u32, non_secure: ?u32 }{
+        .{ .core = .m7, .part = .{}, .secure = 8, .non_secure = null },
+        .{ .core = .m7, .part = .{ .mpu_regions = 16 }, .secure = 16, .non_secure = null },
+        .{ .core = .m7, .part = .{ .mpu_regions = 12 }, .secure = 8, .non_secure = null },
+        .{ .core = .m7, .part = .{ .mpu_regions = 0 }, .secure = 0, .non_secure = null },
+        .{ .core = .m4, .part = .{ .mpu_regions = 16 }, .secure = 8, .non_secure = null },
+        .{ .core = .m0, .part = .{ .mpu_regions = 8 }, .secure = 0, .non_secure = null },
+        .{ .core = .m23, .part = .{}, .secure = 8, .non_secure = 8 },
+        .{ .core = .m23, .part = .{ .mpu_regions = 4, .mpu_ns_regions = 12 }, .secure = 4, .non_secure = 12 },
+    };
+    for (cases) |case| {
+        var cpu = Cpu.init(&m, case.core, case.part, .{});
+        for (0..2) |_| {
+            try std.testing.expectEqual(@as(?u32, case.secure << 8), cpu.peek(4, 0xe000_ed90));
+            if (case.non_secure) |count| try std.testing.expectEqual(@as(?u32, count << 8), cpu.peek(4, 0xe002_ed90));
+            cpu.reset();
+        }
+    }
+}
+
 test "the M55 and M85 bank CSSELR, CCSIDR and CCR IC and DC between the Security states and read one CLIDR, CTR and maintenance range through either, M55 and M85 TRM 5.6.1 5.6.2 5.6.3 6.5, v8-M D1.2.12 D1.2.18 D1.1.29" {
     var m = loaded();
     inline for (.{ .m55, .m85 }) |core| {

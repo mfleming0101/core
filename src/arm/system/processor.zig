@@ -161,6 +161,19 @@ pub fn Processor(comptime options: Options) type {
         break :blk out;
     };
     const M7 = if (std.mem.indexOfScalar(core.Core, options.cores, .m7) != null) m7_block.Control else void;
+    const choices = blk: {
+        var out: [options.cores.len]core.Choices = undefined;
+        for (options.cores, 0..) |c, i| out[i] = core.choicesOf(c);
+        break :blk out;
+    };
+    const Mpu = blk: {
+        var most: u16 = 0;
+        for (choices) |c| most = @max(most, c.mpu_regions.most(), c.mpu_ns_regions.most());
+        break :blk mpu_block.Mpu(@intCast(most));
+    };
+    const MpuNs = for (choices) |c| {
+        if (c.mpu_ns_regions.most() != 0) break Mpu;
+    } else void;
     return struct {
         const Self = @This();
 
@@ -214,8 +227,8 @@ pub fn Processor(comptime options: Options) type {
         dwt: dwt_block.Dwt,
         sau: sau_block.Sau,
         m7: M7,
-        mpu: mpu_block.Mpu,
-        mpu_ns: mpu_block.Mpu,
+        mpu: Mpu,
+        mpu_ns: MpuNs,
         banked: State.Banked,
         itns: nvic_block.Lines,
         flags: Flags,
@@ -268,8 +281,8 @@ pub fn Processor(comptime options: Options) type {
                 .dwt = .init(spec.architecture.main()),
                 .sau = .init(spec.security, spec.architecture.main()),
                 .m7 = if (M7 == void) {} else .init(part),
-                .mpu = .init(spec.mpu_regions != 0, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
-                .mpu_ns = .init(spec.mpu_regions != 0 and spec.security, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
+                .mpu = .init(@intCast(if (part.mpu_regions) |n| choices[at].mpu_regions.fit(n) else spec.mpu_regions), spec.architecture.v8(), spec.architecture == .armv8_1m_main),
+                .mpu_ns = if (MpuNs == void) {} else .init(@intCast(if (part.mpu_ns_regions) |n| choices[at].mpu_ns_regions.fit(n) else if (spec.security) spec.mpu_regions else 0), spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .banked = .{},
                 .itns = 0,
                 .flags = .{},
@@ -362,7 +375,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn built(self: *const Self) core.Part {
-            var out: core.Part = .{ .data = self.scb.data, .instruction = self.scb.instruction };
+            var out: core.Part = .{ .data = self.scb.data, .instruction = self.scb.instruction, .mpu_regions = self.mpu.count, .mpu_ns_regions = if (MpuNs == void) 0 else self.mpu_ns.count };
             if (M7 != void) self.m7.wiring(&out);
             return out;
         }
@@ -615,9 +628,13 @@ pub fn Processor(comptime options: Options) type {
         }
 
         /// The MPU of a security state, or the only one where the core has no Security Extension.
-        pub fn mpuOf(self: *Self, secure: bool) *mpu_block.Mpu {
-            if (!self.spec.security) return &self.mpu;
-            return if (secure) &self.mpu else &self.mpu_ns;
+        pub fn mpuOf(self: *Self, secure: bool) *Mpu {
+            if (secure or !self.spec.security) return &self.mpu;
+            return self.nonSecureMpu().?;
+        }
+
+        fn nonSecureMpu(self: *Self) ?*Mpu {
+            return if (MpuNs == void) null else &self.mpu_ns;
         }
 
         fn m7Control(self: *Self) ?*m7_block.Control {
@@ -1096,7 +1113,7 @@ pub fn Processor(comptime options: Options) type {
             return self.state.faultmask or self.banked.faultmask or self.active & negative_priority != 0;
         }
 
-        fn guards(self: *Self, address: u32, secure: bool) ?*mpu_block.Mpu {
+        fn guards(self: *Self, address: u32, secure: bool) ?*Mpu {
             const unit = self.mpuOf(secure);
             if (!unit.enabled() or ppb.region(address) != .memory) return null;
             if (unit.control & mpu_block.hfnmiena == 0 and self.mayRunNegative() and self.executionPriority() < 0) return null;
@@ -1116,7 +1133,7 @@ pub fn Processor(comptime options: Options) type {
         pub noinline fn reguard(self: *Self) void {
             const was = self.protection;
             const stood = self.guarding;
-            self.protection = self.mpu.enabled() or self.mpu_ns.enabled();
+            self.protection = self.mpu.enabled() or (if (self.nonSecureMpu()) |unit| unit.enabled() else false);
             self.unguarded = self.guardless();
             self.guarding = self.regard();
             if (was != self.protection or stood != self.guarding or self.spec.security) self.memory.folded.unfold();
@@ -1227,8 +1244,8 @@ pub fn Processor(comptime options: Options) type {
             return unit.permits(address, self.guarding & guard_privileged != 0, kind);
         }
 
-        fn bound(unit: *const mpu_block.Mpu, address: u32, low: *u64, high: *u64) void {
-            for (0..mpu_block.regions) |i| {
+        fn bound(unit: *const Mpu, address: u32, low: *u64, high: *u64) void {
+            for (0..unit.count) |i| {
                 const attributes = unit.limit[i];
                 if (attributes & mpu_block.region_enable == 0) continue;
                 const power: u5 = @intCast((attributes >> mpu_block.size_shift) & 0x1f);
@@ -1414,7 +1431,7 @@ pub fn Processor(comptime options: Options) type {
                     return answered(into, switch (address - ppb.scb_base - ppb.alias) {
                         scb_block.icsr => self.readIcsr(true),
                         scb_block.shcsr => self.readShcsr(true),
-                        mpu_block.first...mpu_block.last => |offset| self.mpu_ns.readRegister(offset - mpu_block.first),
+                        mpu_block.first...mpu_block.last => |offset| self.nonSecureMpu().?.readRegister(offset - mpu_block.first),
                         else => |offset| self.scb_ns.readRegister(offset),
                     });
                 },
@@ -1459,7 +1476,7 @@ pub fn Processor(comptime options: Options) type {
                 .scb_ns => self.spec.security and (!self.state.secure or switch (address - ppb.scb_base - ppb.alias) {
                     scb_block.icsr => self.writeIcsr(true, value),
                     scb_block.shcsr => self.writeShcsr(true, value),
-                    mpu_block.first...mpu_block.last => |offset| self.reprogram(&self.mpu_ns, offset - mpu_block.first, value),
+                    mpu_block.first...mpu_block.last => |offset| self.reprogram(self.nonSecureMpu().?, offset - mpu_block.first, value),
                     else => |offset| self.scb_ns.writeRegister(offset, value),
                 }),
                 .nvic => self.writeNvic(address - ppb.nvic_base, value),
@@ -1468,7 +1485,7 @@ pub fn Processor(comptime options: Options) type {
             return if (written) {} else null;
         }
 
-        fn reprogram(self: *Self, unit: *mpu_block.Mpu, offset: u32, value: u32) bool {
+        fn reprogram(self: *Self, unit: *Mpu, offset: u32, value: u32) bool {
             defer if (offset != mpu_block.rnr) self.memory.folded.unfold();
             return unit.writeRegister(offset, value);
         }
