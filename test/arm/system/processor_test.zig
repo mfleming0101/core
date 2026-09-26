@@ -2286,13 +2286,11 @@ test "a line number STIR cannot reach leaves the pending set alone, B3.2.26" {
     try std.testing.expectEqual(@as(u64, 0), cpu.pending);
 }
 
-test "ICTR reports the 240 lines the NVIC implements in groups of 32 and ACTLR answers a read instead of taking a BusFault, B3.2.24 B3.2.25" {
+test "ICTR reports the 240 lines the NVIC implements in groups of 32, ACTLR resets to zero, and the M4 has no CPPWR, B3.2.24 B3.2.25, M4 TRM Table 4-1" {
     var m: Memory = .{};
     var cpu = fast(.m4, &m);
     cpu.reset();
     try std.testing.expectEqual(@as(?u32, 7), cpu.peek(4, 0xe000_e004));
-    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e008));
-    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e008, 7));
     try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e008));
     try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe000_e00c));
 }
@@ -3704,9 +3702,10 @@ fn nsacrImage() Memory {
     return placed(&.{ 0xc00, 0x41, 0, 0, 0, 0, 0x801 }, &.{ 0x40, 0x800 }, &.{ &.{ 0xee30, 0x0a00, 0xbe00 }, &.{0xbe00} });
 }
 
-fn floatingNonSecure(cpu: *Cpu, nsacr: u32) !void {
+fn floatingNonSecure(cpu: *Cpu, nsacr: u32, cppwr: u32) !void {
     cpu.reset();
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed8c, nsacr));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e00c, cppwr));
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed24, scb_block.usgfaultena));
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed88, 0x00f0_0000));
     nonSecure(cpu);
@@ -3721,7 +3720,7 @@ test "NSACR is Secure only, RAZ/WI to the Non-secure state and through the alias
     try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe002_ed8c));
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed8c, 0));
     try std.testing.expectEqual(@as(?u32, 0xc00), cpu.peek(4, 0xe000_ed8c));
-    try floatingNonSecure(&cpu, 0);
+    try floatingNonSecure(&cpu, 0, 0);
     try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_ed8c));
     try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed8c, 0xc00));
     try std.testing.expectEqual(@as(u32, 0), cpu.scb.get(scb_block.nsacr));
@@ -3730,7 +3729,7 @@ test "NSACR is Secure only, RAZ/WI to the Non-secure state and through the alias
     try std.testing.expectEqual(@as(u32, 6), cpu.state.xpsr & State.ipsr_mask);
     try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
     try std.testing.expectEqual(@as(u32, 0), cpu.scb_ns.get(scb_block.cfsr));
-    try floatingNonSecure(&cpu, 0xc00);
+    try floatingNonSecure(&cpu, 0xc00, 0);
     try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
     try std.testing.expect(!cpu.state.secure);
     try std.testing.expectEqual(@as(u32, 0x44), cpu.state.pc);
@@ -3868,4 +3867,70 @@ test "SYST_CALIB reads the SKEW and TENMS the part gives through a reset, droppi
     try std.testing.expectEqual(@as(?u32, 0x4), cpu.peek(4, 0xe000_e010));
     var zero = fast(.m0, &m);
     try std.testing.expectEqual(@as(?u32, 0x8000_0000), zero.peek(4, 0xe000_e01c));
+}
+
+test "ACTLR keeps the bits each TRM lists, M3 and M4 TRM 4.2, M7 TRM 3.3.1, M23 TRM 5.2.1, M33 TRM 3.4, M55 and M85 TRM 5.9" {
+    var m = loaded();
+    inline for (.{ .m0, .m0plus, .m1, .m3, .m4, .m7, .m23, .m33, .m55, .m85 }, .{ 0, 0, 0, 0x207, 0x207, 0x1fff_ec04, 0x2000_0000, 0x2000_3605, 0x0803_fcfc, 0x0800_fc00 }) |core, kept| {
+        var cpu = fast(core, &m);
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e008, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, kept), cpu.peek(4, 0xe000_e008));
+        cpu.reset();
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e008));
+    }
+}
+
+test "ACTLR is banked on the M33, while the M55 keeps one EVENTBUSEN that its Secure-only EVENTBUSEN_S locks, M33 TRM 3.4, M55 TRM Table 5-13" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e008, 0x2000_0000));
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e008));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e008, 1));
+    try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe000_e008));
+    try std.testing.expectEqual(@as(u32, 0x2000_0000), cpu.icb.actlr[0]);
+    var m55 = fast(.m55, &m);
+    try std.testing.expectEqual(@as(?void, {}), m55.poke(4, 0xe000_e008, 1 << 14));
+    nonSecure(&m55);
+    try std.testing.expectEqual(@as(?u32, 1 << 14), m55.peek(4, 0xe000_e008));
+    try std.testing.expectEqual(@as(?void, {}), m55.poke(4, 0xe000_e008, 1 << 13));
+    try std.testing.expectEqual(@as(?u32, 0), m55.peek(4, 0xe000_e008));
+    m55.state.secure = true;
+    m55.reguard();
+    try std.testing.expectEqual(@as(?u32, 0), m55.peek(4, 0xe000_e008));
+    try std.testing.expectEqual(@as(?void, {}), m55.poke(4, 0xe000_e008, 3 << 13));
+    m55.state.secure = false;
+    m55.reguard();
+    try std.testing.expectEqual(@as(?void, {}), m55.poke(4, 0xe000_e008, 0));
+    try std.testing.expectEqual(@as(?u32, 0), m55.peek(4, 0xe000_e008));
+    try std.testing.expectEqual(@as(u32, 3 << 13), m55.icb.actlr[0]);
+}
+
+test "CPPWR keeps SU10 and SU11 once for both Security states, SUS10 and SUS11 Secure only and SUS10 locking both from the Non-secure state, v8-M D1.2.15" {
+    var m = loaded();
+    var cpu = fast(.m33, &m);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e00c, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?u32, 0x00f0_0000), cpu.peek(4, 0xe000_e00c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e00c, 0x0050_0000));
+    nonSecure(&cpu);
+    try std.testing.expectEqual(@as(?u32, 0x0050_0000), cpu.peek(4, 0xe000_e00c));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e00c, 0x00a0_0000));
+    try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e00c));
+    try std.testing.expectEqual(@as(u32, 0), cpu.icb.cppwr);
+}
+
+test "CPPWR.SU10 leaves the floating-point unit unusable, its NOCP UsageFault taken where the code runs, or in the Secure state under SUS10, v8-M IsCPEnabled RDXYK" {
+    var m = nsacrImage();
+    var cpu = fast(.m33, &m);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed88, 0x00f0_0000));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed24, scb_block.usgfaultena));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e00c, 0x0010_0000));
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+    try std.testing.expectEqual(@as(u32, 6), cpu.state.xpsr & State.ipsr_mask);
+    try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
+    try floatingNonSecure(&cpu, 0xc00, 0x0030_0000);
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+    try std.testing.expect(cpu.state.secure);
+    try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
+    try std.testing.expectEqual(@as(u32, 0), cpu.scb_ns.get(scb_block.cfsr));
 }

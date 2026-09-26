@@ -10,15 +10,11 @@ pub const ppb_end: u32 = 0xe010_0000;
 /// Where the system timer registers sit.
 pub const systick_base: u32 = 0xe000_e010;
 const systick_size: u32 = 0x10;
-/// Where ICTR and ACTLR sit, below the system timer.
+/// Where ICTR, ACTLR and CPPWR sit, below the system timer.
 pub const control_base: u32 = 0xe000_e000;
 const control_size: u32 = 0x10;
 /// The Interrupt Controller Type Register, at an offset from the control base.
 pub const ictr: u32 = 0x04;
-/// The Auxiliary Control Register, at an offset from the control base.
-pub const actlr: u32 = 0x08;
-/// The Coprocessor Power Control Register, at an offset from the control base, RES0 on the M23 for want of the Main Extension.
-pub const cppwr: u32 = 0x0c;
 const scb = @import("scb.zig");
 const nvic = @import("nvic.zig");
 const dwt = @import("dwt.zig");

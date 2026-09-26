@@ -21,6 +21,7 @@ const nvic_block = @import("nvic.zig");
 const dwt_block = @import("dwt.zig");
 const sau_block = @import("sau.zig");
 const m7_block = @import("m7.zig");
+const icb_block = @import("icb.zig");
 const mpu_block = @import("mpu.zig");
 const trace = @import("../trace.zig");
 const regions = @import("../../memory/regions.zig");
@@ -202,7 +203,7 @@ pub fn Processor(comptime options: Options) type {
             escalated: bool = false,
             event: bool = false,
             for_event: bool = false,
-            refused_by_nsacr: bool = false,
+            nocp_secure: bool = false,
             _: u3 = 0,
         };
 
@@ -232,6 +233,7 @@ pub fn Processor(comptime options: Options) type {
         systick: SysTick,
         scb: scb_block.Scb,
         scb_ns: scb_block.Scb,
+        icb: icb_block.Icb,
         nvic: Nvic,
         dwt: dwt_block.Dwt,
         sau: sau_block.Sau,
@@ -303,6 +305,7 @@ pub fn Processor(comptime options: Options) type {
                 .systick = .{ .calibration = SysTick.noref | (part.calibration & SysTick.calibrated) },
                 .scb = .init(&profiles[at], part, part.vtor),
                 .scb_ns = .init(&profiles[at], part, part.vtor_ns),
+                .icb = .{},
                 .nvic = .init(part.priority_bits.?, part.interrupts.?),
                 .dwt = .init(spec.architecture.main()),
                 .sau = .init(spec.security, spec.architecture.main(), part.sau_regions.?),
@@ -556,8 +559,8 @@ pub fn Processor(comptime options: Options) type {
             }
             const kind = self.override orelse stop;
             self.override = null;
-            defer self.flags.refused_by_nsacr = false;
-            self.scbOf(self.state.secure or self.flags.refused_by_nsacr).fault(kind, self.last_access);
+            defer self.flags.nocp_secure = false;
+            self.scbOf(self.state.secure or self.flags.nocp_secure).fault(kind, self.last_access);
             return self.escalated(kind);
         }
 
@@ -694,7 +697,7 @@ pub fn Processor(comptime options: Options) type {
                 .undefined_instruction, .not_t32_state, .unaligned_access, .divide_by_zero, .no_coprocessor, .authentication_failure, .not_branch_target, .tail_predication, .exception_return => .{ usage_fault, scb_block.usgfaultena },
                 else => return null,
             };
-            const i = if (self.flags.refused_by_nsacr) n else self.instance(n);
+            const i = if (self.flags.nocp_secure) n else self.instance(n);
             if (self.scbOf(!self.spec.security or i < ns_base).get(scb_block.shcsr) & enable == 0) return null;
             if (self.priority(i) >= self.executionPriority()) return null;
             return i;
@@ -1104,11 +1107,19 @@ pub fn Processor(comptime options: Options) type {
             self.restand();
         }
 
-        /// Whether CPACR, and NSACR for Non-secure code, let this code reach the floating-point coprocessor; a refusal by NSACR marks the NOCP UsageFault for the Secure state, v8-M RDXYK and IsCPEnabled.
+        /// Whether CPACR, NSACR for Non-secure code, and CPPWR.SU10 let this code reach the floating-point coprocessor; a refusal by NSACR, or by SU10 under SUS10, marks the NOCP UsageFault for the Secure state, v8-M RDXYK and IsCPEnabled.
         pub fn coprocessorEnabled(self: *Self) bool {
             if (!self.architecture().main() or self.scs().get(scb_block.cpacr) & scb_block.cp10 == 0) return false;
-            if (self.state.secure or !self.spec.security or self.scb.get(scb_block.nsacr) & scb_block.nsacr_cp10 != 0) return true;
-            self.flags.refused_by_nsacr = true;
+            return !self.spec.security or self.securityPermits();
+        }
+
+        fn securityPermits(self: *Self) bool {
+            if (!self.state.secure and self.scb.get(scb_block.nsacr) & scb_block.nsacr_cp10 == 0) {
+                self.flags.nocp_secure = true;
+                return false;
+            }
+            if (self.icb.cppwr & icb_block.su10 == 0) return true;
+            self.flags.nocp_secure = self.icb.cppwr & icb_block.sus10 != 0;
             return false;
         }
 
@@ -1459,8 +1470,8 @@ pub fn Processor(comptime options: Options) type {
                 .dwt => return answered(into, self.dwt.readRegister(address - ppb.dwt_base, self.cycles)),
                 .control => return answered(into, switch (address - ppb.control_base) {
                     ppb.ictr => if (self.architecture() != .armv6m) (@as(u32, self.nvic.count) + 31) / 32 - 1 else 0,
-                    ppb.actlr => 0,
-                    ppb.cppwr => if (self.architecture() == .armv8m_base) 0 else null,
+                    icb_block.actlr => self.icb.readRegister(self.spec.core, icb_block.actlr, self.spec.security and !self.state.secure),
+                    icb_block.cppwr => if (self.architecture().v8()) self.icb.readRegister(self.spec.core, icb_block.cppwr, self.spec.security and !self.state.secure) else null,
                     else => null,
                 }),
                 .scb => switch (address - ppb.scb_base) {
@@ -1517,8 +1528,12 @@ pub fn Processor(comptime options: Options) type {
                 .itm => true,
                 .dwt => self.dwt.writeRegister(address - ppb.dwt_base, value, self.cycles),
                 .control => switch (address - ppb.control_base) {
-                    ppb.ictr, ppb.actlr => true,
-                    ppb.cppwr => self.architecture() == .armv8m_base,
+                    ppb.ictr => true,
+                    icb_block.actlr, icb_block.cppwr => |offset| blk: {
+                        if (offset == icb_block.cppwr and !self.architecture().v8()) break :blk false;
+                        self.icb.writeRegister(self.spec.core, offset, self.spec.security and !self.state.secure, value);
+                        break :blk true;
+                    },
                     else => false,
                 },
                 .scb => switch (address - ppb.scb_base) {
