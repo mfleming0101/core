@@ -3,6 +3,7 @@
 //! are not here, because the processor keeps one set over exception numbers rather than
 //! lines, and answers NVIC_ISPR, NVIC_ICPR and NVIC_IABR out of it. A line is an IRQ number,
 //! sixteen below the exception number it takes.
+const std = @import("std");
 const regions = @import("../../memory/regions.zig");
 
 /// Where the NVIC registers begin.
@@ -53,17 +54,35 @@ pub const Nvic = struct {
     const Self = @This();
 
     lanes: u32,
+    count: u16,
     enabled: Lines = 0,
     priorities: [lines / 4]u32 = @splat(0),
 
-    /// An NVIC whose priority words keep only the bits the core implements.
-    pub fn init(priority_bits: u4) Self {
-        return .{ .lanes = lanesOf(priority_bits) };
+    /// An NVIC whose priority words keep only the bits the part implements, over the lines below count.
+    pub fn init(priority_bits: u4, count: u16) Self {
+        return .{ .lanes = lanesOf(priority_bits), .count = count };
     }
 
-    /// Clears every enable and priority, keeping the core's priority width.
+    /// Clears every enable and priority, keeping the part's priority width and lines.
     pub fn reset(self: *Self) void {
-        self.* = .{ .lanes = self.lanes };
+        self.* = .{ .lanes = self.lanes, .count = self.count };
+    }
+
+    /// The lines the part implements.
+    pub fn present(self: *const Self) Lines {
+        return std.math.shr(Lines, ~@as(Lines, 0), lines - self.count);
+    }
+
+    /// The bits of the register at an offset that belong to implemented lines, the rest reserved, v7-M B3.4.2, v8-M B12.2 RSGCR.
+    pub fn implemented(self: *const Self, offset: u32) u32 {
+        return switch (offset) {
+            iser...ipr - 1 => if (offset % 0x80 <= bank) wordOf(self.present(), (offset % 0x80) / 4) else 0,
+            ipr...ipr + 0xfc => {
+                const kept: u32 = @min(@as(u32, self.count) -| (offset - ipr), 4);
+                return std.math.shr(u32, 0xffff_ffff, 8 * (4 - kept));
+            },
+            else => 0xffff_ffff,
+        };
     }
 
     /// The priority byte of one line.

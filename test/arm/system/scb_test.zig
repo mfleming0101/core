@@ -42,12 +42,12 @@ test "every implemented register of the System Control Block resets and masks as
     }
 }
 
-test "the priority bytes of SHPR1, SHPR2 and SHPR3 keep only the implemented high bits of the core, v6-M B3.2.9 B3.2.10, v7-M B3.2.10 B3.2.11 B3.2.12" {
-    inline for (.{ .m0plus, .m4 }, .{ 0xc000_0000, 0xf000_0000 }, .{ 0xc0c0_0000, 0xf0f0_00f0 }) |core, mask2, mask3| {
+test "the priority bytes of SHPR1, SHPR2 and SHPR3 keep the high bits of the widest priority the core's parts may have, which the processor narrows to the part's, v6-M B3.2.9 B3.2.10, v7-M B3.2.10 B3.2.11 B3.2.12, M4 TRM 2.2" {
+    inline for (.{ .m0plus, .m4 }, .{ 0xc000_0000, 0xff00_0000 }, .{ 0xc0c0_0000, 0xffff_00ff }) |core, mask2, mask3| {
         try std.testing.expectEqual(@as(u32, mask2), find(core, "SHPR2").write_mask);
         try std.testing.expectEqual(@as(u32, mask3), find(core, "SHPR3").write_mask);
     }
-    try std.testing.expectEqual(@as(u32, 0x00f0_f0f0), find(.m4, "SHPR1").write_mask);
+    try std.testing.expectEqual(@as(u32, 0x00ff_ffff), find(.m4, "SHPR1").write_mask);
 }
 
 test "CPUID reads the part number of the core and ignores writes, v6-M and v7-M B3.2.3, v8-M D1.2.16" {

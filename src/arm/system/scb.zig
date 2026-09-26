@@ -248,7 +248,7 @@ const instruction_ccsidr = [_]u32{ 0, 0xf007_e009, 0xf00f_e009, 0xf01f_e009, 0xf
 
 fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, write_mask: u32 } {
     const main = spec.architecture.main();
-    const lane: u32 = (0xff << (8 - spec.priority_bits)) & 0xff;
+    const lane: u32 = (0xff << (8 - core.choicesOf(spec.core).priority_bits.most())) & 0xff;
     const wide_default = spec.architecture == .armv8_1m_main;
     return switch (slot.offset) {
         cpuid => .{ .reset = spec.cpuid, .write_mask = 0 },

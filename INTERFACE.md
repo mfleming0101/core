@@ -68,8 +68,11 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
 - On Arm, `init` also takes the part after the core: what the part was built with, which the
   core leaves to it. That is the cache sizes, and on the M7 also the TCM and AHBP sizes and
   reset enables and whether the caches carry ECC. It is also the MPU region count of each
-  Security state, `mpu_regions` and `mpu_ns_regions`, lowered to a count the core's TRM lists;
-  left null, the core keeps its default of 8, or none on the M0 and M1. An M7 given
+  Security state, `mpu_regions` and `mpu_ns_regions`, the SAU region count `sau_regions`, the
+  `priority_bits` and the number of external `interrupts`, each lowered to a value the core's
+  TRM lists or clamped to its range. Left null, the core keeps its default: 8 MPU and SAU
+  regions, or no MPU on the M0 and M1; 2 priority bits on the M0, M0+, M1 and M23, 4 on the
+  rest; and 240 interrupts, which is also the most the library carries. An M7 given
   `.{ .data = .kb32, .instruction = .kb32, .itcm = .{ .size = .kb64, .enabled = true } }`
   reports those, `.{}` is a part with none of them, and a core without the registers a field
   sets ignores that field.
@@ -133,7 +136,8 @@ Devices on a `Regions` bus raise lines themselves. Devices outside the bus pend 
 | `pendAll(mask)` | A `Lines` mask, one bit per line |
 | `enabled(line)` | Arm: the NVIC enable bit is set. RISC-V: the source is routed, unmasked and above the threshold |
 
-`Line` is a `u8` and `Lines` a `u240`. Arm has 240 external interrupts; the ESP32-C3 has 62
+`Line` is a `u8` and `Lines` a `u240`. Arm carries 240 external interrupts, and a line beyond
+the part's `interrupts` never pends; the ESP32-C3 has 62
 matrix sources and the C6 77.
 
 ### Peek and poke
@@ -301,7 +305,7 @@ if (Cpu.semihosting.trapped(&cpu)) {
 | | Arm | RISC-V |
 |---|---|---|
 | Exceptions | NVIC with priorities, grouping, banking and the Security Extension; SysTick; SVCall and PendSV; faults through CFSR and friends | Machine-mode traps through `mtvec`; the interrupt matrix routes sources to interrupts with priorities and a threshold |
-| Protection | MPU with the part's regions per security state, 8 by default; SAU with 8 regions | PMP with 16 entries |
+| Protection | MPU with the part's regions per security state, 8 by default; SAU with the part's regions, 8 by default | PMP with 16 entries |
 | Private registers | The private peripheral bus at `0xE000_0000`: SysTick, NVIC, SCB, MPU, SAU, DWT | The interrupt matrix and controller windows of the part |
 | `Run.latency` | Present | Absent |
 | Sleep | `WFI` and `WFE`, with `SEV` and the event register | `WFI` |

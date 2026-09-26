@@ -549,6 +549,61 @@ test "MPU_TYPE reads the region count each part was built with, lowered to one i
     }
 }
 
+test "a part's external interrupts and priority bits show in ICTR, the NVIC and SHPR, lines beyond them never pend, and a reset keeps them, M4 TRM 2.2, v7-M B3.4.2, v8-M B12.1 RQHBN D1.2.185" {
+    var m = loaded();
+    var cpu = Cpu.init(&m, .m4, .{ .interrupts = 36, .priority_bits = 3 }, .{});
+    for (0..2) |_| {
+        try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe000_e004));
+        try std.testing.expectEqual(@as(u4, 3), cpu.priorityBits());
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e104, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0xf), cpu.peek(4, 0xe000_e104));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e108, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e108));
+        cpu.pend(36);
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ef00, 37));
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e204));
+        cpu.pend(35);
+        try std.testing.expectEqual(@as(?u32, 0x8), cpu.peek(4, 0xe000_e204));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e420, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0xe0e0_e0e0), cpu.peek(4, 0xe000_e420));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e424, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_e424));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed1c, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, 0xe000_0000), cpu.peek(4, 0xe000_ed1c));
+        cpu.reset();
+    }
+}
+
+test "a part's values outside its core's TRM options are lowered or clamped to them, and a value left null keeps the library default, M0 TRM 2.1 Table 1-1, M4 TRM 2.2, M33 TRM 1.3" {
+    var m = loaded();
+    var low = Cpu.init(&m, .m4, .{ .interrupts = 0, .priority_bits = 2 }, .{});
+    try std.testing.expectEqual(@as(?u32, 0), low.peek(4, 0xe000_e004));
+    try std.testing.expectEqual(@as(u4, 3), low.priorityBits());
+    var high = Cpu.init(&m, .m4, .{ .interrupts = 400, .priority_bits = 9 }, .{});
+    try std.testing.expectEqual(@as(?u32, 7), high.peek(4, 0xe000_e004));
+    try std.testing.expectEqual(@as(u4, 8), high.priorityBits());
+    var zero = Cpu.init(&m, .m0, .{ .interrupts = 20, .priority_bits = 8 }, .{});
+    try std.testing.expectEqual(@as(?void, {}), zero.poke(4, 0xe000_e100, 0xffff_ffff));
+    try std.testing.expectEqual(@as(?u32, 0xffff), zero.peek(4, 0xe000_e100));
+    try std.testing.expectEqual(@as(u4, 2), zero.priorityBits());
+    var plain = Cpu.init(&m, .m33, .{}, .{});
+    try std.testing.expectEqual(@as(?u32, 7), plain.peek(4, 0xe000_e004));
+    try std.testing.expectEqual(@as(u4, 4), plain.priorityBits());
+    try std.testing.expectEqual(@as(?u32, 8), plain.peek(4, 0xe000_edd4));
+}
+
+test "SAU_TYPE reads the region count each part was built with, lowered to one its core's TRM lists, and kept through a reset, M23 TRM Table 1-1, M33 TRM 1.3, v8-M D1.2.229" {
+    var m = loaded();
+    for ([_]arm.Core{ .m23, .m33 }) |core| {
+        for ([_]u8{ 0, 4, 5, 8, 9 }, [_]u32{ 0, 4, 4, 8, 8 }) |asked, count| {
+            var cpu = Cpu.init(&m, core, .{ .sau_regions = asked }, .{});
+            try std.testing.expectEqual(@as(?u32, count), cpu.peek(4, 0xe000_edd4));
+            cpu.reset();
+            try std.testing.expectEqual(@as(?u32, count), cpu.peek(4, 0xe000_edd4));
+        }
+    }
+}
+
 test "the M55 and M85 bank CSSELR, CCSIDR and CCR IC and DC between the Security states and read one CLIDR, CTR and maintenance range through either, M55 and M85 TRM 5.6.1 5.6.2 5.6.3 6.5, v8-M D1.2.12 D1.2.18 D1.1.29" {
     var m = loaded();
     inline for (.{ .m55, .m85 }) |core| {

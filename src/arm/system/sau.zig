@@ -1,4 +1,4 @@
-//! Arm's Security Attribution Unit. Eight regions say which addresses are Non-secure and
+//! Arm's Security Attribution Unit. Up to eight regions say which addresses are Non-secure and
 //! which are Non-secure callable; everything else is Secure. check is what the processor
 //! answers isa's attribute question from, and it is asked before the MPU on every guarded
 //! access. The fixed system ranges of v8-M B10.2 are exempt, and a unit that is off
@@ -33,7 +33,7 @@ pub const region_enable: u32 = 1 << 0;
 /// The SAU_RLAR bit that marks a region Non-secure callable.
 pub const region_nsc: u32 = 1 << 1;
 
-/// How many attribution regions the library models.
+/// The most attribution regions a part may have.
 pub const regions: u8 = 8;
 
 /// The SFSR bit for an invalid integrity signature.
@@ -62,12 +62,13 @@ fn exempt(address: u32, fetch: bool) bool {
         address -% 0xe00f_f000 < 0x1000;
 }
 
-/// The Security Attribution Unit: eight regions and the secure fault status registers.
+/// The Security Attribution Unit: the part's regions and the secure fault status registers.
 pub const Sau = struct {
     const Self = @This();
 
     present: bool,
     faults: bool,
+    count: u8,
     control: u32 = 0,
     number: u32 = 0,
     status: u32 = 0,
@@ -75,9 +76,9 @@ pub const Sau = struct {
     base: [regions]u32 = @splat(0),
     limit: [regions]u32 = @splat(0),
 
-    /// An SAU for a core with the Security Extension, or a unit that marks everything Non-secure.
-    pub fn init(present: bool, faults: bool) Self {
-        return .{ .present = present, .faults = faults };
+    /// An SAU with the part's number of regions for a core with the Security Extension, or a unit that marks everything Non-secure.
+    pub fn init(present: bool, faults: bool, count: u8) Self {
+        return .{ .present = present, .faults = faults, .count = count };
     }
 
     /// Attributes an address; the fixed ranges are exempt and two overlapping regions mean Secure.
@@ -87,7 +88,7 @@ pub const Sau = struct {
         if (exempt(address, fetch)) return .{ .ns = !secure };
         if (self.control & enable == 0) return .{ .ns = self.control & allns != 0 };
         var found: ?Attribution = null;
-        for (self.limit, self.base, 0..) |limit, base, r| {
+        for (self.limit[0..self.count], self.base[0..self.count], 0..) |limit, base, r| {
             if (limit & region_enable == 0) continue;
             if (address < (base & ~@as(u32, 0x1f)) or address > (limit | 0x1f)) continue;
             if (found != null) return .{ .ns = false };
@@ -102,7 +103,7 @@ pub const Sau = struct {
         const r = self.selected();
         return switch (offset) {
             ctrl => self.control,
-            rtype => regions,
+            rtype => self.count,
             rnr => self.number,
             rbar => self.base[r],
             rlar => self.limit[r],
@@ -117,11 +118,15 @@ pub const Sau = struct {
         if (!self.present or offset & 3 != 0) return false;
         const r = self.selected();
         switch (offset) {
-            ctrl => self.control = value & (enable | allns),
+            ctrl => self.control = value & (if (self.count == 0) allns else enable | allns),
             rtype => {},
-            rnr => self.number = value & (regions - 1),
-            rbar => self.base[r] = value & ~@as(u32, 0x1f),
-            rlar => self.limit[r] = value & (~@as(u32, 0x1f) | region_nsc | region_enable),
+            rnr => self.number = value & (self.count -| 1),
+            rbar => if (self.count != 0) {
+                self.base[r] = value & ~@as(u32, 0x1f);
+            },
+            rlar => if (self.count != 0) {
+                self.limit[r] = value & (~@as(u32, 0x1f) | region_nsc | region_enable);
+            },
             sfsr => if (self.faults) {
                 self.status &= ~value;
             },
@@ -148,6 +153,6 @@ pub const Sau = struct {
     }
 
     fn selected(self: *const Self) u8 {
-        return @intCast(self.number & (regions - 1));
+        return @intCast(self.number);
     }
 };

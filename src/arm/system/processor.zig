@@ -267,6 +267,23 @@ pub fn Processor(comptime options: Options) type {
 
         /// A core of that part over the bus, with what the part was built with, reset through the vector table, with the ring attached.
         pub fn init(memory: *options.Bus, c: core.Core, part: core.Part, ring: trace.Ring) Self {
+            return build(memory, c, fitted(c, part), ring);
+        }
+
+        fn fitted(c: core.Core, part: core.Part) core.Part {
+            const at = slotOf(c);
+            const spec = specs[at];
+            const choice = choices[at];
+            var out = part;
+            out.mpu_regions = if (part.mpu_regions) |n| @intCast(choice.mpu_regions.fit(n)) else spec.mpu_regions;
+            out.mpu_ns_regions = if (part.mpu_ns_regions) |n| @intCast(choice.mpu_ns_regions.fit(n)) else if (spec.security) spec.mpu_regions else 0;
+            out.sau_regions = if (part.sau_regions) |n| @intCast(choice.sau_regions.fit(n)) else if (spec.security) sau_block.regions else 0;
+            out.priority_bits = if (part.priority_bits) |n| @intCast(choice.priority_bits.fit(n)) else spec.priority_bits;
+            out.interrupts = if (part.interrupts) |n| @min(choice.interrupts.fit(n), nvic_block.lines) else nvic_block.lines;
+            return out;
+        }
+
+        fn build(memory: *options.Bus, c: core.Core, part: core.Part, ring: trace.Ring) Self {
             const at = slotOf(c);
             const spec = specs[at];
             var made: Self = .{
@@ -277,12 +294,12 @@ pub fn Processor(comptime options: Options) type {
                 .systick = .{},
                 .scb = .init(&profiles[at], part),
                 .scb_ns = .init(&profiles[at], part),
-                .nvic = .init(spec.priority_bits),
+                .nvic = .init(part.priority_bits.?, part.interrupts.?),
                 .dwt = .init(spec.architecture.main()),
-                .sau = .init(spec.security, spec.architecture.main()),
+                .sau = .init(spec.security, spec.architecture.main(), part.sau_regions.?),
                 .m7 = if (M7 == void) {} else .init(part),
-                .mpu = .init(@intCast(if (part.mpu_regions) |n| choices[at].mpu_regions.fit(n) else spec.mpu_regions), spec.architecture.v8(), spec.architecture == .armv8_1m_main),
-                .mpu_ns = if (MpuNs == void) {} else .init(@intCast(if (part.mpu_ns_regions) |n| choices[at].mpu_ns_regions.fit(n) else if (spec.security) spec.mpu_regions else 0), spec.architecture.v8(), spec.architecture == .armv8_1m_main),
+                .mpu = .init(part.mpu_regions.?, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
+                .mpu_ns = if (MpuNs == void) {} else .init(part.mpu_ns_regions.?, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .banked = .{},
                 .itns = 0,
                 .flags = .{},
@@ -341,7 +358,7 @@ pub fn Processor(comptime options: Options) type {
 
         /// How many priority bits the core implements.
         pub fn priorityBits(self: *const Self) u4 {
-            return self.spec.priority_bits;
+            return @intCast(@popCount(self.nvic.lanes & 0xff));
         }
 
         /// Whether the floating-point unit is double precision.
@@ -371,11 +388,19 @@ pub fn Processor(comptime options: Options) type {
 
         /// Returns a running core to its reset state, which is also what SYSRESETREQ does.
         pub fn reset(self: *Self) void {
-            self.* = init(self.memory, self.spec.core, self.built(), self.trace);
+            self.* = build(self.memory, self.spec.core, self.built(), self.trace);
         }
 
         fn built(self: *const Self) core.Part {
-            var out: core.Part = .{ .data = self.scb.data, .instruction = self.scb.instruction, .mpu_regions = self.mpu.count, .mpu_ns_regions = if (MpuNs == void) 0 else self.mpu_ns.count };
+            var out: core.Part = .{
+                .data = self.scb.data,
+                .instruction = self.scb.instruction,
+                .mpu_regions = self.mpu.count,
+                .mpu_ns_regions = if (MpuNs == void) 0 else self.mpu_ns.count,
+                .sau_regions = self.sau.count,
+                .priority_bits = self.priorityBits(),
+                .interrupts = self.nvic.count,
+            };
             if (M7 != void) self.m7.wiring(&out);
             return out;
         }
@@ -797,7 +822,7 @@ pub fn Processor(comptime options: Options) type {
 
         /// Raises a whole set of lines, waking a sleeping core if one of them can be taken.
         pub fn pendAll(self: *Self, lines: nvic_block.Lines) void {
-            self.pending |= @as(Set, lines) << first_interrupt;
+            self.pending |= @as(Set, lines & self.nvic.present()) << first_interrupt;
             self.pended();
             self.due = (self.due & kept_due) | summary(self.pending);
             if (self.due & asleep_due != 0 and self.woken()) self.due &= ~asleep_due;
@@ -1413,7 +1438,7 @@ pub fn Processor(comptime options: Options) type {
                 .itm => return answered(into, 0),
                 .dwt => return answered(into, self.dwt.readRegister(address - ppb.dwt_base, self.cycles)),
                 .control => return answered(into, switch (address - ppb.control_base) {
-                    ppb.ictr => if (self.architecture().main()) (nvic_block.lines + 31) / 32 - 1 else 0,
+                    ppb.ictr => if (self.architecture().main()) (@as(u32, self.nvic.count) + 31) / 32 - 1 else 0,
                     ppb.actlr => 0,
                     else => null,
                 }),
@@ -1468,6 +1493,7 @@ pub fn Processor(comptime options: Options) type {
                     scb_block.icsr => self.writeIcsr(self.spec.security and !self.state.secure, value),
                     scb_block.shcsr => self.writeShcsr(self.spec.security and !self.state.secure, value),
                     scb_block.stir => self.trigger(value),
+                    scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => |offset| self.scs().writeRegister(offset, value & self.nvic.lanes),
                     sau_block.first...sau_block.last => |offset| if (self.spec.security and !self.state.secure) true else self.sau.writeRegister(offset - sau_block.first, value),
                     m7_block.first...m7_block.last => |offset| if (self.m7Control()) |block| block.writeRegister(offset - m7_block.first, value) else false,
                     mpu_block.first...mpu_block.last => |offset| self.reprogram(self.mpuOf(self.state.secure), offset - mpu_block.first, value),
@@ -1477,6 +1503,7 @@ pub fn Processor(comptime options: Options) type {
                     scb_block.icsr => self.writeIcsr(true, value),
                     scb_block.shcsr => self.writeShcsr(true, value),
                     mpu_block.first...mpu_block.last => |offset| self.reprogram(self.nonSecureMpu().?, offset - mpu_block.first, value),
+                    scb_block.shpr1, scb_block.shpr2, scb_block.shpr3 => |offset| self.scb_ns.writeRegister(offset, value & self.nvic.lanes),
                     else => |offset| self.scb_ns.writeRegister(offset, value),
                 }),
                 .nvic => self.writeNvic(address - ppb.nvic_base, value),
@@ -1491,8 +1518,9 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn nvicVisible(self: *Self, offset: u32) u32 {
-            if (!self.spec.security or self.state.secure) return 0xffff_ffff;
-            return switch (offset) {
+            const implemented = self.nvic.implemented(offset);
+            if (!self.spec.security or self.state.secure) return implemented;
+            return implemented & switch (offset) {
                 nvic_block.iser...nvic_block.iser + nvic_block.bank,
                 nvic_block.icer...nvic_block.icer + nvic_block.bank,
                 nvic_block.ispr...nvic_block.ispr + nvic_block.bank,
@@ -1519,7 +1547,7 @@ pub fn Processor(comptime options: Options) type {
                 nvic_block.ispr...nvic_block.ispr + nvic_block.bank => nvic_block.wordOf(@truncate(self.pending >> first_interrupt), (offset - nvic_block.ispr) / 4),
                 nvic_block.icpr...nvic_block.icpr + nvic_block.bank => nvic_block.wordOf(@truncate(self.pending >> first_interrupt), (offset - nvic_block.icpr) / 4),
                 nvic_block.iabr...nvic_block.iabr + nvic_block.bank => nvic_block.wordOf(@truncate(self.active >> first_interrupt), (offset - nvic_block.iabr) / 4),
-                nvic_block.itns...nvic_block.itns + nvic_block.bank => return self.readItns((offset - nvic_block.itns) / 4),
+                nvic_block.itns...nvic_block.itns + nvic_block.bank => self.readItns((offset - nvic_block.itns) / 4) orelse return null,
                 else => self.nvic.readRegister(offset) orelse return null,
             };
             return word & self.nvicVisible(offset);
@@ -1532,7 +1560,7 @@ pub fn Processor(comptime options: Options) type {
                 nvic_block.ispr...nvic_block.ispr + nvic_block.bank => self.pending |= @as(Set, nvic_block.placed(seen, (offset - nvic_block.ispr) / 4)) << first_interrupt,
                 nvic_block.icpr...nvic_block.icpr + nvic_block.bank => self.pending &= ~(@as(Set, nvic_block.placed(seen, (offset - nvic_block.icpr) / 4)) << first_interrupt),
                 nvic_block.iabr...nvic_block.iabr + nvic_block.bank => {},
-                nvic_block.itns...nvic_block.itns + nvic_block.bank => return self.writeItns((offset - nvic_block.itns) / 4, value),
+                nvic_block.itns...nvic_block.itns + nvic_block.bank => return self.writeItns((offset - nvic_block.itns) / 4, value & self.nvic.implemented(offset)),
                 nvic_block.ipr...nvic_block.ipr + 0xec => {
                     const kept = (self.nvic.readRegister(offset) orelse 0) & ~self.nvicVisible(offset);
                     return self.nvic.writeRegister(offset, kept | seen);
@@ -1544,7 +1572,7 @@ pub fn Processor(comptime options: Options) type {
 
         fn trigger(self: *Self, value: u32) bool {
             const line = value & 0x1ff;
-            if (line < nvic_block.lines) self.pending |= one(@intCast(first_interrupt + line));
+            if (line < self.nvic.count) self.pending |= one(@intCast(first_interrupt + line));
             return true;
         }
 

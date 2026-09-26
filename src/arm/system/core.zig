@@ -50,7 +50,7 @@ pub const AhbpSize = enum(u3) { none, mb64, mb128, mb256, mb512 };
 /// The AHB peripheral interface as the part wires it: its size and the reset value of EN, in the bits of CM7_AHBPCR, M7 TRM 3.3.7.
 pub const Ahbp = packed struct { enabled: bool = false, size: AhbpSize = .none };
 
-/// What one part was built with that its core's TRM leaves to it: the M7 level 1 caches, TCMs, AHBP and ECC of M7 TRM Table 1-1, and the MPU region counts; a core that carries none ignores them, and a count left null is the core's default.
+/// What one part was built with that its core's TRM leaves to it: the M7 level 1 caches, TCMs, AHBP and ECC of M7 TRM Table 1-1, the MPU and SAU region counts, the priority bits and the external interrupts; a core that carries none ignores them, and a value left null is the core's default.
 pub const Part = struct {
     data: CacheSize = .none,
     instruction: CacheSize = .none,
@@ -60,20 +60,25 @@ pub const Part = struct {
     ecc: bool = false,
     mpu_regions: ?u8 = null,
     mpu_ns_regions: ?u8 = null,
+    sau_regions: ?u8 = null,
+    priority_bits: ?u4 = null,
+    interrupts: ?u16 = null,
 };
 
 /// The values a part may choose for one option, as its TRM lists them.
 pub const Choice = union(enum) {
     only: []const u16,
+    range: struct { least: u16, most: u16 },
 
     /// The most a part may choose.
     pub fn most(self: Choice) u16 {
         return switch (self) {
             .only => |values| values[values.len - 1],
+            .range => |r| r.most,
         };
     }
 
-    /// A part's value lowered to the nearest value listed, the least where none is below it.
+    /// A part's value lowered to the nearest value listed, the least where none is below it, or clamped to the range.
     pub fn fit(self: Choice, value: u16) u16 {
         switch (self) {
             .only => |values| {
@@ -83,22 +88,31 @@ pub const Choice = union(enum) {
                 }
                 return out;
             },
+            .range => |r| return std.math.clamp(value, r.least, r.most),
         }
     }
 };
 
 /// What a part of one core may choose, each from its TRM's configuration options.
-pub const Choices = struct { mpu_regions: Choice, mpu_ns_regions: Choice };
+pub const Choices = struct { mpu_regions: Choice, mpu_ns_regions: Choice, sau_regions: Choice, priority_bits: Choice, interrupts: Choice };
 
-/// The choices of a core: no MPU on the M0, M0 TRM Table 1-1, or the M1, M1 TRM Table 1-1; none or eight regions on the M0+, M0+ TRM Table 1-1, and the M3 and M4, M3 and M4 TRM 1.4 2.2; none, eight or sixteen on the M7, M7 TRM Table 1-1; and none to sixteen in fours for each Security state on the M23, M23 TRM Table 1-1, the M33, M33 TRM 1.3, and the M55 and M85, M55 and M85 TRM Table 3-4.
+/// The choices of a core. The MPU: none on the M0, M0 TRM Table 1-1, or the M1, M1 TRM Table 1-1; none or eight regions on the M0+, M0+ TRM Table 1-1, and the M3 and M4, M3 and M4 TRM 1.4 2.2; none, eight or sixteen on the M7, M7 TRM Table 1-1; and none to sixteen in fours for each Security state on the M23, M23 TRM Table 1-1, the M33, M33 TRM 1.3, and the M55 and M85, M55 and M85 TRM Table 3-4. The SAU: none, four or eight regions on those four, the same tables. Priority bits: two on the M0, M0+ and M23, M0, M0+ and M23 TRM 2.1, and the M1, M1 TRM 1.1; three to eight on the rest, the same tables as the MPU. External interrupts: 1, 2, 4, 8, 16, 24 or 32 on the M0; 0 to 32 on the M0+; 1, 8, 16 or 32 on the M1; 1 to 240 on the M3, M4, M7 and M23; and 1 to 480 on the M33, M55 and M85; the same tables as the MPU.
 pub fn choicesOf(comptime core: Core) Choices {
     const none: Choice = .{ .only = &.{0} };
     const fours: Choice = .{ .only = &.{ 0, 4, 8, 12, 16 } };
+    const two: Choice = .{ .only = &.{2} };
+    const three_to_eight: Choice = .{ .range = .{ .least = 3, .most = 8 } };
+    const sau: Choice = .{ .only = &.{ 0, 4, 8 } };
+    const up_to_240: Choice = .{ .range = .{ .least = 1, .most = 240 } };
+    const up_to_480: Choice = .{ .range = .{ .least = 1, .most = 480 } };
     return switch (core) {
-        .m0, .m1 => .{ .mpu_regions = none, .mpu_ns_regions = none },
-        .m0plus, .m3, .m4 => .{ .mpu_regions = .{ .only = &.{ 0, 8 } }, .mpu_ns_regions = none },
-        .m7 => .{ .mpu_regions = .{ .only = &.{ 0, 8, 16 } }, .mpu_ns_regions = none },
-        .m23, .m33, .m55, .m85 => .{ .mpu_regions = fours, .mpu_ns_regions = fours },
+        .m0 => .{ .mpu_regions = none, .mpu_ns_regions = none, .sau_regions = none, .priority_bits = two, .interrupts = .{ .only = &.{ 1, 2, 4, 8, 16, 24, 32 } } },
+        .m1 => .{ .mpu_regions = none, .mpu_ns_regions = none, .sau_regions = none, .priority_bits = two, .interrupts = .{ .only = &.{ 1, 8, 16, 32 } } },
+        .m0plus => .{ .mpu_regions = .{ .only = &.{ 0, 8 } }, .mpu_ns_regions = none, .sau_regions = none, .priority_bits = two, .interrupts = .{ .range = .{ .least = 0, .most = 32 } } },
+        .m3, .m4 => .{ .mpu_regions = .{ .only = &.{ 0, 8 } }, .mpu_ns_regions = none, .sau_regions = none, .priority_bits = three_to_eight, .interrupts = up_to_240 },
+        .m7 => .{ .mpu_regions = .{ .only = &.{ 0, 8, 16 } }, .mpu_ns_regions = none, .sau_regions = none, .priority_bits = three_to_eight, .interrupts = up_to_240 },
+        .m23 => .{ .mpu_regions = fours, .mpu_ns_regions = fours, .sau_regions = sau, .priority_bits = two, .interrupts = up_to_240 },
+        .m33, .m55, .m85 => .{ .mpu_regions = fours, .mpu_ns_regions = fours, .sau_regions = sau, .priority_bits = three_to_eight, .interrupts = up_to_480 },
     };
 }
 
