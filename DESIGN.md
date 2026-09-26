@@ -188,11 +188,11 @@ Each is cited here and in test names by its tag:
 | `M3 TRM` | Cortex-M3 Technical Reference Manual, r2p1 | Arm 100165_0201_02_en |
 | `M4 TRM` | Cortex-M4 Technical Reference Manual, r0p1 | Arm 100166_0001_04_en |
 | `M7 TRM` | Cortex-M7 Technical Reference Manual, r1p2 | Arm DDI 0489F |
-| `M23 TRM` | Cortex-M23 Technical Reference Manual, r1p0 | Arm DDI 0550C |
+| `M23 TRM` | Cortex-M23 Technical Reference Manual, r2p0 | Arm DDI 0550D |
 | `M33 TRM` | Cortex-M33 Technical Reference Manual, r1p0 | Arm 100230_0100_08_en |
 | `M55 TRM` | Cortex-M55 Technical Reference Manual, r1p1 | Arm 101051_0101_03_en |
 | `M85 TRM` | Cortex-M85 Technical Reference Manual, r1p1 | Arm 101924_0101_07_en |
-| `Glossary` | Arm Glossary | Arm AEG 0014G |
+| `Glossary` | Arm Glossary | Arm 105565_200_03_en |
 | `C3 TRM` | ESP32-C3 Technical Reference Manual | Espressif version 1.4 |
 | `C6 TRM` | ESP32-C6 Technical Reference Manual | Espressif version 1.2 |
 | `Privileged` | RISC-V Instruction Set Manual, Volume II, Privileged Architecture | RISC-V International version 20260120 |
