@@ -289,7 +289,7 @@ test "CFSR and HFSR accumulate fault bits and a write of one clears them, B3.2.1
 
 test "the registers ARMv6-M reserves are absent and their addresses still fault, D3.6.1" {
     var block = of(.m0plus);
-    inline for (.{ scb.scr, scb.shpr1, scb.cfsr, scb.hfsr, scb.mmfar, scb.bfar, scb.afsr, scb.cpacr, scb.stir, scb.fpccr, scb.fpcar, scb.fpdscr }) |offset| {
+    inline for (.{ scb.shpr1, scb.cfsr, scb.hfsr, scb.mmfar, scb.bfar, scb.afsr, scb.cpacr, scb.stir, scb.fpccr, scb.fpcar, scb.fpdscr }) |offset| {
         try std.testing.expect(block.readRegister(offset) == null);
         try std.testing.expect(!block.writeRegister(offset, 1));
     }

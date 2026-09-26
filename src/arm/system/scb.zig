@@ -119,6 +119,8 @@ pub const sttns: u32 = 1 << 24;
 
 /// The SCR bit that wakes a core waiting for an event when any interrupt pends.
 pub const sevonpend: u32 = 1 << 4;
+/// The SCR bit that keeps SLEEPDEEP from the Non-secure state, itself Secure only, v8-M D1.2.230.
+pub const sleepdeeps: u32 = 1 << 3;
 
 /// The key an AIRCR write must carry to take effect.
 pub const vectkey: u32 = 0x05fa;
@@ -192,7 +194,7 @@ pub const secureflt_ena: u32 = 1 << 19;
 /// The DEMCR bit that runs the DWT.
 pub const trcena: u32 = 1 << 24;
 
-const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_level, cache_type, baseline } };
+const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_level, cache_type, baseline, sleep } };
 
 /// Every register the block holds, with the offset and the group that decides whether a core has it.
 pub const layout = [_]Slot{
@@ -205,7 +207,7 @@ pub const layout = [_]Slot{
     .{ .name = "SHCSR", .offset = shcsr, .group = .shared },
     .{ .name = "DFSR", .offset = dfsr, .group = .shared },
     .{ .name = "DEMCR", .offset = demcr, .group = .shared },
-    .{ .name = "SCR", .offset = scr, .group = .main },
+    .{ .name = "SCR", .offset = scr, .group = .sleep },
     .{ .name = "SHPR1", .offset = shpr1, .group = .main },
     .{ .name = "CFSR", .offset = cfsr, .group = .main },
     .{ .name = "HFSR", .offset = hfsr, .group = .main },
@@ -270,7 +272,7 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
         shpr3 => .{ .reset = 0, .write_mask = lane << 24 | lane << 16 | (if (main) lane else 0) },
         shcsr => .{ .reset = 0, .write_mask = if (!main) 0 else monitoract | memfaultena | busfaultena | usgfaultena | (if (spec.security) secureflt_ena else 0) },
         demcr => .{ .reset = 0, .write_mask = trcena },
-        scr => .{ .reset = 0, .write_mask = 0x0000_0016 },
+        scr => .{ .reset = 0, .write_mask = 0x0000_0016 | (if (spec.security) sleepdeeps else 0) },
         mmfar, bfar => .{ .reset = 0, .write_mask = 0xffff_ffff },
         cpacr => .{ .reset = 0, .write_mask = if (spec.floating_point) 0x00f0_0000 else 0 },
         fpccr => .{ .reset = if (spec.security) 0xc000_0004 else 0xc000_0000, .write_mask = if (spec.security) 0xfc00_07ff else 0xc000_017b },
@@ -300,6 +302,7 @@ pub fn profileOf(comptime c: core.Core) Profile {
             .cache_level => spec.caches or spec.architecture.v8(),
             .cache_type => spec.architecture != .armv6m,
             .baseline => spec.architecture == .armv8m_base,
+            .sleep => c != .m1,
         };
         if (!held) continue;
         const v = valuesOf(spec, slot);

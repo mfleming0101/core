@@ -676,7 +676,7 @@ test "the processor answers SysTick at 0xE000E010 itself and faults the rest of 
     try std.testing.expectEqual(@as(?u32, 0x8000_0000), cpu.peek(4, 0xe000_e01c));
     try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe000_e000));
     try std.testing.expectEqual(@as(?u32, 0xfa05_0000), cpu.peek(4, 0xe000_ed0c));
-    try std.testing.expectEqual(@as(?void, null), cpu.poke(4, 0xe000_ed10, 0));
+    try std.testing.expectEqual(@as(?void, null), cpu.poke(4, 0xe000_ed18, 0));
     try std.testing.expectEqual(@as(?u32, null), cpu.peek(4, 0xe000_e600));
     try std.testing.expectEqual(@as(?u16, null), cpu.peek(2, 0xe000_e010));
     try std.testing.expectEqual(@as(?u8, null), cpu.peek(1, 0xe000_e010));
@@ -1562,17 +1562,41 @@ test "an exception pending before a WFE leaves the event register set where SCR.
     }
 }
 
-test "an interrupt the NVIC has not enabled ends a WFE only where SCR.SEVONPEND is set, B1.5.18 B3.2.7" {
-    for ([_]u32{ 0, scb_block.sevonpend }) |scr| {
-        var m = placed(&irq_vectors, &.{0x100}, &.{&.{ 0xb672, 0xbf20, 0x2415, 0xbe00 }});
-        var cpu = fast(.m4, &m);
-        cpu.reset();
-        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed10, scr));
-        _ = cpu.step();
-        try std.testing.expect(cpu.step().asleep);
-        cpu.pend(1);
-        try std.testing.expectEqual(scr == 0, cpu.step().asleep);
+test "an interrupt the NVIC has not enabled ends a WFE only where SCR.SEVONPEND is set, on the M0, M0+ and M23 too, B1.5.18 B3.2.7, v6-M B3.2.7, M0 and M0+ TRM 5.1.2, v8-M D1.2.230, M23 TRM 6.1" {
+    inline for (.{ .m4, .m0, .m0plus, .m23 }) |core| {
+        for ([_]u32{ 0, scb_block.sevonpend }) |scr| {
+            var m = placed(&irq_vectors, &.{0x100}, &.{&.{ 0xb672, 0xbf20, 0x2415, 0xbe00 }});
+            var cpu = fast(core, &m);
+            cpu.reset();
+            try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed10, scr));
+            _ = cpu.step();
+            try std.testing.expect(cpu.step().asleep);
+            cpu.pend(1);
+            try std.testing.expectEqual(scr == 0, cpu.step().asleep);
+        }
     }
+}
+
+test "SCR holds SEVONPEND, SLEEPDEEP and SLEEPONEXIT on the M0 and M0+, and on Armv8-M also SLEEPDEEPS, which Non-secure software reads as zero; the M1, whose TRM names no sleep control, has none, v6-M B3.2.7 Table B3-4, M0 and M0+ TRM 5.1.2, v8-M D1.2.230, M23 TRM 6.1" {
+    var m = loaded();
+    inline for (.{ .m0, .m0plus, .m23, .m33 }, .{ 0x16, 0x16, 0x1e, 0x1e }) |core, held| {
+        var cpu = fast(core, &m);
+        cpu.reset();
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed10, 0xffff_ffff));
+        try std.testing.expectEqual(@as(?u32, held), cpu.peek(4, 0xe000_ed10));
+        if (core == .m23 or core == .m33) {
+            try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed10, 0xffff_ffff));
+            try std.testing.expectEqual(@as(?u32, 0x16), cpu.peek(4, 0xe002_ed10));
+            try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe002_ed10, 0));
+            nonSecure(&cpu);
+            try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed10, 0xffff_ffff));
+            try std.testing.expectEqual(@as(?u32, 0x16), cpu.peek(4, 0xe000_ed10));
+        }
+    }
+    var m1 = fast(.m1, &m);
+    m1.reset();
+    try std.testing.expectEqual(@as(?void, null), m1.poke(4, 0xe000_ed10, 0));
+    try std.testing.expectEqual(@as(?u32, null), m1.peek(4, 0xe000_ed10));
 }
 
 test "an interrupt pended by a write to NVIC_ISPR ends a WFE only where SCR.SEVONPEND is set, B1.5.18 B3.2.7" {
