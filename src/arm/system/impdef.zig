@@ -1,20 +1,10 @@
-//! The M55 and M85 implementation defined registers at 0xE001E000, M55 and M85 TRM 5.11: MSCR,
-//! the M85 PFCR, the TCM and P-AHB controls, the error banks, the power-state requests, the TCM
-//! gate controls, EVENTSPR, EVENTMASKA and EVENTMASKn, CFGINFOSEL and CFGINFORD, and the STL
-//! observation registers. None drives a model: each keeps the bits its TRM lets software
-//! write, from reset values the part gives, and the error banks and power-state requests keep
-//! theirs through a Warm reset, as only a Cold reset clears them. The bits are those of MSCR,
-//! M55 and M85 TRM Table 5-27, with ICACTIVE, DCACTIVE and EVECCFAULT set at reset where fitted
-//! and ECCEN from the part; the M85 PFCR, M85 TRM Table 5-29; EN of the TCM and P-AHB controls,
-//! their SZ from the part, Tables 5-42 and 5-28; the error banks where their cache and ECC are
-//! fitted, Tables 5-23 to 5-25, less the BANK and LOCATION of DEBR, to which Table 5-24 gives no
-//! access type; and the power-state requests and gate controls, Tables 5-31, 5-32 and 5-44, at
-//! their Table 5-15 reset values. EVENTMASKA and EVENTMASKn read zero, their UNKNOWN reset, as
-//! no WIC transfer at sleep entry fills them, Table 5-15 5.22.2; CFGINFOSEL takes writes and
-//! CFGINFORD reads zero, its UNKNOWN reset, as its encodings are only in a confidential manual,
-//! 5.18; STLIDMPUSR keeps its sample, and the MPU observation registers read their zero reset
-//! as nothing captures a fault into them, 5.23.2. The M85 has no STLIMPUOR, STLSTBSLOTSR or
-//! STLLFDENTRYSR here, as its Table 5-15 and 5.23 disagree on their type and addresses.
+//! The M55 and M85 implementation defined registers at 0xE001E000, M55 and M85 TRM 5.11. None
+//! drives a model: each keeps its writable bits from the part's reset values, and a Warm reset
+//! keeps the error banks and power-state requests. Bits follow Tables 5-27 MSCR, 5-29 PFCR, 5-42
+//! and 5-28 TCM and P-AHB controls, 5-23 to 5-25 error banks less DEBR BANK and LOCATION, and 5-31,
+//! 5-32 and 5-44 power controls. EVENTMASKA, EVENTMASKn, CFGINFORD and the MPU observation
+//! registers read zero, 5.18, 5.22.2, 5.23.2. The M85 lacks STLIMPUOR, STLSTBSLOTSR and
+//! STLLFDENTRYSR, as Table 5-15 and 5.23 disagree.
 const core = @import("core.zig");
 
 /// Where the block begins, M55 TRM Table 8-3.
@@ -37,7 +27,8 @@ const Slot = enum { mscr, pfcr, itcmcr, dtcmcr, pahbcr, iebr0, iebr1, debr0, deb
 const cold = [_]Slot{ .iebr0, .iebr1, .debr0, .debr1, .tebr0, .tebr1, .cpdlpstate, .dpdlpstate };
 const locked: u32 = 1 << 1;
 
-/// Whether an offset holds a register the Non-secure state always reads as zero, the TCM gate controls and the STL observation registers, M55 TRM 5.21.1 5.23.
+/// Whether Non-secure state reads an offset as zero: the TCM gate controls and STL observation
+/// registers, M55 TRM 5.21.1 5.23.
 pub fn secureOnly(offset: u32) bool {
     return offset == 0x500 or offset == 0x600 or offset -% stlnvicpendor < 0x40;
 }
@@ -81,7 +72,8 @@ pub const Block = struct {
         return self.words[@intFromEnum(s)];
     }
 
-    /// Takes a register write, keeping the bits the part fixes; of a pair of error banks only one may be LOCKED.
+    /// Takes a register write, keeping bits the part fixes; only one of a pair of error banks may
+    /// be LOCKED.
     pub fn writeRegister(self: *Self, offset: u32, value: u32) bool {
         if (self.readRegister(offset) == null) return false;
         const s = self.slotOf(offset) orelse return true;

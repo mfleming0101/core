@@ -9,6 +9,7 @@ const Folded = @import("../../../src/memory/regions.zig").Folded;
 const Found = @import("../../../src/memory/regions.zig").Found;
 const State = @import("isa").arm.State;
 const Class = @import("isa").arm.instruction.Class;
+const Cost = @import("isa").arm.instruction.Cost;
 const scb_block = @import("../../../src/arm/system/scb.zig");
 const mpu_block = @import("../../../src/arm/system/mpu.zig");
 
@@ -458,24 +459,24 @@ test "a reset with no memory at the vector table locks the core up with a fetch 
 
 test "two M7 parts of one processor type carry the caches each was built with, and keep them through a reset, M7 TRM 3.3.3 3.3.4 Table 3-7" {
     var m = loaded();
-    var h723 = Cpu.init(&m, .m7, .{ .data = .kb32, .instruction = .kb32 }, .{});
-    var f750 = Cpu.init(&m, .m7, .{ .data = .kb4, .instruction = .kb4 }, .{});
+    var kb32 = Cpu.init(&m, .m7, .{ .data = .kb32, .instruction = .kb32 }, .{});
+    var kb4cache = Cpu.init(&m, .m7, .{ .data = .kb4, .instruction = .kb4 }, .{});
     var bare = Cpu.init(&m, .m7, .{}, .{});
-    try std.testing.expectEqual(@as(?u32, 0xf01f_e019), h723.peek(4, 0xe000_ed80));
-    try std.testing.expectEqual(@as(?u32, 0xf003_e019), f750.peek(4, 0xe000_ed80));
+    try std.testing.expectEqual(@as(?u32, 0xf01f_e019), kb32.peek(4, 0xe000_ed80));
+    try std.testing.expectEqual(@as(?u32, 0xf003_e019), kb4cache.peek(4, 0xe000_ed80));
     try std.testing.expectEqual(@as(?u32, 0), bare.peek(4, 0xe000_ed80));
-    try std.testing.expectEqual(@as(?u32, 0x0900_0003), f750.peek(4, 0xe000_ed78));
+    try std.testing.expectEqual(@as(?u32, 0x0900_0003), kb4cache.peek(4, 0xe000_ed78));
     try std.testing.expectEqual(@as(?u32, 0), bare.peek(4, 0xe000_ed78));
-    try std.testing.expectEqual(@as(?void, {}), f750.poke(4, 0xe000_ed84, 1));
-    try std.testing.expectEqual(@as(?u32, 0xf007_e009), f750.peek(4, 0xe000_ed80));
-    try std.testing.expectEqual(@as(?void, {}), f750.poke(4, 0xe000_ed14, 0x0007_0200));
+    try std.testing.expectEqual(@as(?void, {}), kb4cache.poke(4, 0xe000_ed84, 1));
+    try std.testing.expectEqual(@as(?u32, 0xf007_e009), kb4cache.peek(4, 0xe000_ed80));
+    try std.testing.expectEqual(@as(?void, {}), kb4cache.poke(4, 0xe000_ed14, 0x0007_0200));
     try std.testing.expectEqual(@as(?void, {}), bare.poke(4, 0xe000_ed14, 0x0007_0200));
-    try std.testing.expectEqual(@as(?u32, 0x0007_0200), f750.peek(4, 0xe000_ed14));
+    try std.testing.expectEqual(@as(?u32, 0x0007_0200), kb4cache.peek(4, 0xe000_ed14));
     try std.testing.expectEqual(@as(?u32, 0x0004_0200), bare.peek(4, 0xe000_ed14));
     try std.testing.expectEqual(@as(?void, {}), bare.poke(4, 0xe000_ef50, 0));
-    f750.reset();
-    try std.testing.expectEqual(@as(?u32, 0xf003_e019), f750.peek(4, 0xe000_ed80));
-    try std.testing.expectEqual(@as(?u32, 0xf01f_e019), h723.peek(4, 0xe000_ed80));
+    kb4cache.reset();
+    try std.testing.expectEqual(@as(?u32, 0xf003_e019), kb4cache.peek(4, 0xe000_ed80));
+    try std.testing.expectEqual(@as(?u32, 0xf01f_e019), kb32.peek(4, 0xe000_ed80));
     var four = Cpu.init(&m, .m4, .{ .data = .kb32, .instruction = .kb32 }, .{});
     try std.testing.expectEqual(@as(?u32, null), four.peek(4, 0xe000_ed80));
     try std.testing.expectEqual(@as(?void, null), four.poke(4, 0xe000_ef50, 0));
@@ -4521,4 +4522,161 @@ test "the implementation defined registers' Non-secure alias shows Secure code t
     try std.testing.expectEqual(@as(?u32, 0x11), cpu.peek(4, 0xe001_e300));
     var m33 = fast(.m33, &m);
     try std.testing.expectEqual(@as(?u32, null), m33.peek(4, 0xe003_e300));
+}
+
+test "setTiming answers the table it charges by: the M4's and M7's fits, the M3's TRM table in place of a fit, and one a cycle where the M33 has neither" {
+    var m = loaded();
+    var m4 = fast(.m4, &m);
+    try std.testing.expectEqual(.fitted, m4.setTiming(.fitted));
+    try std.testing.expectEqual(@as(u8, 1), m4.costOf(.store).cycles);
+    try std.testing.expect(m4.model.rules.divide != null and m4.model.rules.straddle);
+    try std.testing.expectEqual(.trm, m4.setTiming(.trm));
+    try std.testing.expectEqual(@as(u8, 2), m4.costOf(.store).cycles);
+    try std.testing.expect(m4.model.rules.divide == null and !m4.model.rules.straddle);
+    try std.testing.expectEqual(.unknown, m4.setTiming(.unknown));
+    try std.testing.expectEqual(@as(u8, 1), m4.costOf(.divide).cycles);
+    var m3 = fast(.m3, &m);
+    try std.testing.expectEqual(.trm, m3.setTiming(.fitted));
+    try std.testing.expectEqual(@as(u8, 12), m3.costOf(.divide).cycles);
+    var m7 = fast(.m7, &m);
+    try std.testing.expectEqual(.fitted, m7.setTiming(.fitted));
+    try std.testing.expect(m7.pipeline.issuing);
+    try std.testing.expectEqual(.unknown, m7.setTiming(.trm));
+    try std.testing.expect(!m7.pipeline.issuing);
+    var m33 = fast(.m33, &m);
+    try std.testing.expectEqual(.unknown, m33.setTiming(.fitted));
+    try std.testing.expectEqual(@as(u8, 1), m33.costOf(.divide).cycles);
+}
+
+fn codeOf(codes: []const u16) Memory {
+    var m: Memory = .{};
+    std.mem.writeInt(u32, m.bytes[0..4], 0x2000_2000, .little);
+    std.mem.writeInt(u32, m.bytes[4..8], 0x9, .little);
+    for (codes, 0..) |code, i| std.mem.writeInt(u16, m.bytes[8 + 2 * i ..][0..2], code, .little);
+    return m;
+}
+
+test "the fitted M7 issues an instruction with the one before when their classes pair, except an ALU operation using that one's result" {
+    var independent = codeOf(&.{ 0x2001, 0x2102, 0x1842, 0x2304, 0xbe00 });
+    var cpu = fast(.m7, &independent);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 2), cpu.run(.{ .instructions = 100 }).cycles);
+    var dependent = codeOf(&.{ 0x2001, 0x1c81, 0x1c8a, 0xbe00 });
+    cpu = fast(.m7, &dependent);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 3), cpu.run(.{ .instructions = 100 }).cycles);
+}
+
+test "setTiming charges a caller's own table as given, with no fitted rules" {
+    var m = loaded();
+    var cpu = fast(.m4, &m);
+    _ = cpu.setTiming(.fitted);
+    var table: arm.Table = .{ .cycles = .initFill(3), .taken = .initFill(5), .per_register = .initFill(0) };
+    table.cycles.set(.divide, 7);
+    try std.testing.expectEqual(.custom, cpu.setTiming(.{ .custom = table }));
+    try std.testing.expectEqual(@as(u8, 7), cpu.costOf(.divide).cycles);
+    try std.testing.expectEqual(@as(u8, 5), cpu.costOf(.branch).taken);
+    try std.testing.expect(cpu.model.rules.divide == null and !cpu.model.rules.straddle and !cpu.pipeline.issuing);
+}
+
+test "unknown charges one cycle an instruction on every core, whatever its class, taken or not and however many registers it lists" {
+    var m = loaded();
+    for (every) |c| {
+        var cpu = fast(c, &m);
+        try std.testing.expectEqual(.unknown, cpu.setTiming(.unknown));
+        for (std.enums.values(Class)) |class| try std.testing.expectEqual(@as(u24, @bitCast(Cost{ .cycles = 1, .taken = 0, .per_register = 0 })), @as(u24, @bitCast(cpu.costOf(class))));
+    }
+}
+
+test "a reset keeps the timing setTiming chose" {
+    var m = loaded();
+    var cpu = fast(.m4, &m);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(.fitted, cpu.timing);
+    try std.testing.expectEqual(@as(u8, 1), cpu.costOf(.store).cycles);
+}
+
+test "the fitted M7 pairs a load with the ALU operation using its result, and makes a load wait a cycle for an address the one before wrote" {
+    var use = codeOf(&.{ 0x2000, 0x6823, 0x3301, 0xbe00 });
+    var cpu = fast(.m7, &use);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 2), cpu.run(.{ .instructions = 100 }).cycles);
+    var address = codeOf(&.{ 0x2000, 0x2400, 0x6823, 0xbe00 });
+    cpu = fast(.m7, &address);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 3), cpu.run(.{ .instructions = 100 }).cycles);
+}
+
+test "the fitted M7 charges a taken branch without a branch target entry and a branch not taken whose entry predicts taken" {
+    var loop = codeOf(&.{ 0x2002, 0x3801, 0xd1fd, 0xbe00 });
+    var cpu = fast(.m7, &loop);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 14), cpu.run(.{ .instructions = 100 }).cycles);
+}
+
+test "the fitted M7 makes an instruction taking a multiply's result as a source operand wait a cycle" {
+    var dependent = codeOf(&.{ 0x2303, 0x2505, 0x436b, 0x436b, 0xbe00 });
+    var cpu = fast(.m7, &dependent);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 4), cpu.run(.{ .instructions = 100 }).cycles);
+    var independent = codeOf(&.{ 0x2303, 0x2505, 0x436b, 0xfb05, 0xf005, 0xbe00 });
+    cpu = fast(.m7, &independent);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 3), cpu.run(.{ .instructions = 100 }).cycles);
+}
+
+test "the fitted M7 moves two registers of a list a cycle, and a pop straight after a push waits for the pushed words" {
+    var list = codeOf(&.{ 0xccef, 0xbe00 });
+    var cpu = fast(.m7, &list);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 4), cpu.run(.{ .instructions = 100 }).cycles);
+    var stack = codeOf(&.{ 0xb40f, 0xbc0f, 0xbe00 });
+    cpu = fast(.m7, &stack);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    cpu.state.msp = 0x800;
+    try std.testing.expectEqual(@as(u64, 10), cpu.run(.{ .instructions = 100 }).cycles);
+}
+
+test "the fitted M7 pairs an ALU operation writing the register the one before wrote without reading it" {
+    var rewrite = codeOf(&.{ 0x2101, 0x2102, 0xbe00 });
+    var cpu = fast(.m7, &rewrite);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 1), cpu.run(.{ .instructions = 100 }).cycles);
+}
+
+test "the fitted M7 issues the first instruction after an exception entry or return on its own" {
+    var m: Memory = .{};
+    std.mem.writeInt(u32, m.bytes[0..4], 0x800, .little);
+    std.mem.writeInt(u32, m.bytes[4..8], 0x41, .little);
+    std.mem.writeInt(u32, m.bytes[0x2c..0x30], 0x61, .little);
+    for ([_]u16{ 0x2001, 0x2203, 0xdf00, 0x2304, 0xbe00 }, 0..) |code, i| std.mem.writeInt(u16, m.bytes[0x40 + 2 * i ..][0..2], code, .little);
+    for ([_]u16{ 0x2102, 0x4770 }, 0..) |code, i| std.mem.writeInt(u16, m.bytes[0x60 + 2 * i ..][0..2], code, .little);
+    var cpu = fast(.m7, &m);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 7 + cpu.spec.entry + cpu.spec.exit), cpu.run(.{ .instructions = 100 }).cycles);
+}
+
+test "the fitted M4 overlaps a load with the load before unless that one wrote its address, and stalls an address an ALU operation wrote" {
+    var pipelined = codeOf(&.{ 0x2000, 0x6803, 0x6844, 0xbe00 });
+    var cpu = fast(.m4, &pipelined);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 5), cpu.run(.{ .instructions = 100 }).cycles);
+    var chased = codeOf(&.{ 0x2000, 0x6843, 0x781c, 0xbe00 });
+    cpu = fast(.m4, &chased);
+    _ = cpu.setTiming(.fitted);
+    cpu.reset();
+    try std.testing.expectEqual(@as(u64, 6), cpu.run(.{ .instructions = 100 }).cycles);
 }

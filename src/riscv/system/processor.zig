@@ -39,8 +39,8 @@ pub const Step = struct {
     stop: ?Stop,
 };
 
-/// What a run is bounded by: an instruction budget, a cycle budget counted from here, and,
-/// where `asleep` asks, a WFI nothing wakes, which otherwise waits in the run.
+/// Run bounds: an instruction budget, a cycle budget from here, and, if `asleep`, a WFI nothing
+/// wakes.
 pub const Limit = struct { instructions: u64, cycles: u64 = std.math.maxInt(u64), asleep: bool = false };
 
 /// Which bound stopped a run, which is the one answer that always distinguishes them.
@@ -49,17 +49,27 @@ pub const Ended = enum { budget, deadline, stopped, asleep };
 /// What one run produced, counted for that run rather than as a total.
 pub const Run = struct { instructions: u64, cycles: u64, stop: ?Stop, ended: Ended };
 
+const one_each: arch_step.Model.Costs = @splat(.{ .cycles = 1, .taken = 0 });
+
+fn costsOf(table: core.Table) arch_step.Model.Costs {
+    var out: arch_step.Model.Costs = undefined;
+    for (std.enums.values(Class), 0..) |class, j| out[j] = .{ .cycles = table.cycles.get(class), .taken = table.taken.get(class) };
+    return out;
+}
+
 /// Builds the hart type: one struct answering the host contract over the caller's bus.
 pub fn Processor(comptime options: Options) type {
     const costs = blk: {
         var out: [options.cores.len]arch_step.Model.Costs = undefined;
         for (options.cores, 0..) |c, i| {
             const s = core.spec(c);
-            for (std.enums.values(Class), 0..) |class, j| out[i][j] = if (s.cycles) |cycles|
-                .{ .cycles = cycles.get(class), .taken = s.taken.?.get(class) }
-            else
-                .{ .cycles = 1, .taken = 0 };
+            out[i] = if (s.trm) |table| costsOf(table) else one_each;
         }
+        break :blk out;
+    };
+    const fits = blk: {
+        var out: [options.cores.len]?core.Table = undefined;
+        for (options.cores, 0..) |c, i| out[i] = core.fitOf(c);
         break :blk out;
     };
     const specs = blk: {
@@ -100,6 +110,7 @@ pub fn Processor(comptime options: Options) type {
 
         spec: core.Spec,
         model: arch_step.Model,
+        timing: std.meta.Tag(core.Timing),
         state: State,
         memory: *options.Bus,
         pmp: pmp_block.Pmp,
@@ -139,6 +150,7 @@ pub fn Processor(comptime options: Options) type {
             var made: Self = .{
                 .spec = spec,
                 .model = .{ .decoding = spec.groups, .costs = costs[at] },
+                .timing = if (spec.trm != null) .trm else .unknown,
                 .state = .{ .csr = .{ .implementation = spec.model, .mtvec = @intFromBool(spec.model.tvec_modes == .vectored) } },
                 .memory = memory,
                 .pmp = .{ .static_priority = spec.pmp_static_priority },
@@ -176,6 +188,23 @@ pub fn Processor(comptime options: Options) type {
             return self.model.decoding;
         }
 
+        /// Selects a timing and returns the one used: fitted falls back to trm, and trm to unknown,
+        /// where missing.
+        pub fn setTiming(self: *Self, timing: core.Timing) std.meta.Tag(core.Timing) {
+            const at = slotOf(self.spec.core);
+            self.timing, self.model.costs = switch (timing) {
+                .custom => |table| .{ .custom, costsOf(table) },
+                .fitted => if (fits[at]) |table| .{ .fitted, costsOf(table) } else fallback(at, true),
+                .trm => fallback(at, true),
+                .unknown => fallback(at, false),
+            };
+            return self.timing;
+        }
+
+        fn fallback(at: usize, published: bool) struct { std.meta.Tag(core.Timing), arch_step.Model.Costs } {
+            return if (published and specs[at].trm != null) .{ .trm, costs[at] } else .{ .unknown, one_each };
+        }
+
         /// What the cycle table charges an instruction class.
         pub fn costOf(self: *const Self, class: Class) Cost {
             return self.model.costOf(class);
@@ -183,7 +212,9 @@ pub fn Processor(comptime options: Options) type {
 
         /// Returns a running hart to its reset state, keeping the bus, the part and the ring.
         pub fn reset(self: *Self) void {
+            const model, const timing = .{ self.model, self.timing };
             self.* = init(self.memory, self.spec.core, self.trace);
+            self.model, self.timing = .{ model, timing };
         }
 
         fn atReset(self: *Self) void {
@@ -234,7 +265,7 @@ pub fn Processor(comptime options: Options) type {
             return .{
                 .address = address,
                 .class = if (r.executed) r.class else null,
-                .cost = if (r.executed and self.spec.cycles != null) r.cycles else null,
+                .cost = if (r.executed and self.timing != .unknown) r.cycles else null,
                 .charged = @intCast(self.cycles - cycles),
                 .sequential = sequential,
                 .asleep = self.due & asleep_due != 0,
@@ -421,7 +452,8 @@ pub fn Processor(comptime options: Options) type {
             self.due &= ~asleep_due;
         }
 
-        /// Executes to a budget, a deadline, a stop or a sleep; a ring attached takes a second copy of the loop.
+        /// Runs to a budget, deadline, stop or sleep; an attached ring takes a second copy of the
+        /// loop.
         pub fn run(self: *Self, limit: Limit) Run {
             self.redirected = true;
             self.deadline = self.cycles +| limit.cycles;

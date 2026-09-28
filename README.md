@@ -9,7 +9,7 @@ Instructions execute through the [`isa`](https://github.com/mfleming0101/isa) li
 
 | Family | Cores | Modelled |
 |---|---|---|
-| Arm | Cortex-M0, M0+, M1, M3, M4, M7, M23, M33, M55, M85 | Exception entry and return, NVIC, SysTick, SCB, MPU, SAU and the Security Extension, DWT, the cycle tables each Technical Reference Manual publishes, semihosting |
+| Arm | Cortex-M0, M0+, M1, M3, M4, M7, M23, M33, M55, M85 | Exception entry and return, NVIC, SysTick, SCB, MPU, SAU and the Security Extension, DWT, the cycle tables each Technical Reference Manual publishes, M4 and M7 timing fitted to measurements, semihosting |
 | RISC-V | Espressif ESP32-C3 (RV32IMC), ESP32-C6 (RV32IMAC) | Machine-mode traps, the interrupt matrix and controller, PMP, semihosting |
 
 The library is checked against QEMU, the Sail RISC-V model, Espressif's QEMU fork and a corpus
@@ -123,10 +123,10 @@ docker build -t core .
 docker run --rm core    # zig build harness && zig build metrics
 ```
 
-`zig build metrics` prints one row: every correctness gate, nanoseconds per instruction over
-the corpus with and without the system layers, the cost of a data access, the size of the
-processor and the build times. The rows measured at each release are in
-[bench/release-metrics.tsv](bench/release-metrics.tsv).
+`zig build metrics` prints one row: every correctness gate, nanoseconds per instruction over the
+corpus with and without the system layers, the cost of a data access, the size of the processor
+and the build times. The rows measured at each
+release are in [bench/release-metrics.tsv](bench/release-metrics.tsv).
 
 ## Documentation
 

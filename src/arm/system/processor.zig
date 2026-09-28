@@ -14,6 +14,8 @@ const Class = instruction.Class;
 const Cost = instruction.Cost;
 const Architecture = @import("isa").arm.Architecture;
 const decode = @import("isa").arm.decode;
+const meta = @import("isa").generated.arm_meta;
+const operand_masks = @import("isa").arm.masks;
 const ppb = @import("ppb.zig");
 const SysTick = @import("systick.zig").SysTick;
 const scb_block = @import("scb.zig");
@@ -52,8 +54,8 @@ pub const Step = struct {
     stop: ?Stop,
 };
 
-/// What a run is bounded by: an instruction budget, a cycle budget counted from here, and,
-/// where `asleep` asks, a WFI or WFE nothing wakes, which otherwise waits in the run.
+/// Run bounds: an instruction budget, a cycle budget from here, and, if `asleep`, a WFI or WFE
+/// nothing wakes.
 pub const Limit = struct { instructions: u64, cycles: u64 = std.math.maxInt(u64), asleep: bool = false };
 
 /// Which bound stopped a run, which is the one answer that always distinguishes them.
@@ -102,6 +104,137 @@ fn frameSize(wide_frame: bool, callee_fp: bool) u32 {
     return state_frame + (if (wide_frame) fp_caller_frame else 0) + (if (callee_fp) fp_callee_frame else 0);
 }
 
+fn Targets(comptime n: u8) type {
+    return struct {
+        addresses: [n]u32 = @splat(1),
+        to: [n]u32 = @splat(1),
+        counts: [n]u2 = @splat(0),
+        next: u8 = 0,
+        present: [256]u8 = @splat(0),
+        hint: [256]u8 = @splat(0),
+
+        fn bucket(pc: u32) u8 {
+            return @truncate(pc >> 1 ^ pc >> 9);
+        }
+
+        fn find(self: *@This(), pc: u32) ?usize {
+            const b = bucket(pc);
+            if (self.present[b] == 0) return null;
+            if (self.addresses[self.hint[b]] == pc) return self.hint[b];
+            const hits = @as(@Vector(n, u32), self.addresses) == @as(@Vector(n, u32), @splat(pc));
+            const i = std.simd.firstTrue(hits) orelse return null;
+            self.hint[b] = @intCast(i);
+            return i;
+        }
+
+        fn add(self: *@This(), pc: u32, target: u32) void {
+            const old = self.addresses[self.next];
+            if (old != 1) self.present[bucket(old)] -= 1;
+            self.present[bucket(pc)] += 1;
+            self.addresses[self.next] = pc;
+            self.to[self.next] = target;
+            self.counts[self.next] = 3;
+            self.next = (self.next + 1) % n;
+        }
+    };
+}
+
+const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false };
+
+const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, _: u10 = 0 };
+
+fn factsOf(code: u32, row: u11) Facts {
+    const entry = &meta.entries[row];
+    const operands = operand_masks.of(entry, code);
+    return .{ .code = code, .written = operands.written, .sources = operands.sources, .addressed = operands.addressed, .shifted = shiftedOf(code), .class = entry.class, .loaded = @intCast(@ctz(loadedOf(code))), .words = @intCast(instruction.words(entry.class, code)), .sets = setsFlags(code, false), .sets_it = setsFlags(code, true), .carries = carries(code), .extends = extends(code), .shifts = shifts(code), .quick = swift(code), .narrow = narrowLoad(code), .isb = isb(code) };
+}
+
+const facts_bits = 8;
+
+fn Pipeline(comptime entries: u8) type {
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0) };
+}
+
+const sp_bit: u16 = 1 << 13;
+const store_lists: std.EnumSet(Class) = .initMany(&.{ .store_multiple, .push });
+const load_lists: std.EnumSet(Class) = .initMany(&.{ .load_multiple, .pop, .pop_pc });
+
+fn shifts(code: u32) bool {
+    return code >> 25 == 0x75 and code & 0x70f0 != 0;
+}
+
+const Swift = struct { mask: u32, value: u32 };
+
+const swifts = [_]Swift{ .{ .mask = 0, .value = 1 }, .{ .mask = 0, .value = 0 }, .{ .mask = 0xf_0000, .value = 0xf_0000 }, .{ .mask = 0x70f0, .value = 0 }, .{ .mask = 0xf0f0, .value = 0xf000 } };
+
+const swift_kinds: [0x1000]u8 = blk: {
+    var t: [0x1000]u8 = @splat(0);
+    for (0..0x100) |i| t[i] = 1;
+    for ([_]u16{ 0x102, 0x103, 0x104, 0x107 }) |i| t[i] = 1;
+    for (0x110..0x120) |i| t[i] = 1;
+    for (0x280..0x2c0) |i| t[i] = 1;
+    for (0xe80..0x1000) |i| {
+        const op = i >> 1 & 0xf;
+        if (i >> 7 == 0x1e and i >> 5 & 1 == 1) t[i] = if (i & 0x1f == 0x00 or i & 0x1f == 0x04 or i & 0x1f == 0x0a) 1 else 0;
+        if (i >> 7 == 0x1e and i >> 5 & 1 == 0) t[i] = if (op == 8 or op == 13) 1 else if (op == 2) 2 else 0;
+        if (i >> 5 == 0x75) t[i] = if (op == 8 or op == 13) 3 else if (op == 2) 2 else 0;
+        if (i >> 3 == 0x1f4) t[i] = 4;
+    }
+    break :blk t;
+};
+
+fn swift(code: u32) bool {
+    const s = swifts[swift_kinds[if (code <= 0xffff) code >> 6 else code >> 20]];
+    return code & s.mask == s.value;
+}
+
+fn shiftedOf(code: u32) u16 {
+    if (code & 0xff80_f0f0 == 0xfa00_f000) return @as(u16, 1) << @intCast(code >> 16 & 15) | @as(u16, 1) << @intCast(code & 15);
+    if (code > 0xffff) return if (shifts(code)) @as(u16, 1) << @intCast(code & 15) else 0;
+    return if (code >> 13 == 0 and code >> 11 != 3 and code >> 6 != 0) @as(u16, 1) << @intCast(code >> 3 & 7) else 0;
+}
+
+fn narrowLoad(code: u32) bool {
+    if (code > 0xffff) return code >> 25 == 0x7c and code >> 20 & 1 == 1 and code >> 21 & 3 < 2;
+    return code >> 11 == 0xf or code >> 11 == 0x11 or code >> 9 == 0x2b or code >> 10 == 0x17;
+}
+
+fn carries(code: u32) bool {
+    const short = code >> 6 == 0x105 or code >> 6 == 0x106;
+    const long = code & 0xfbc0_8000 == 0xf140_0000 or code & 0xffc0_0000 == 0xeb40_0000;
+    return short or long;
+}
+
+fn setsFlags(code: u32, conditional: bool) bool {
+    const short = code <= 0xffff and ((!conditional and code >> 10 <= 0x10) or code >> 8 == 0x45);
+    const long = (code & 0xfa00_8000 == 0xf000_0000 or code >> 25 == 0x75) and code & 0x10_0000 != 0;
+    return short or long;
+}
+
+fn loadedOf(code: u32) u16 {
+    return @as(u16, 1) << @intCast(if (code > 0xffff) code >> 12 & 15 else if (code >> 11 == 0x09 or code >> 11 == 0x13) code >> 8 & 7 else code & 7);
+}
+
+fn extends(code: u32) bool {
+    return code >> 8 == 0xb2 or code & 0xff80_f0c0 == 0xfa00_f080 or code & 0xfb50_8000 == 0xf340_0000;
+}
+
+fn branchesOn(code: u32) bool {
+    return if (code > 0xffff) code & 0xf800_d000 == 0xf000_8000 and code >> 23 & 7 != 7 else code >> 12 == 0xd and code >> 9 & 7 != 7;
+}
+
+fn isb(code: u32) bool {
+    return code & 0xffff_fff0 == 0xf3bf_8f60;
+}
+
+const one_each: arch_step.Model.Costs = @splat(.{ .cycles = 1, .taken = 0, .per_register = 0 });
+
+fn costsOf(table: core.Table) arch_step.Model.Costs {
+    var out: arch_step.Model.Costs = undefined;
+    for (std.enums.values(Class), 0..) |class, j| out[j] = .{ .cycles = table.cycles.get(class), .taken = table.taken.get(class), .per_register = table.per_register.get(class) };
+    return out;
+}
+
 /// Builds the core type: one struct answering the host contract over the caller's bus.
 pub fn Processor(comptime options: Options) type {
     const profiles = blk: {
@@ -113,13 +246,23 @@ pub fn Processor(comptime options: Options) type {
         var out: [options.cores.len]arch_step.Model.Costs = undefined;
         for (options.cores, 0..) |c, i| {
             const s = core.spec(c);
-            for (std.enums.values(Class), 0..) |class, j| out[i][j] = if (s.cycles) |cycles|
-                .{ .cycles = cycles.get(class), .taken = s.taken.?.get(class) }
-            else
-                .{ .cycles = 1, .taken = 0 };
+            out[i] = if (s.trm) |table| costsOf(table) else one_each;
         }
         break :blk out;
     };
+    const fits = blk: {
+        var out: [options.cores.len]?core.Fit = undefined;
+        for (options.cores, 0..) |c, i| out[i] = core.fitOf(c);
+        break :blk out;
+    };
+    const entries = blk: {
+        var n: u8 = 0;
+        for (fits) |fit| n = @max(n, if (fit) |f| if (f.issue) |issue| issue.targets else 0 else 0);
+        break :blk n;
+    };
+    const Issuing = for (fits) |fit| {
+        if (fit != null and fit.?.issue != null) break Pipeline(entries);
+    } else void;
     const specs = blk: {
         var out: [options.cores.len]core.Spec = undefined;
         for (options.cores, 0..) |c, i| out[i] = core.spec(c);
@@ -156,7 +299,8 @@ pub fn Processor(comptime options: Options) type {
     return struct {
         const Self = @This();
 
-        /// A set of the interrupt lines the listed cores may carry, one bit each: 480 where one of them is an M33, M55 or M85, else 240.
+        /// The interrupt lines the listed cores may carry, a bit each: 480 with an M33, M55 or M85,
+        /// else 240.
         pub const Lines = Nvic.Lines;
         /// Where the Non-secure aliases begin, above every Secure exception number.
         pub const ns_base: Index = first_interrupt + lines;
@@ -239,6 +383,8 @@ pub fn Processor(comptime options: Options) type {
 
         spec: core.Spec,
         model: arch_step.Model,
+        timing: std.meta.Tag(core.Timing),
+        pipeline: Issuing,
         state: State,
         memory: *options.Bus,
         systick: SysTick,
@@ -291,7 +437,8 @@ pub fn Processor(comptime options: Options) type {
             unreachable;
         }
 
-        /// A core of that part over the bus, with what the part was built with, reset through the vector table, with the ring attached.
+        /// A core of that part over the bus, with the part's build, reset through the vector table,
+        /// ring attached.
         pub fn init(memory: *options.Bus, c: core.Core, part: core.Part, ring: trace.Ring) Self {
             return build(memory, c, fitted(c, part), ring);
         }
@@ -315,6 +462,8 @@ pub fn Processor(comptime options: Options) type {
             var made: Self = .{
                 .spec = spec,
                 .model = .{ .decoding = decode.selectionOf(spec.architecture), .costs = costs[at] },
+                .timing = if (spec.trm != null) .trm else .unknown,
+                .pipeline = if (Issuing == void) {} else .{},
                 .state = .{ .secure = spec.security, .fpscr = fp.fixedFields(spec.architecture, 0) },
                 .memory = memory,
                 .systick = .{ .calibration = SysTick.noref | (part.calibration & SysTick.calibrated) },
@@ -363,6 +512,29 @@ pub fn Processor(comptime options: Options) type {
             made.reguard();
             made.atReset();
             return made;
+        }
+
+        /// Selects a timing and returns the one used: fitted falls back to trm, and trm to unknown,
+        /// where missing.
+        pub fn setTiming(self: *Self, timing: core.Timing) std.meta.Tag(core.Timing) {
+            const at = slotOf(self.spec.core);
+            self.model.rules = .{};
+            if (Issuing != void) self.pipeline = .{};
+            self.timing, self.model.costs = switch (timing) {
+                .custom => |table| .{ .custom, costsOf(table) },
+                .fitted => if (fits[at]) |fit| blk: {
+                    self.model.rules = fit.rules;
+                    if (Issuing != void) self.pipeline.issuing = fit.issue != null;
+                    break :blk .{ .fitted, costsOf(fit.table) };
+                } else fallback(at, true),
+                .trm => fallback(at, true),
+                .unknown => fallback(at, false),
+            };
+            return self.timing;
+        }
+
+        fn fallback(at: usize, published: bool) struct { std.meta.Tag(core.Timing), arch_step.Model.Costs } {
+            return if (published and specs[at].trm != null) .{ .trm, costs[at] } else .{ .unknown, one_each };
         }
 
         /// What the cycle table charges an instruction class.
@@ -421,9 +593,12 @@ pub fn Processor(comptime options: Options) type {
         pub fn reset(self: *Self) void {
             const before = self.impdef;
             const address = self.ras_address;
+            const model, const timing, const pipeline = .{ self.model, self.timing, self.pipeline };
             self.* = build(self.memory, self.spec.core, self.built(), self.trace);
             if (Impdef != void) self.impdef.keep(&before);
             self.ras_address = address;
+            self.model, self.timing = .{ model, timing };
+            if (Issuing != void) self.pipeline.issuing = pipeline.issuing;
         }
 
         fn built(self: *const Self) core.Part {
@@ -546,8 +721,8 @@ pub fn Processor(comptime options: Options) type {
             }
             return .{
                 .address = address,
-                .class = if (r.executed) r.class else null,
-                .cost = if (r.executed and self.spec.cycles != null) r.cycles else null,
+                .class = if (r.executed) r.class() else null,
+                .cost = if (r.executed and self.timing != .unknown) r.cycles else null,
                 .charged = @intCast(self.cycles - cycles),
                 .sequential = sequential,
                 .asleep = self.due & asleep_due != 0,
@@ -567,6 +742,7 @@ pub fn Processor(comptime options: Options) type {
             self.restand();
             if (tracing) self.forget();
             const pc = self.state.pc;
+            const conditional = self.state.inIt();
             const r = @call(.always_inline, arch_step.step, .{ Self, gate, &self.state, self, model });
             if (tracing) {
                 if (r.halt() == .data_fault or r.halt() == .data_violation or r.halt() == .unaligned_access) self.touched = self.last_access;
@@ -574,10 +750,141 @@ pub fn Processor(comptime options: Options) type {
             }
             if (r.executed) {
                 self.instructions += 1;
-                self.charge(r.cycles);
+                self.charge(if (Issuing != void and self.pipeline.issuing) self.issued(pc, r, conditional) else r.cycles);
             }
             self.stop = if (r.halted) self.settle(r.stop) else null;
             return r;
+        }
+
+        inline fn issued(self: *Self, pc: u32, r: arch_step.Result, conditional: bool) u8 {
+            const set = self.pipeline.facts[(r.code *% 0x9e37_79b1 >> 32 - facts_bits) & ~@as(u32, 1) ..][0..2];
+            const f = if (set[0].code == r.code) set[0] else if (set[1].code == r.code) set[1] else blk: {
+                set[1] = set[0];
+                set[0] = factsOf(r.code, r.row);
+                break :blk set[0];
+            };
+            const class: Class = if (r.skipped) .data_processing else f.class;
+            inline for (fits, 0..) |fit, at| {
+                const issue = (fit orelse continue).issue orelse continue;
+                if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (class) {
+                    inline else => |c| self.dual(issue, r, f, c, conditional),
+                }) +| (if (issue.targets == 0 or class != .branch) 0 else self.predict(issue, pc, r));
+            }
+            unreachable;
+        }
+
+        inline fn dual(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, comptime class: Class, conditional: bool) u8 {
+            const shifted = f.shifted | if (conditional) f.written else 0;
+            const last = self.pipeline.issued;
+            const late = f.addressed & ~sp_bit & last.written != 0;
+            const stalled = late and issue.delays.contains(last.class);
+            const reads = f.sources & last.written != 0;
+            const product = if (f.sources & last.product != 0) last.ready else 0;
+            const shift = if (shifted & last.group != 0) last.start + 1 + issue.shift else if (shifted & last.prior != 0) last.start + issue.shift else 0;
+            const stores = class == .store or store_lists.contains(class);
+            const fed = if (f.sources & last.loaded != 0 and !stores and (class == .multiply or last.narrow)) last.fed else 0;
+            const pending = f.addressed & ~sp_bit & last.slow;
+            const slowed = if (pending == 0) 0 else @max(self.pipeline.slowed[@ctz(pending)], self.pipeline.slowed[15 - @clz(pending)]);
+            const port = self.pipeline.data & 0xe000_0004;
+            const ready = @max(product, shift, fed, slowed);
+            const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port);
+            const start = if (paired) last.start else @max(self.cycles + (if (stalled) issue.address + (if (last.narrow) issue.load -| 1 else 0) else 0), ready);
+            const multiply = class == .multiply;
+            const loading = class == .load;
+            const held = issue.slow != 0 and conditional and class == .data_processing;
+            const dependent = class == .data_processing and f.sources & last.loaded != 0 and start < last.fed;
+            const lagging = class == .data_processing and f.sources & last.held != 0;
+            const behind = paired and last.class == .load;
+            const quick = f.quick;
+            const written = if (loading) @as(u16, 1) << f.loaded else f.written;
+            const slowing: u16 = if (issue.slow != 0 and (loading or (class == .data_processing and (dependent or behind or held or lagging or !quick)))) written & -%written else 0;
+            const gap: u64 = if (held) issue.slow + 1 else issue.slow;
+            const sets = if (conditional) f.sets_it else f.sets;
+            const next = &self.pipeline.issued;
+            next.class = class;
+            if (sets) next.flagged = start;
+            next.written = f.written;
+            next.leads = !paired;
+            next.start = start;
+            if (multiply or held) {
+                next.product = f.written;
+                next.ready = start + 1 + issue.product;
+            }
+            if (loading) {
+                next.loaded = @as(u16, 1) << f.loaded;
+                next.fed = start + issue.load;
+                next.narrow = f.narrow;
+            }
+            next.flags = sets;
+            next.group = (if (f.shifts) f.written else 0) | if (paired) last.group else 0;
+            next.prior = if (paired) last.prior else if (start == last.start + 1) last.group else 0;
+            next.slow = slowing | (last.slow & ~f.written);
+            next.held = if (held) f.written else 0;
+            next.port = port;
+            next.shifts = f.shifts;
+            self.pipeline.slowed[@ctz(@as(u32, slowing) | 1 << 16)] = start + gap;
+            if (paired) return 0;
+            const beats = if (issue.width == 0) 0 else ((if (r.skipped) 0 else f.words) + issue.width - 1) / issue.width;
+            const forward = if (store_lists.contains(last.class) and load_lists.contains(class)) issue.forward else 0;
+            const flush = if (f.isb) issue.flush else 0;
+            const overlap = issue.pipelined and last.class == .load and (class == .load or class == .store) and !late;
+            return self.fetched(issue, r, (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush) -| @intFromBool(overlap));
+        }
+
+        fn fetched(self: *Self, comptime issue: core.Issue, r: arch_step.Result, cycles: u8) u8 {
+            if (issue.prefetch == 0) return cycles;
+            const prefetch: i16 = issue.prefetch;
+            const held = prefetch - self.pipeline.issued.behind;
+            const length: i16 = if (r.code > 0xffff) 4 else 2;
+            const wait: u8 = if (held < length) @intCast(@divFloor(length - held + 3, 4)) else 0;
+            const left = held + 4 * @as(i16, wait) - length - @as(i16, if (r.class() == .branch and !r.branched) 4 else 0);
+            self.pipeline.issued.behind = if (r.branched) 0 else @max(prefetch - left - 4 * @as(i16, cycles), 0);
+            return cycles +| wait;
+        }
+
+        fn predict(self: *Self, comptime issue: core.Issue, pc: u32, r: arch_step.Result) u8 {
+            const t = &self.pipeline.targets;
+            const found = t.find(pc);
+            const taken = if (found) |i| t.counts[i] >= 2 else false;
+            if (r.branched) {
+                const target = self.state.pc;
+                const moved = if (found) |i| t.to[i] != target else false;
+                if (found) |i| {
+                    t.counts[i] +|= 1;
+                    t.to[i] = target;
+                } else t.add(pc, target);
+                const sequential = r.code <= 0xffff and target == pc +% 2;
+                const far = @max(target, pc) - @min(target, pc) >= issue.reach and self.due & returned_due == 0;
+                const wrong = (taken and moved) or far;
+                const table = if (!wrong and r.code & 0xfff0_ffe0 == 0xe8d0_f000) issue.table else 0;
+                return if (sequential) 0 else self.refetch(issue, pc, r.code, taken, wrong) +| table;
+            }
+            if (found) |i| t.counts[i] -|= 1;
+            return if (taken) issue.mispredict else 0;
+        }
+
+        fn refetch(self: *Self, comptime issue: core.Issue, pc: u32, code: u32, taken: bool, wrong: bool) u8 {
+            const p = &self.pipeline;
+            const target = self.state.pc;
+            const words = if (issue.fetch == 0 or p.stream < target or p.stream > pc) 0 else (pc + (if (code > 0xffff) @as(u32, 3) else 1)) / issue.fetch - p.stream / issue.fetch + 1;
+            const cost = if (wrong) issue.mispredict else if (taken) std.math.lossyCast(u8, words -| (p.issued.start - p.redirect)) else if (code <= 0xffff and pc & 2 != 0 and target < pc) 0 else if (branchesOn(code) and p.issued.start <= p.issued.flagged + issue.settle) issue.miss + issue.settle else issue.miss;
+            p.stream = target;
+            p.redirect = p.issued.start + cost;
+            return cost;
+        }
+
+        fn modify(self: *Self, at: u32) void {
+            if (!self.pipeline.issuing) return;
+            inline for (fits, 0..) |fit, i| {
+                const issue = (fit orelse continue).issue orelse continue;
+                if (fits.len == 1 or slotOf(self.spec.core) == i) return self.hold(issue, at);
+            }
+        }
+
+        fn hold(self: *Self, comptime issue: core.Issue, at: u32) void {
+            const port = &self.pipeline.ports[at >> 2 & 1];
+            self.cycles = @max(self.cycles, port.* -| issue.buffer);
+            port.* = @max(port.*, self.cycles) + issue.rmw;
         }
 
         fn advance(self: *Self, model: arch_step.Model, comptime tracing: bool) ?Stop {
@@ -976,7 +1283,8 @@ pub fn Processor(comptime options: Options) type {
             return self.nvic.enabled & @as(Lines, 1) << @intCast(line) != 0;
         }
 
-        /// Executes to a budget, a deadline, a stop or a sleep; a ring attached takes a second copy of the loop.
+        /// Runs to a budget, deadline, stop or sleep; an attached ring takes a second copy of the
+        /// loop.
         pub fn run(self: *Self, limit: Limit) Run {
             self.redirected = true;
             self.deadline = self.cycles +| limit.cycles;
@@ -1214,7 +1522,8 @@ pub fn Processor(comptime options: Options) type {
             self.restand();
         }
 
-        /// Whether CPACR, NSACR for Non-secure code or for a Non-secure lazy frame, and CPPWR.SU10 let this code reach the floating-point coprocessor; a refusal by NSACR, or by SU10 under SUS10, marks the NOCP UsageFault for the Secure state, v8-M RDXYK RYTQC and IsCPEnabled.
+        /// Whether CPACR, NSACR and CPPWR.SU10 allow the FPU; NSACR or SU10 refusals fault NOCP to
+        /// Secure, v8-M RDXYK RYTQC IsCPEnabled.
         pub fn coprocessorEnabled(self: *Self) bool {
             if (!self.architecture().main() or self.scs().get(scb_block.cpacr) & scb_block.cp10 == 0) return false;
             return !self.spec.security or self.securityPermits();
@@ -1363,6 +1672,8 @@ pub fn Processor(comptime options: Options) type {
 
         /// The bytes an access may use directly, from the folded lane, refolding out of line if it must.
         pub fn span(self: *Self, at: u32, comptime a: contract.Access) []u8 {
+            if (Issuing != void and a.kind == .write and a.bytes < 4) self.modify(at);
+            if (Issuing != void and a.kind == .read) self.pipeline.data = at;
             const kind = comptime folding(a.kind);
             const bytes = self.memory.folded.reach(at, a.bytes, kind, self, describe);
             if (builtin.mode == .Debug and bytes.len != 0) self.verify(at, kind);
@@ -2236,6 +2547,7 @@ pub fn Processor(comptime options: Options) type {
             s.branchTo(start);
             self.event();
             self.forget();
+            if (Issuing != void) self.pipeline.issued = .{};
             self.record(s.pc, null, .{
                 .kind = if (numberOf(i) >= first_interrupt) .irq else .entry,
                 .number = if (numberOf(i) >= first_interrupt) numberOf(i) - first_interrupt else numberOf(i),
@@ -2357,6 +2669,7 @@ pub fn Processor(comptime options: Options) type {
             const apsr: u32 = if (main_profile) 0xf800_0000 | State.flag_ge else 0xf000_0000;
             s.xpsr = (psr & apsr) | (psr & State.flag_t) | (if (main_profile) psr & State.it_mask else 0) | (if (self.pacbti()) psr & State.flag_b else 0) | (if (force_thread) 0 else psr & State.ipsr_mask);
             self.forget();
+            if (Issuing != void) self.pipeline.issued = .{};
             self.record(s.pc, null, .{ .kind = .exit, .latency = self.spec.exit });
             const handler_frame = !force_thread and psr & State.ipsr_mask != 0;
             if (handler_frame != thread) return null;

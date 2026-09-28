@@ -61,7 +61,8 @@ pub const never_shift: u5 = 28;
 /// What a caller may do at an address, which is what isa asks for a stack limit check.
 pub const Reach = struct { read: bool, write: bool };
 
-/// The Memory Protection Unit, in the v7-M and v8-M forms at once, with room for capacity regions, a power of two or zero.
+/// The Memory Protection Unit in both v7-M and v8-M forms, with capacity regions, a power of two or
+/// zero.
 pub fn Mpu(comptime capacity: u8) type {
     return struct {
         const Self = @This();
@@ -76,7 +77,8 @@ pub fn Mpu(comptime capacity: u8) type {
         limit: [capacity]u32 = @splat(0),
         mair: [2]u32 = @splat(0),
 
-        /// An MPU of the core's form with the part's number of regions, or a unit that is never enabled where it has none.
+        /// An MPU of the core's form with the part's region count, or a never-enabled unit where it
+        /// has none.
         pub fn init(count: u8, v8: bool, pxn: bool) Self {
             return .{ .count = count, .v8 = v8, .pxn = pxn };
         }

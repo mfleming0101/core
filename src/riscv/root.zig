@@ -19,6 +19,10 @@ pub const Ended = @import("system/processor.zig").Ended;
 pub const Core = @import("system/core.zig").Core;
 /// The spec of a part, selected at compile time.
 pub const spec = @import("system/core.zig").spec;
+/// Which cycles a hart charges, set with Processor.setTiming.
+pub const Timing = @import("system/core.zig").Timing;
+/// A cycle table a caller may charge by, Timing.custom.
+pub const Table = @import("system/core.zig").Table;
 /// Why the hart is standing still: isa's three, everything else being a trap it already took.
 pub const Stop = @import("isa").riscv.Stop;
 /// The instruction class a step reports, which the cycle table is indexed by.

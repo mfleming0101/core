@@ -9,6 +9,13 @@ const decode = @import("isa").riscv.decode;
 const csr = @import("isa").riscv.csr;
 const intc = @import("intc.zig");
 
+/// A cycle table: what each instruction class costs and the extra a taken one adds.
+pub const Table = struct { cycles: std.EnumArray(Class, u8), taken: std.EnumArray(Class, u8) };
+
+/// Which cycles a hart charges: one per instruction, its manual's table, the fitted table, or the
+/// caller's.
+pub const Timing = union(enum) { unknown, trm, fitted, custom: Table };
+
 /// The Espressif parts this half models.
 pub const Core = enum { esp32c3, esp32c6 };
 
@@ -22,8 +29,7 @@ pub const Flat = struct {
 pub const Spec = struct {
     core: Core,
     groups: decode.Groups,
-    cycles: ?std.EnumArray(Class, u8),
-    taken: ?std.EnumArray(Class, u8),
+    trm: ?Table,
     reset_pc: u32,
     flat: Flat,
 
@@ -67,8 +73,7 @@ pub fn spec(comptime core: Core) Spec {
         .esp32c3 => .{
             .core = .esp32c3,
             .groups = decode.only(&.{ .rv32i, .m, .c, .zicsr }),
-            .cycles = null,
-            .taken = null,
+            .trm = null,
             .reset_pc = 0x4200_0000,
             .flat = .{ .flash_base = 0x4200_0000, .ram_base = 0x3FC8_0000 },
             .model = esp32c3_csr,
@@ -85,6 +90,13 @@ pub fn spec(comptime core: Core) Spec {
     };
     out.core = core;
     return out;
+}
+
+/// A part's table fitted to measurements, or null where none was; no part has one yet.
+pub fn fitOf(comptime core: Core) ?Table {
+    return switch (core) {
+        .esp32c3, .esp32c6 => null,
+    };
 }
 
 fn like(comptime base: Core, comptime changes: anytype) Spec {

@@ -29,6 +29,10 @@ pub const Core = @import("system/core.zig").Core;
 pub const spec = @import("system/core.zig").spec;
 /// What a part was built with, which Processor.init takes.
 pub const Part = @import("system/core.zig").Part;
+/// Which cycles a core charges, set with Processor.setTiming.
+pub const Timing = @import("system/core.zig").Timing;
+/// A cycle table a caller may charge by, Timing.custom.
+pub const Table = @import("system/core.zig").Table;
 /// Why the core is standing still: isa's seventeen reasons a step halted.
 pub const Stop = @import("isa").arm.Stop;
 /// The instruction class a step reports, which the cycle table is indexed by.

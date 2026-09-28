@@ -317,7 +317,6 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
     };
 }
 
-/// ID_PFR0 to ID_ISAR5 of a core, null where the core has none: Armv6-M reserves them, v6-M D3.6.1; the M23 has them RES0 for want of the Main Extension, v8-M D1.2.140; the M3, M4 and M7 read their TRM tables, M3 and M4 TRM Table 4-1, M7 TRM Table 3-1, with ID_ISAR5 RAZ, v7-M Table B4-1; the M33, M55 and M85 read theirs, M33 TRM Table 3-1, M55 and M85 TRM Table 5-1, with debug fitted, no coprocessor interface and no CDE, the M33 with DSP and the M85 with PACBTI. Where the M33 TRM's notes contradict its ID_PFR0 and ID_PFR1 values, the value v8-M allows an Armv8.0-M core wins: no RAS, which only Armv8.1-M has, v8-M D1.2.80, and the Security Extension without the Armv8.1-M state handling instructions, D1.2.141.
 fn featuresOf(comptime c: core.Core) [14]?u32 {
     const armv7: [14]?u32 = .{ 0x30, 0x200, 0x0010_0000, 0, 0x0010_0030, 0, 0x0100_0000, 0, 0x0110_0110, 0x0211_1000, 0x2111_2231, 0x0111_1110, 0x0131_0132, 0 };
     const armv8_1: [14]?u32 = .{ 0x2000_0030, 0x230, 0x1020_0000, 0, 0x0011_1040, 0, 0x0100_0000, 0x11, 0x0110_3110, 0x0221_2000, 0x2023_2232, 0x0111_1131, 0x0131_0132, 0 };
@@ -364,7 +363,8 @@ pub fn profileOf(comptime c: core.Core) Profile {
     return out;
 }
 
-/// The block itself: a word per register the core has, over a profile shared by every instance, and the cache sizes, TCMs, REVIDR and reset VTOR of this part.
+/// The block: a word per core register, a shared profile, and this part's cache sizes, TCMs, REVIDR
+/// and reset VTOR.
 pub const Scb = struct {
     const Self = @This();
 
@@ -376,7 +376,8 @@ pub const Scb = struct {
     revision: u4,
     table: u32,
 
-    /// A block at the reset values its profile and its part give, VTOR reset to the table the part's pins give where the core has them; a core without caches keeps none.
+    /// A block at its profile's and part's reset values, VTOR from pins where present; a cacheless
+    /// core keeps none.
     pub fn init(profile: *const Profile, part: core.Part, table: u32) Self {
         var out: Self = .{
             .profile = profile,
@@ -506,7 +507,7 @@ pub const Scb = struct {
         return true;
     }
 
-    /// Takes the bits of a write that a mask selects, as far as the register lets a program write them, with no key or status rule.
+    /// Writes the bits a mask selects, as far as the register allows, without key or status rules.
     pub fn writeBits(self: *Self, offset: u32, mask: u32, value: u32) void {
         const i = index(offset);
         const writable = self.profile.write_mask[i] & mask;

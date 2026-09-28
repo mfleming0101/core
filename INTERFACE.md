@@ -10,7 +10,7 @@ const core = @import("core");
 
 | Export | What |
 |---|---|
-| `core.arm`, `core.riscv` | `Processor`, `Options`, `Step`, `Run`, `Limit`, `Ended`, `Stop`, `Core`, `spec`, `trace`, `semihosting`, and `decode` from `isa` |
+| `core.arm`, `core.riscv` | `Processor`, `Options`, `Step`, `Run`, `Limit`, `Ended`, `Stop`, `Core`, `spec`, `Timing`, `Table`, `trace`, `semihosting`, and `decode` from `isa` |
 | `core.memory` | `Regions`, `Device`, `Width`, `Line`, `Lines`, `Clock`, `map`, `elf` |
 | `core.trace` | `Ring`, the record ring both families instantiate |
 | `core.contract` | `Kind`, `Access`, `Failure`, `Word`: the vocabulary a bus is reached with |
@@ -25,8 +25,8 @@ A `core.arm.Core` (`m0`, `m0plus`, `m1`, `m3`, `m4`, `m7`, `m23`, `m33`, `m55`, 
 
 `core.arm.spec(.m4)` is the table a core is built from:
 
-- Arm: architecture, the cycle counts per instruction class its Technical Reference Manual
-  publishes, exception entry and exit cycles, priority bits, CPUID, reset CCR, and which of
+- Arm: architecture, `trm`, the cycle table its Technical Reference Manual publishes or
+  `null`, exception entry and exit cycles, priority bits, CPUID, reset CCR, and which of
   the Security, floating-point, MVE and PACBTI extensions it has.
 - RISC-V: instruction groups, reset PC, flat memory layout, CSR implementation, interrupt
   matrix layout and PMP priority rule.
@@ -86,7 +86,23 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
   `.{ .data = .kb32, .instruction = .kb32, .itcm = .{ .size = .kb64, .enabled = true } }`
   reports those, `.{}` is a part with none of them, and a core without the registers a field
   sets ignores that field.
-- `reset()` returns a running core to that state, as an Arm SYSRESETREQ does.
+- `reset()` returns a running core to that state, as an Arm SYSRESETREQ does, keeping the
+  timing `setTiming` chose.
+
+### Timing
+
+`cpu.setTiming(timing)` chooses what the core charges and answers the `Timing` it used:
+
+| `Timing` | Charges |
+|---|---|
+| `.unknown` | One cycle an instruction |
+| `.trm` | `spec(core).trm`, the table the core's TRM publishes |
+| `.fitted` | A table fitted to measurements, with the rules and issue model it needs, for the M4 and the M7 |
+| `.custom` | The caller's `Table`: cycles per class, the extra when taken and, on Arm, per listed register |
+
+`.fitted` falls back to `.trm` where the core has no fit, and `.trm` to `.unknown` where it has
+no table. A core starts at `.trm` where it has a table, else `.unknown`. No RISC-V part has a
+table or a fit.
 
 ### Running
 
@@ -126,9 +142,9 @@ const one = cpu.step();
 | `Step` field | What |
 |---|---|
 | `address` | The PC the step began at |
-| `class` | The instruction's class from `isa`; `null` for an exception entry, a return or nothing (asleep, stopped) |
-| `cost` | What the core's published cycle table charges the class; `null` on a core with no table (M1, M7, M33, M55, M85, both ESP32s) |
-| `charged` | Cycles added to `cpu.cycles`: the cost plus any entry or return overhead |
+| `class` | The instruction's class from `isa`, such as `load`, `branch` or `multiply`; `null` for an exception entry, a return or nothing (asleep, stopped) |
+| `cost` | What the chosen table and rules charge the instruction; `null` under `.unknown` timing |
+| `charged` | Cycles added to `cpu.cycles`: the cost, or what a fitted issue model makes of it, plus any entry or return overhead |
 | `sequential` | Whether the fetch followed the previous instruction, for a prefetch model |
 | `asleep` | The core is in WFI or WFE and nothing woke it |
 | `stop` | The standing stop, if any |

@@ -78,7 +78,8 @@ pub const Sau = struct {
     base: [regions]u32 = @splat(0),
     limit: [regions]u32 = @splat(0),
 
-    /// An SAU with the part's number of regions for a core with the Security Extension, or a unit that marks everything Non-secure.
+    /// An SAU with the part's region count for a core with the Security Extension, else one marking
+    /// everything Non-secure.
     pub fn init(present: bool, faults: bool, count: u8) Self {
         return .{ .present = present, .faults = faults, .count = count };
     }

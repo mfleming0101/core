@@ -10,14 +10,14 @@ pub const actlr: u32 = 0x08;
 pub const cppwr: u32 = 0x0c;
 /// The CPPWR bit that lets the floating-point state become UNKNOWN, which leaves the unit unusable, v8-M D1.2.15.
 pub const su10: u32 = 1 << 20;
-/// The CPPWR bit that keeps SU10 and SU11 from the Non-secure state and sends a NOCP UsageFault they raise to the Secure state.
+/// The CPPWR bit that hides SU10 and SU11 from Non-secure state and sends their NOCP UsageFault to
+/// Secure state.
 pub const sus10: u32 = 1 << 21;
 const su11: u32 = 1 << 22;
 const sus11: u32 = 1 << 23;
 const eventbusen: u32 = 1 << 14;
 const eventbusen_s: u32 = 1 << 13;
 
-/// The ACTLR bits a core keeps: the M3 and M4, M3 and M4 TRM 4.2; the M7, M7 TRM 3.3.1, but DISITMATBFLUSH, which Table 3-3 makes RAO/WI and Table 3-1 resets to zero; the M23, M23 TRM 5.2.1; the M33, M33 TRM 3.4; and the M55 and M85, M55 and M85 TRM 5.9. The M0 and M0+ read zero, M0+ TRM Table 4-1, and the M1's ITCM alias bits would move memory, which the library leaves to the bus.
 fn actlrMask(c: core.Core) u32 {
     return switch (c) {
         .m0, .m0plus, .m1 => 0,
@@ -30,12 +30,10 @@ fn actlrMask(c: core.Core) u32 {
     };
 }
 
-/// The ACTLR bits the M55 and M85 keep once for both Security states, EVENTBUSEN and the Secure-only EVENTBUSEN_S, M55 and M85 TRM 5.9.
 fn unbanked(c: core.Core) u32 {
     return if (c == .m55 or c == .m85) eventbusen | eventbusen_s else 0;
 }
 
-/// The CPPWR bits a core keeps: SU10, SU11 and their Secure-only locks where the Main Extension brings a floating-point unit, v8-M D1.2.15, and none for the coprocessors the library does not fit.
 fn cppwrMask(c: core.Core) u32 {
     return switch (c) {
         .m33, .m55, .m85 => su10 | sus10 | su11 | sus11,
@@ -50,7 +48,8 @@ pub const Icb = struct {
     actlr: [2]u32 = @splat(0),
     cppwr: u32 = 0,
 
-    /// ACTLR or CPPWR as a Security state sees it, the Non-secure view without the Secure-only bits, v8-M D1.2.1 D1.2.15, M55 TRM Table 5-13.
+    /// ACTLR or CPPWR as a Security state sees it, Non-secure without Secure-only bits, v8-M D1.2.1
+    /// D1.2.15, M55 TRM Table 5-13.
     pub fn readRegister(self: *const Self, c: core.Core, offset: u32, ns: bool) u32 {
         if (offset == cppwr) return self.cppwr & (if (ns) self.reachable() else 0xffff_ffff);
         if (!ns) return self.actlr[0];

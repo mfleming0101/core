@@ -29,7 +29,8 @@ const siwt: u8 = 1 << 0;
 const eccdis: u8 = 1 << 1;
 const forcewt: u8 = 1 << 2;
 
-/// The registers of one M7, with the TCM and AHBP controls kept in the part's own types, and what the part wired them with.
+/// One M7's registers, with TCM and AHBP controls in the part's own types, and what the part wired
+/// them with.
 pub const Control = struct {
     const Self = @This();
 

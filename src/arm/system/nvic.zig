@@ -76,7 +76,8 @@ pub fn Nvic(comptime width: u16) type {
             return std.math.shr(Lines, ~@as(Lines, 0), width - self.count);
         }
 
-        /// The bits of the register at an offset that belong to implemented lines, the rest reserved, v7-M B3.4.2, v8-M B12.2 RSGCR.
+        /// The bits at an offset belonging to implemented lines, the rest reserved, v7-M B3.4.2,
+        /// v8-M B12.2 RSGCR.
         pub fn implemented(self: *const Self, offset: u32) u32 {
             return switch (offset) {
                 iser...ipr - 1 => if (offset % 0x80 <= bank) wordOf(self.present(), (offset % 0x80) / 4) else 0,

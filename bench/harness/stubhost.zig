@@ -79,7 +79,7 @@ fn resetSp(window: Window) u32 {
 }
 
 fn flatCosts(comptime Costs: type) Costs {
-    return @splat(.{ .cycles = 1, .taken = 0 });
+    return @splat(std.mem.zeroInit(@typeInfo(Costs).array.child, .{ .cycles = 1 }));
 }
 
 fn wordAt(bus: anytype, address: u32) ?u32 {

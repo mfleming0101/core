@@ -44,9 +44,9 @@ test "one processor type built for three cores runs the same program with each c
 
 test "the cycle table behind those counts is the core's spec, which a caller can read directly" {
     const m0plus = core.arm.spec(.m0plus);
-    try std.testing.expectEqual(@as(u8, 2), m0plus.cycles.?.get(.load));
+    try std.testing.expectEqual(@as(u8, 2), m0plus.trm.?.cycles.get(.load));
     try std.testing.expectEqual(@as(u8, 15), m0plus.entry);
-    try std.testing.expectEqual(@as(?std.EnumArray(core.arm.Class, u8), null), comptime core.arm.spec(.m7).cycles);
+    try std.testing.expect(comptime core.arm.spec(.m7).trm == null);
     try std.testing.expect(comptime core.arm.spec(.m4).floating_point);
     try std.testing.expect(!m0plus.floating_point);
 }

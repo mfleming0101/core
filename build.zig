@@ -46,8 +46,8 @@ pub fn build(b: *std.Build) void {
         });
         b.getInstallStep().dependOn(&b.addInstallFile(probe.getEmittedBin(), b.fmt("sizeprobe-{s}.o", .{rep.name})).step);
         b.installArtifact(machine(b, target, optimize, b.fmt("machine-null-{s}", .{rep.name}), root, bare, bare_harness, chose));
-        if (!rep.oracle) continue;
         b.step(b.fmt("build-{s}", .{m.name}), b.fmt("Build {s} alone", .{m.name})).dependOn(&b.addInstallArtifact(m, .{}).step);
+        if (!rep.oracle) continue;
         b.installArtifact(machine(b, target, optimize, b.fmt("machine-stubhost-{s}", .{rep.name}), b.fmt("bench/{s}/stubhost.zig", .{rep.arch}), core, harness, chose));
     }
 
@@ -120,6 +120,7 @@ const reps = [_]Rep{
     .{ .name = "m23", .arch = "arm", .core = "m23" },
     .{ .name = "arm", .arch = "arm", .core = "m3", .oracle = true },
     .{ .name = "m4", .arch = "arm", .core = "m4" },
+    .{ .name = "m7", .arch = "arm", .core = "m7" },
     .{ .name = "m33", .arch = "arm", .core = "m33" },
     .{ .name = "m55", .arch = "arm", .core = "m55" },
     .{ .name = "riscv", .arch = "riscv", .core = "esp32c3", .oracle = true },

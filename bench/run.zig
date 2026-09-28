@@ -987,9 +987,12 @@ fn tally(comptime T: type, text: []const u8) T {
     var fields = std.mem.tokenizeAny(u8, text, " \n");
     while (fields.next()) |one| {
         const split = std.mem.indexOfScalar(u8, one, '=') orelse continue;
-        const value = std.fmt.parseInt(u32, one[split + 1 ..], 10) catch continue;
+        const text_value = one[split + 1 ..];
         inline for (@typeInfo(T).@"struct".fields) |field| {
-            if (std.mem.eql(u8, one[0..split], field.name)) @field(out, field.name) = value;
+            if (std.mem.eql(u8, one[0..split], field.name)) {
+                const value = if (field.type == f64) std.fmt.parseFloat(f64, text_value) else std.fmt.parseInt(u32, text_value, 10);
+                if (value) |v| @field(out, field.name) = v else |_| {}
+            }
         }
     }
     return out;

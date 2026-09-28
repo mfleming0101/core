@@ -53,7 +53,8 @@ pub const Ewic = struct {
         };
     }
 
-    /// Takes a register write: clearing EN drops every latched interrupt, a write to EWIC_CLRMASK clears every mask, and a one written to EWIC_PENDn pends that interrupt, M55 TRM A.2.1 A.2.3 A.2.6.
+    /// Takes a register write: clearing EN drops latched interrupts, EWIC_CLRMASK clears masks,
+    /// EWIC_PENDn pends, M55 TRM A.2.1 A.2.3 A.2.6.
     pub fn writeRegister(self: *Self, offset: u32, value: u32) bool {
         if (self.readRegister(offset) == null) return false;
         switch (offset) {

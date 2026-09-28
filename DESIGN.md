@@ -68,13 +68,23 @@ unfolds the cache.
 ### What one core knows
 
 `core.zig` in each family is a table, one entry per core, of what its Technical Reference Manual
-says: architecture, cycle counts per instruction class and the extra cost of a taken branch,
-exception entry and exit cycles, priority bits, id registers, reset CCR, extensions fitted, and
-for RISC-V the CSR implementation, interrupt matrix layout and reset address.
+says: architecture, the published cycle table (`trm`) of cycles per instruction class, the extra
+cost of a taken branch and, on Arm, the cost of each listed register, exception entry and exit
+cycles, priority bits, id registers, reset CCR, extensions fitted, and for RISC-V the CSR
+implementation, interrupt matrix layout and reset address.
 
 `Processor(.{ .cores })` builds a table of these at compile time and the union of their
-instruction groups, which prunes the decode tree. A core with no published cycle table (M1, M7,
-M33, M55, M85, the ESP32s) reports `null` costs and charges one cycle an instruction.
+instruction groups, which prunes the decode tree. `setTiming` chooses what a processor charges:
+`unknown`, one cycle an instruction with `null` costs; `trm`, the published table; `fitted`, a
+table fitted to measurements with the rules and issue model it needs (`fitOf`, for the M4 and
+the M7); or `custom`, the caller's table. A processor starts at `trm` where its core has a table
+and `unknown` where it has none (M1, M7, M33, M55, M85, the ESP32s); `fitted` falls back to
+`trm` and `trm` to `unknown`.
+
+The fitted issue model follows the previous instruction: which classes pair, the stalls on
+registers it wrote, pipelined loads, the prefetch buffer and, for the M7, dual issue, branch
+target prediction, fetch words and store port hold. It reads each code's registers from its
+`isa` meta entry, memoised per code in a 256-entry table.
 
 ### The run loop
 
@@ -254,9 +264,10 @@ classes are the architectures:
 | ESP32-C3 | RV32IMC | |
 | ESP32-C6 | RV32IMAC with a static-priority PMP | |
 
-M0, M1 and M7 differ from their representatives only in published cycle counts and MPU region
-counts, and M85 from M55 only by the pointer authentication flag. The oracle-gated columns stay
-on M3 and the ESP32-C3, the only cores a lockstep oracle exists for.
+M0 and M1 differ from their representatives only in published cycle counts and MPU region
+counts, the M7 in those and its fitted timing, and M85 from M55 only by the pointer
+authentication flag. The oracle-gated columns stay on M3 and the ESP32-C3, the only cores a
+lockstep oracle exists for.
 
 #### Columns
 
@@ -279,6 +290,7 @@ on M3 and the ESP32-C3, the only cores a lockstep oracle exists for.
 | `build_s_*`, `rss_mb_*` | Wall time and memory of `zig build` for the library alone and for everything, at one and twelve jobs |
 | `isa_decls_required`, `isa_decls_optional` | The host contract entries the Arm processor answers |
 | `date`, `commit`, `variant`, `target`, `optimize`, `zig`, `cpu_mhz` | Which tree was measured and where |
+| `timing_*`, `programs_*` | Blank in the row `zig build metrics` writes |
 | `status`, `oracle_arm_*`, `oracle_rv_*`, `probe_arm_*`, `probe_rv_*`, `corpus_*`, `diag_*`, `burst_equiv_pass`, `invariant_violations` | The gates above, each as what agreed out of what was checked; `status` is `pass` only when every one did |
 | `harness_sha`, `corpus_sha`, `oracle_sha` | Digests of the bench sources, the corpus with its images, and `oracle/` |
 

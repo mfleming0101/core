@@ -3,11 +3,12 @@
 //! instruction class and for a taken branch, the exception entry and exit cycles, the
 //! priority bits, CPUID and MVFR, the reset CCR, the MPU region count, and which of the
 //! Security, floating-point, MVE and PACBTI extensions are fitted. A core with no published
-//! table has null cycles and charges one cycle an instruction. Cores are written as
+//! table has a null trm and charges one cycle an instruction. Cores are written as
 //! differences from one another.
 const std = @import("std");
 const Class = @import("isa").arm.instruction.Class;
 const Architecture = @import("isa").arm.Architecture;
+const Rules = @import("isa").arm.step.Model.Rules;
 
 /// The Cortex-M cores this half models.
 pub const Core = enum { m0, m0plus, m1, m23, m3, m4, m7, m33, m55, m85 };
@@ -16,8 +17,7 @@ pub const Core = enum { m0, m0plus, m1, m23, m3, m4, m7, m33, m55, m85 };
 pub const Spec = struct {
     core: Core,
     architecture: Architecture,
-    cycles: ?std.EnumArray(Class, u8),
-    taken: ?std.EnumArray(Class, u8),
+    trm: ?Table,
     entry: u8,
     exit: u8,
     priority_bits: u4,
@@ -35,40 +35,83 @@ pub const Spec = struct {
     caches: bool = false,
 };
 
+/// A cycle table: each class's cost, the extra when taken, and what each register of its list adds.
+pub const Table = struct { cycles: std.EnumArray(Class, u8), taken: std.EnumArray(Class, u8), per_register: std.EnumArray(Class, u8) };
+
+const register_lists: std.EnumArray(Class, u8) = .init(.{ .data_processing = 0, .load = 0, .store = 0, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 1, .branch = 0, .branch_link = 0, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0, .multiply = 0 });
+
+/// Which cycles a core charges: one per instruction, its TRM table, the fitted table with its rules,
+/// or the caller's.
+pub const Timing = union(enum) { unknown, trm, fitted, custom: Table };
+
+/// For each class, a set of the classes that may follow it.
+pub const Pairs = std.EnumArray(Class, std.EnumSet(Class));
+
+/// How a core issues after the previous instruction: pairing, waits, stalls, penalties, prefetch and fetch
+/// word bytes, branch target entries.
+pub const Issue = struct { pairs: Pairs, waits: Pairs, delays: std.EnumSet(Class), address: u8, product: u8, load: u8, shift: u8, pipelined: bool, width: u8, miss: u8, mispredict: u8, flush: u8, forward: u8, rmw: u8, buffer: u8, slow: u8, prefetch: u8, fetch: u8, targets: u8, reach: u32, table: u8, settle: u8 };
+
+/// A fitted table, the rules it needs beyond one cost a class, and how the core issues.
+pub const Fit = struct { table: Table, rules: Rules, issue: ?Issue = null };
+
 /// The size of a level 1 cache, as M7 TRM Table 3-7 lists them.
 pub const CacheSize = enum { none, kb4, kb8, kb16, kb32, kb64 };
 
 /// The size of a tightly-coupled memory, as the SZ encodings of M7 TRM Table 3-9 list them.
 pub const TcmSize = enum(u4) { none = 0, kb4 = 3, kb8, kb16, kb32, kb64, kb128, kb256, kb512, mb1, mb2, mb4, mb8, mb16 };
 
-/// One tightly-coupled memory as the part wires it: its size and the reset values of EN, RMW and RETEN, in the bits of CM7_ITCMCR and CM7_DTCMCR, M7 TRM 3.3.6.
+/// A part's tightly-coupled memory: size and reset EN, RMW and RETEN, as in CM7_ITCMCR and
+/// CM7_DTCMCR, M7 TRM 3.3.6.
 pub const Tcm = packed struct { enabled: bool = false, read_modify_write: bool = false, retry: bool = false, size: TcmSize = .none };
 
 /// The size of the AHB peripheral interface, as the SZ encodings of M7 TRM Table 3-10 list them.
 pub const AhbpSize = enum(u3) { none, mb64, mb128, mb256, mb512 };
 
-/// The AHB peripheral interface as the part wires it: its size and the reset value of EN, in the bits of CM7_AHBPCR, M7 TRM 3.3.7.
+/// A part's AHB peripheral interface: size and reset EN, as in CM7_AHBPCR, M7 TRM 3.3.7.
 pub const Ahbp = packed struct { enabled: bool = false, size: AhbpSize = .none };
 
-/// What one part was built with that its core's TRM leaves to it: the level 1 caches of the M7, M55 and M85, the M7 TCMs, AHBP and ECC of M7 TRM Table 1-1, which on the M55 and M85 are the TCM sizes and enables, the P-AHB size and enable and the ECC of MSCR, ITCMCR, DTCMCR and PAHBCR, M55 and M85 TRM Table 5-27 Table 5-28 Table 5-42, the MPU and SAU region counts, the priority bits, the external interrupts, the REVIDRNUM the M55 and M85 read in REVIDR, M55 and M85 TRM 5.7, and the vector tables VTOR resets to, from INITVTOR on the M7, M7 TRM Table 3-1, from the pins of the M23, M23 TRM Table 5-1, and from INITSVTOR and INITNSVTOR on the M33, M55 and M85, M33 TRM Table 3-1, M55 and M85 TRM Table 5-1, and SYST_CALIB, of which the SKEW and TENMS bits are kept as CFGSTCALIB wires them, M7 TRM Table 3-2, and CFGSSTCALIB of M55 and M85 TRM C.3, where NOREF always reads one as the library fits no reference clock, and SYST_CALIB_NS the same from CFGNSSTCALIB, M55 and M85 TRM C.3, of the Non-secure SysTick that the M33, M55 and M85 always fit, v8-M D1.2.240, and the M23 fits where `systick_ns` is set, M23 TRM Table 2-1, and the number of events the External Wakeup Interrupt Controller of an M55 or M85 supports, none where zero and otherwise 4 to 483, M55 and M85 TRM A.1; a core that carries none ignores them, and a value left null is the core's default.
+/// What one part was built with that its core's TRM leaves to it; a core without an option ignores
+/// it.
 pub const Part = struct {
+    /// Level 1 data cache of the M7, M55 or M85, M7 TRM Table 1-1.
     data: CacheSize = .none,
+    /// Level 1 instruction cache of the M7, M55 or M85, M7 TRM Table 1-1.
     instruction: CacheSize = .none,
+    /// M7 ITCM, M7 TRM Table 1-1; M55 and M85 ITCMCR size and enable, M55 and M85 TRM Table 5-42.
     itcm: Tcm = .{},
+    /// M7 DTCM, M7 TRM Table 1-1; M55 and M85 DTCMCR size and enable, M55 and M85 TRM Table 5-42.
     dtcm: Tcm = .{},
+    /// M7 AHBP, M7 TRM Table 1-1; M55 and M85 P-AHB size and enable, M55 and M85 TRM Table 5-28.
     ahbp: Ahbp = .{},
+    /// ECC fitted, M7 TRM Table 1-1, and MSCR ECCEN on the M55 and M85, M55 and M85 TRM Table 5-27.
     ecc: bool = false,
+    /// MPU region count; null is the core's default.
     mpu_regions: ?u8 = null,
+    /// Non-secure MPU region count; null is the core's default.
     mpu_ns_regions: ?u8 = null,
+    /// SAU region count; null is the core's default.
     sau_regions: ?u8 = null,
+    /// Implemented priority bits; null is the core's default.
     priority_bits: ?u4 = null,
+    /// External interrupt count; null is the core's default.
     interrupts: ?u16 = null,
+    /// REVIDRNUM the M55 and M85 read in REVIDR, M55 and M85 TRM 5.7.
     revidr: u4 = 0,
+    /// Reset VTOR, from M7 INITVTOR, M7 TRM Table 3-1, M23 pins, M23 TRM Table 5-1, or INITSVTOR
+    /// elsewhere.
     vtor: u32 = 0,
+    /// Non-secure reset VTOR, from INITNSVTOR, M33 TRM Table 3-1, M55 and M85 TRM Table 5-1.
     vtor_ns: u32 = 0,
+    /// SYST_CALIB: SKEW and TENMS as CFGSTCALIB wires them, M7 TRM Table 3-2, or CFGSSTCALIB, M55
+    /// and M85 TRM C.3.
     calibration: u32 = 0,
+    /// Whether an M23 fits the Non-secure SysTick, M23 TRM Table 2-1; the M33, M55 and M85 always
+    /// do, v8-M D1.2.240.
     systick_ns: bool = false,
+    /// SYST_CALIB_NS from CFGNSSTCALIB, M55 and M85 TRM C.3; NOREF reads one in both, as no
+    /// reference clock is fitted.
     calibration_ns: u32 = 0,
+    /// EWIC events an M55 or M85 supports: zero for none, else 4 to 483, M55 and M85 TRM A.1.
     ewic: u16 = 0,
 };
 
@@ -85,7 +128,8 @@ pub const Choice = union(enum) {
         };
     }
 
-    /// A part's value lowered to the nearest value listed, the least where none is below it, or clamped to the range.
+    /// A part's value lowered to the nearest listed value, else the least listed, or clamped to the
+    /// range.
     pub fn fit(self: Choice, value: u16) u16 {
         switch (self) {
             .only => |values| {
@@ -103,7 +147,8 @@ pub const Choice = union(enum) {
 /// What a part of one core may choose, each from its TRM's configuration options.
 pub const Choices = struct { mpu_regions: Choice, mpu_ns_regions: Choice, sau_regions: Choice, priority_bits: Choice, interrupts: Choice };
 
-/// The choices of a core. The MPU: none on the M0, M0 TRM Table 1-1, or the M1, M1 TRM Table 1-1; none or eight regions on the M0+, M0+ TRM Table 1-1, and the M3 and M4, M3 and M4 TRM 1.4 2.2; none, eight or sixteen on the M7, M7 TRM Table 1-1; and none to sixteen in fours for each Security state on the M23, M23 TRM Table 2-1, the M33, M33 TRM 1.3, and the M55 and M85, M55 and M85 TRM Table 3-4. The SAU: none, four or eight regions on those four, the same tables. Priority bits: two on the M0 and M0+, M0 and M0+ TRM 2.1, the M23, M23 TRM 3.1, and the M1, M1 TRM 1.1; three to eight on the rest, the same tables as the MPU. External interrupts: 1, 2, 4, 8, 16, 24 or 32 on the M0; 0 to 32 on the M0+; 1, 8, 16 or 32 on the M1; 1 to 240 on the M3, M4, M7 and M23; and 1 to 480 on the M33, M55 and M85; the same tables as the MPU.
+/// What a core lets a part choose for MPU and SAU regions, priority bits and interrupts, per its
+/// TRM.
 pub fn choicesOf(comptime core: Core) Choices {
     const none: Choice = .{ .only = &.{0} };
     const fours: Choice = .{ .only = &.{ 0, 4, 8, 12, 16 } };
@@ -123,15 +168,19 @@ pub fn choicesOf(comptime core: Core) Choices {
     };
 }
 
-/// The spec of a core, each entry read off its Technical Reference Manual: the cycle tables from its instruction set summary, M4 TRM 3.3, and the entry and exit cycles from its interrupt latency, M4 TRM 3.9.2.
+/// A core's spec from its TRM: cycle tables, M4 TRM 3.3, and interrupt entry and exit cycles, M4
+/// TRM 3.9.2.
 pub fn spec(comptime core: Core) Spec {
     @setEvalBranchQuota(200_000);
     var out: Spec = switch (core) {
         .m0plus => .{
             .core = .m0plus,
             .architecture = .armv6m,
-            .cycles = .init(.{ .data_processing = 1, .load = 2, .store = 2, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 3, .branch = 1, .branch_link = 2, .system = 1, .sleep = 2, .special_register = 3, .barrier = 3, .divide = 1 }),
-            .taken = .init(.{ .data_processing = 1, .load = 0, .store = 0, .load_multiple = 0, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 0, .branch = 1, .branch_link = 1, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0 }),
+            .trm = .{
+                .cycles = .init(.{ .data_processing = 1, .load = 2, .store = 2, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 3, .branch = 1, .branch_link = 2, .system = 1, .sleep = 2, .special_register = 3, .barrier = 3, .divide = 1, .multiply = 1 }),
+                .taken = .init(.{ .data_processing = 1, .load = 0, .store = 0, .load_multiple = 0, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 0, .branch = 1, .branch_link = 1, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0, .multiply = 0 }),
+                .per_register = register_lists,
+            },
             .entry = 15,
             .exit = 10,
             .priority_bits = 2,
@@ -144,8 +193,11 @@ pub fn spec(comptime core: Core) Spec {
         .m4 => .{
             .core = .m4,
             .architecture = .armv7em,
-            .cycles = .init(.{ .data_processing = 1, .load = 2, .store = 2, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 1, .branch = 1, .branch_link = 1, .system = 1, .sleep = 1, .special_register = 1, .barrier = 1, .divide = 12 }),
-            .taken = .init(.{ .data_processing = 2, .load = 2, .store = 0, .load_multiple = 2, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 2, .branch = 2, .branch_link = 2, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0 }),
+            .trm = .{
+                .cycles = .init(.{ .data_processing = 1, .load = 2, .store = 2, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 1, .branch = 1, .branch_link = 1, .system = 1, .sleep = 1, .special_register = 1, .barrier = 1, .divide = 12, .multiply = 1 }),
+                .taken = .init(.{ .data_processing = 2, .load = 2, .store = 0, .load_multiple = 2, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 2, .branch = 2, .branch_link = 2, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0, .multiply = 0 }),
+                .per_register = register_lists,
+            },
             .entry = 12,
             .exit = 10,
             .priority_bits = 4,
@@ -158,30 +210,70 @@ pub fn spec(comptime core: Core) Spec {
         },
         .m0 => like(.m0plus, .{
             .mpu_regions = 0,
-            .cycles = std.EnumArray(Class, u8).init(.{ .data_processing = 1, .load = 2, .store = 2, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 4, .branch = 1, .branch_link = 2, .system = 1, .sleep = 2, .special_register = 4, .barrier = 4, .divide = 1 }),
-            .taken = std.EnumArray(Class, u8).init(.{ .data_processing = 2, .load = 0, .store = 0, .load_multiple = 0, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 0, .branch = 2, .branch_link = 2, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0 }),
+            .trm = @as(?Table, .{
+                .cycles = .init(.{ .data_processing = 1, .load = 2, .store = 2, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 4, .branch = 1, .branch_link = 2, .system = 1, .sleep = 2, .special_register = 4, .barrier = 4, .divide = 1, .multiply = 1 }),
+                .taken = .init(.{ .data_processing = 2, .load = 0, .store = 0, .load_multiple = 0, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 0, .branch = 2, .branch_link = 2, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0, .multiply = 0 }),
+                .per_register = register_lists,
+            }),
             .cpuid = 0x410c_c200,
         }),
-        .m1 => like(.m0, .{ .cpuid = 0x410c_c210, .cycles = null, .taken = null }),
+        .m1 => like(.m0, .{ .cpuid = 0x410c_c210, .trm = @as(?Table, null) }),
         .m23 => like(.m0plus, .{
             .architecture = .armv8m_base,
-            .cycles = blk: {
-                var c = spec(.m0plus).cycles.?;
-                c.set(.divide, 17);
-                break :blk c;
-            },
+            .trm = @as(?Table, blk: {
+                var t = spec(.m0plus).trm.?;
+                t.cycles.set(.divide, 17);
+                break :blk t;
+            }),
             .cpuid = 0x411c_d200,
             .ccr = 0x0000_0209,
             .security = true,
         }),
         .m3 => like(.m4, .{ .architecture = .armv7m, .cpuid = 0x410f_c231, .exit = 12, .floating_point = false, .mvfr = [3]u32{ 0, 0, 0 } }),
-        .m7 => like(.m4, .{ .cpuid = 0x411f_c272, .cycles = null, .taken = null, .ccr = 0x0004_0200, .double_precision = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0221, 0x1200_0011, 0x0000_0040 }, .caches = true }),
-        .m33 => like(.m4, .{ .architecture = .armv8m_main, .cpuid = 0x410f_d213, .cycles = null, .taken = null, .ccr = 0x0000_0201, .security = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0021, 0x1100_0011, 0x0000_0040 } }),
+        .m7 => like(.m4, .{ .cpuid = 0x411f_c272, .trm = @as(?Table, null), .ccr = 0x0004_0200, .double_precision = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0221, 0x1200_0011, 0x0000_0040 }, .caches = true }),
+        .m33 => like(.m4, .{ .architecture = .armv8m_main, .cpuid = 0x410f_d213, .trm = @as(?Table, null), .ccr = 0x0000_0201, .security = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0021, 0x1100_0011, 0x0000_0040 } }),
         .m55 => like(.m33, .{ .architecture = .armv8_1m_main, .cpuid = 0x411f_d221, .double_precision = true, .half_precision = true, .mve = true, .mvfr = [3]u32{ 0x1011_0221, 0x1210_0211, 0x0000_0040 }, .caches = true }),
         .m85 => like(.m55, .{ .cpuid = 0x411f_d230, .pacbti = true }),
     };
     out.core = core;
     return out;
+}
+
+/// A core's fitted timing, or null where it has none.
+pub fn fitOf(comptime core: Core) ?Fit {
+    return switch (core) {
+        .m4 => blk: {
+            var table = spec(.m4).trm.?;
+            table.cycles.set(.store, 1);
+            table.taken.set(.branch, 1);
+            table.taken.set(.branch_link, 1);
+            table.taken.set(.pop_pc, 3);
+            const alone: Pairs = .initFill(.initEmpty());
+            break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 2, .zero_dividend = 2, .narrower = 3, .base = 4, .bits = 4, .signed = 0 }, .straddle = true }, .issue = .{ .pairs = alone, .waits = alone, .delays = .initMany(&.{ .data_processing, .multiply }), .address = 1, .product = 0, .load = 0, .shift = 0, .pipelined = true, .width = 0, .miss = 0, .mispredict = 0, .flush = 2, .forward = 0, .rmw = 0, .buffer = 0, .slow = 0, .prefetch = 12, .fetch = 0, .targets = 0, .reach = 0, .table = 0, .settle = 0 } };
+        },
+        .m7 => blk: {
+            var table: Table = .{ .cycles = .initFill(1), .taken = .initFill(0), .per_register = .initFill(0) };
+            table.cycles.set(.load_multiple, 0);
+            table.cycles.set(.store_multiple, 0);
+            table.cycles.set(.pop, 0);
+            table.cycles.set(.pop_pc, 0);
+            table.taken.set(.pop_pc, 7);
+            table.cycles.set(.barrier, 5);
+            table.cycles.set(.special_register, 4);
+            const single: std.EnumSet(Class) = .initMany(&.{ .data_processing, .load, .store, .branch, .system, .multiply });
+            var pairs: Pairs = .initFill(.initEmpty());
+            for ([_]Class{ .data_processing, .load, .store, .branch, .system, .multiply }) |first| {
+                var second = single;
+                if (first != .data_processing and first != .system and first != .load) second.remove(first);
+                pairs.set(first, second);
+            }
+            var waits: Pairs = .initFill(.initEmpty());
+            waits.set(.data_processing, .initOne(.data_processing));
+            waits.set(.load, .initOne(.data_processing));
+            break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 3, .zero_dividend = 7, .narrower = 3, .base = 3, .bits = 2, .signed = 1 }, .straddle = true }, .issue = .{ .pairs = pairs, .waits = waits, .delays = .initFull(), .address = 1, .product = 1, .load = 2, .shift = 1, .pipelined = false, .width = 2, .miss = 3, .mispredict = 6, .flush = 2, .forward = 5, .rmw = 4, .buffer = 11, .slow = 2, .prefetch = 0, .fetch = 8, .targets = 34, .reach = 4096, .table = 1, .settle = 2 } };
+        },
+        else => null,
+    };
 }
 
 fn like(comptime base: Core, comptime changes: anytype) Spec {

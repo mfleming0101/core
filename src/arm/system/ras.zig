@@ -16,10 +16,11 @@ pub const rfsr: u32 = 0x204;
 const erriidr: u32 = 0xe10;
 const errdevid: u32 = 0xfc8;
 
-/// ERRADDR0, at an offset from the base, which software may write where ECC is fitted and only a Cold reset clears, v8-M D1.2.80.
+/// ERRADDR0 offset, writable where ECC is fitted, cleared only by a Cold reset, v8-M D1.2.80.
 pub const erraddr: u32 = 0x018;
 
-/// The word a register read answers, ERRADDR0 reading the address last written, or null for a word the TRMs do not list.
+/// The word a register read answers, ERRADDR0 giving the last address written, or null for a word
+/// the TRMs omit.
 pub fn readRegister(c: core.Core, ecc: bool, address: u32, offset: u32) ?u32 {
     if (offset & 3 != 0) return null;
     return switch (offset) {
@@ -33,7 +34,8 @@ pub fn readRegister(c: core.Core, ecc: bool, address: u32, offset: u32) ?u32 {
     };
 }
 
-/// Whether the Non-secure state reads an offset as zero while AIRCR.BFHFNMINS is zero, which is all of them but ERRIIDR and ERRDEVID, M55 TRM 11.6.
+/// Whether Non-secure state reads an offset as zero while AIRCR.BFHFNMINS is zero: all but ERRIIDR
+/// and ERRDEVID, M55 TRM 11.6.
 pub fn gated(offset: u32) bool {
     return offset != erriidr and offset != errdevid;
 }

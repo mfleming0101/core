@@ -115,9 +115,14 @@ pub const arm = struct {
     pub const Stop = step.Stop;
 
     pub const instruction = struct {
-        pub const Class = enum(u4) { data_processing, load, store, load_multiple, store_multiple, push, pop, pop_pc, branch, branch_link, system, sleep, special_register, barrier, divide };
-        pub const Cost = packed struct(u16) { cycles: u8, taken: u8 };
+        pub const Class = enum(u4) { data_processing, load, store, load_multiple, store_multiple, push, pop, pop_pc, branch, branch_link, system, sleep, special_register, barrier, divide, multiply };
+        pub const Cost = packed struct(u24) { cycles: u8, taken: u8, per_register: u8 };
+        pub const Divide = struct { zero_divisor: u8, zero_dividend: u8, narrower: u8, base: u8, bits: u8, signed: u8 };
         pub const costs_len = @typeInfo(Class).@"enum".fields.len;
+
+        pub fn words(_: Class, _: u32) u8 {
+            return 0;
+        }
     };
 
     pub const decode = struct {
@@ -145,6 +150,16 @@ pub const arm = struct {
         }
     };
 
+    pub const masks = struct {
+        pub const Masks = packed struct(u64) { written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, _: u16 = 0 };
+
+        pub const Entry = struct { class: instruction.Class = .data_processing };
+
+        pub fn of(_: *const Entry, _: u32) Masks {
+            return .{};
+        }
+    };
+
     pub const step = struct {
         pub const Stop = ArmStop;
 
@@ -155,13 +170,18 @@ pub const arm = struct {
         pub const Result = packed struct(u64) {
             code: u32 = 0,
             fetched: bool = false,
-            class: instruction.Class = .data_processing,
             executed: bool = false,
             cycles: u8 = 0,
             branched: bool = false,
             stop: ArmStop = .breakpoint,
             halted: bool = false,
-            _: u11 = 0,
+            row: u11 = 0,
+            skipped: bool = false,
+            _: u3 = 0,
+
+            pub fn class(_: Result) instruction.Class {
+                return .data_processing;
+            }
 
             pub fn fetchedCode(self: Result) ?u32 {
                 return if (self.fetched) self.code else null;
@@ -175,6 +195,9 @@ pub const arm = struct {
         pub const Model = struct {
             decoding: decode.Selection,
             costs: Costs,
+            rules: Rules = .{},
+
+            pub const Rules = struct { divide: ?instruction.Divide = null, straddle: bool = false };
 
             pub const Costs = [instruction.costs_len]instruction.Cost;
 
@@ -495,6 +518,10 @@ pub const sem = struct {
 };
 
 pub const generated = struct {
+    pub const arm_meta = struct {
+        pub const entries = [1]arm.masks.Entry{.{}};
+    };
+
     pub const arm_disasm = struct {
         pub fn write(w: *std.Io.Writer, _: u32, _: u32, _: arm.decode.Groups) std.Io.Writer.Error!void {
             try w.writeAll("undefined");

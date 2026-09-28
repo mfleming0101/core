@@ -10,7 +10,8 @@ const contract = @import("../contract.zig");
 /// The size of a device access; the values are the byte counts themselves.
 pub const Width = enum(u3) { byte = 1, half = 2, word = 4 };
 
-/// How many interrupt lines the bus carries: the most an Arm core other than the M33, M55 and M85 is built with, and more than either ESP32 has.
+/// Interrupt lines the bus carries: the most of any Arm core but the M33, M55 and M85, above either
+/// ESP32's.
 pub const lines = 240;
 /// A set of interrupt lines, one bit per line.
 pub const Lines = u240;
@@ -148,7 +149,6 @@ pub const Regions = struct {
     /// Why a set of entries cannot become a map.
     pub const Malformed = error{ Empty, Wraps, Overlaps };
 
-    /// Sorts the caller's entries in place, keeps them, and threads the tick and held-line lists.
     fn offending(entries: []const Entry) ?struct { at: usize, err: Malformed } {
         for (entries, 0..) |entry, i| {
             const span = entry.span();
@@ -159,12 +159,14 @@ pub const Regions = struct {
         return null;
     }
 
-    /// Where the entry adopt refused lies, once it has sorted them: the empty or wrapping one, or the later of two that overlap.
+    /// Where adopt's refused entry lies after sorting: the empty or wrapping one, or the later of
+    /// two overlapping.
     pub fn culprit(entries: []const Entry) ?struct { base: u32, size: u32 } {
         const bad = offending(entries) orelse return null;
         return .{ .base = entries[bad.at].base(), .size = entries[bad.at].span() };
     }
 
+    /// Sorts the caller's entries in place, keeps them, and threads the tick and held-line lists.
     pub fn adopt(entries: []Entry) Malformed!Regions {
         sort(entries);
         if (offending(entries)) |bad| return bad.err;

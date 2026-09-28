@@ -37,6 +37,16 @@ pub const Row = struct {
     probe_arm_total: u32,
     probe_rv_match: u32,
     probe_rv_total: u32,
+    timing_m7_match: ?u32 = null,
+    timing_m7_total: ?u32 = null,
+    timing_m7_error_pct: ?f64 = null,
+    timing_m4_match: ?u32 = null,
+    timing_m4_total: ?u32 = null,
+    timing_m4_error_pct: ?f64 = null,
+    programs_m7_functional_match: ?u32 = null,
+    programs_m7_functional_total: ?u32 = null,
+    programs_m7_within5: ?u32 = null,
+    programs_m7_error_pct: ?f64 = null,
     corpus_pass: u32,
     corpus_total: u32,
     burst_equiv_pass: bool,
@@ -162,15 +172,19 @@ pub fn line(row: Row, buffer: []u8) ![]u8 {
     var at: usize = 0;
     inline for (@typeInfo(Row).@"struct".fields, 0..) |field, i| {
         if (i != 0) at += (try std.fmt.bufPrint(buffer[at..], "\t", .{})).len;
-        const value = @field(row, field.name);
-        at += switch (@typeInfo(field.type)) {
-            .float => (try std.fmt.bufPrint(buffer[at..], "{d:.3}", .{value})).len,
-            .@"enum" => (try std.fmt.bufPrint(buffer[at..], "{s}", .{@tagName(value)})).len,
-            .bool => (try std.fmt.bufPrint(buffer[at..], "{d}", .{@intFromBool(value)})).len,
-            .pointer => (try std.fmt.bufPrint(buffer[at..], "{s}", .{value})).len,
-            else => (try std.fmt.bufPrint(buffer[at..], "{d}", .{value})).len,
-        };
+        at += (try cell(buffer[at..], @field(row, field.name))).len;
     }
     at += (try std.fmt.bufPrint(buffer[at..], "\n", .{})).len;
     return buffer[0..at];
+}
+
+fn cell(buffer: []u8, value: anytype) ![]u8 {
+    return switch (@typeInfo(@TypeOf(value))) {
+        .optional => if (value) |given| cell(buffer, given) else buffer[0..0],
+        .float => std.fmt.bufPrint(buffer, "{d:.3}", .{value}),
+        .@"enum" => std.fmt.bufPrint(buffer, "{s}", .{@tagName(value)}),
+        .bool => std.fmt.bufPrint(buffer, "{d}", .{@intFromBool(value)}),
+        .pointer => std.fmt.bufPrint(buffer, "{s}", .{value}),
+        else => std.fmt.bufPrint(buffer, "{d}", .{value}),
+    };
 }

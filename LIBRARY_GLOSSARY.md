@@ -79,10 +79,21 @@ its reset defaults and its optional blocks. Comptime data, selected by `spec(cor
 [processor](#processor) holds a copy of the one it was built as.
 
 - `Spec` and `spec`: [arm](src/arm/system/core.zig), [riscv](src/riscv/system/core.zig).
-- `Spec.cycles` is what an instruction of each class costs, `Spec.taken` what a taken branch
-  adds; both `null` where no table is published, and such a processor charges one cycle an
-  instruction.
+- `Spec.trm` is the published table: what an instruction of each class costs, what a taken
+  branch adds and, on Arm, what each register of a list adds; `null` where no table is
+  published, and such a processor charges one cycle an instruction.
 - `Spec.model` is the RISC-V CSR implementation, `isa`'s word, not a model of the part.
+
+### Timing
+
+Which cycles a [processor](#processor) charges, chosen by `setTiming`: `unknown`, one cycle an
+instruction; `trm`, the [spec](#spec)'s published table; `fitted`, a table fitted to
+measurements with the rules and issue model it needs; `custom`, a caller's `Table`. `fitted`
+falls back to `trm` and `trm` to `unknown` where a core has none.
+
+- `Timing` and `Table`: [arm](src/arm/system/core.zig), [riscv](src/riscv/system/core.zig);
+  `setTiming` in each processor.
+- `fitOf` holds the fits, the M4's and the M7's. No RISC-V part has one.
 
 ### Hart
 
@@ -116,10 +127,9 @@ whether the core is asleep, and the [stop](#stop) if it halted.
 
 - `Step` and `Processor.step`: [arm](src/arm/system/processor.zig),
   [riscv](src/riscv/system/processor.zig).
-- `Step.cost` is what the table says and is *not* charged: stepping is how a chip deciding its
-  own timing drives the core, charging what it decided through [`charge`](#charge).
-  `Step.charged` is what the step already charged, the exception entry and the sleep, not the
-  instruction. A run charges both.
+- `Step.cost` is what the chosen [timing](#timing)'s table and rules charge the instruction,
+  `null` under `unknown`. `Step.charged` is what the step added to the count: the instruction,
+  as a fitted issue model may adjust it, and any exception entry or return.
 
 ### Limit
 
@@ -638,9 +648,9 @@ whose expected explanations are checked line by line.
 ### Oracle
 
 An outside authority the library is compared against, and the pinned files holding its answers:
-QEMU for the Arm traces and probe, Espressif's QEMU and Sail for the RISC-V ones. Every
-comparison is against a file in [oracle/](oracle/), never a tool run at measurement time, and a
-[divergence register](#divergence-register) records where the two knowingly differ and why.
+QEMU for the Arm traces and probe, Espressif's QEMU and Sail for the RISC-V ones. Every comparison is against a file in [oracle/](oracle/),
+never a tool run at measurement time, and a [divergence register](#divergence-register) records
+where the two knowingly differ and why.
 
 - The trace pins are `oracle/trace_*.txt`, the probe pins
   [oracle/probe_arm.txt](oracle/probe_arm.txt) and
