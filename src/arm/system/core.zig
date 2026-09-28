@@ -49,7 +49,7 @@ pub const Pairs = std.EnumArray(Class, std.EnumSet(Class));
 
 /// How a core issues after the previous instruction: pairing, waits, stalls, penalties, prefetch and fetch
 /// word bytes, branch target entries.
-pub const Issue = struct { pairs: Pairs, waits: Pairs, delays: std.EnumSet(Class), address: u8, product: u8, load: u8, shift: u8, pipelined: bool, width: u8, miss: u8, mispredict: u8, flush: u8, forward: u8, rmw: u8, buffer: u8, slow: u8, prefetch: u8, fetch: u8, targets: u8, reach: u32, table: u8, settle: u8 };
+pub const Issue = struct { pairs: Pairs, waits: Pairs, delays: std.EnumSet(Class), address: u8, product: u8, load: u8, shift: u8, pipelined: bool, width: u8, miss: u8, mispredict: u8, flush: u8, forward: u8, rmw: u8, indexed: u8, lag_base: u32, lag_size: u32, cache_base: u32, cache_size: u32, cache_miss: u8, fill: u8, buffer: u8, slow: u8, prefetch: u8, fetch: u8, targets: u8, reach: u32, table: u8, settle: u8 };
 
 /// A fitted table, the rules it needs beyond one cost a class, and how the core issues.
 pub const Fit = struct { table: Table, rules: Rules, issue: ?Issue = null };
@@ -249,7 +249,7 @@ pub fn fitOf(comptime core: Core) ?Fit {
             table.taken.set(.branch_link, 1);
             table.taken.set(.pop_pc, 3);
             const alone: Pairs = .initFill(.initEmpty());
-            break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 2, .zero_dividend = 2, .narrower = 3, .base = 4, .bits = 4, .signed = 0 }, .straddle = true }, .issue = .{ .pairs = alone, .waits = alone, .delays = .initMany(&.{ .data_processing, .multiply }), .address = 1, .product = 0, .load = 0, .shift = 0, .pipelined = true, .width = 0, .miss = 0, .mispredict = 0, .flush = 2, .forward = 0, .rmw = 0, .buffer = 0, .slow = 0, .prefetch = 12, .fetch = 0, .targets = 0, .reach = 0, .table = 0, .settle = 0 } };
+            break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 2, .zero_dividend = 2, .narrower = 3, .base = 4, .bits = 4, .signed = 0 }, .straddle = true }, .issue = .{ .pairs = alone, .waits = alone, .delays = .initMany(&.{ .data_processing, .multiply }), .address = 1, .product = 0, .load = 0, .shift = 0, .pipelined = true, .width = 0, .miss = 0, .mispredict = 0, .flush = 2, .forward = 0, .rmw = 0, .indexed = 1, .lag_base = 0x2000_4000, .lag_size = 0x1800, .cache_base = 0x0800_0000, .cache_size = 0x2_0000, .cache_miss = 1, .fill = 3, .buffer = 0, .slow = 0, .prefetch = 12, .fetch = 0, .targets = 0, .reach = 0, .table = 4, .settle = 0 } };
         },
         .m7 => blk: {
             var table: Table = .{ .cycles = .initFill(1), .taken = .initFill(0), .per_register = .initFill(0) };
@@ -270,7 +270,7 @@ pub fn fitOf(comptime core: Core) ?Fit {
             var waits: Pairs = .initFill(.initEmpty());
             waits.set(.data_processing, .initOne(.data_processing));
             waits.set(.load, .initOne(.data_processing));
-            break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 3, .zero_dividend = 7, .narrower = 3, .base = 3, .bits = 2, .signed = 1 }, .straddle = true }, .issue = .{ .pairs = pairs, .waits = waits, .delays = .initFull(), .address = 1, .product = 1, .load = 2, .shift = 1, .pipelined = false, .width = 2, .miss = 3, .mispredict = 6, .flush = 2, .forward = 5, .rmw = 4, .buffer = 11, .slow = 2, .prefetch = 0, .fetch = 8, .targets = 34, .reach = 4096, .table = 1, .settle = 2 } };
+            break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 3, .zero_dividend = 7, .narrower = 3, .base = 3, .bits = 2, .signed = 1 }, .straddle = true }, .issue = .{ .pairs = pairs, .waits = waits, .delays = .initFull(), .address = 1, .product = 1, .load = 2, .shift = 1, .pipelined = false, .width = 2, .miss = 3, .mispredict = 6, .flush = 2, .forward = 5, .rmw = 4, .indexed = 0, .lag_base = 0, .lag_size = 0, .cache_base = 0, .cache_size = 0, .cache_miss = 0, .fill = 0, .buffer = 11, .slow = 2, .prefetch = 0, .fetch = 8, .targets = 34, .reach = 4096, .table = 1, .settle = 2 } };
         },
         else => null,
     };

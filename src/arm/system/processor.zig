@@ -139,20 +139,20 @@ fn Targets(comptime n: u8) type {
     };
 }
 
-const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false };
+const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, lagged: u2 = 0 };
 
-const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, _: u10 = 0 };
+const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, table: bool = false, indexed: bool = false, _: u8 = 0 };
 
 fn factsOf(code: u32, row: u11) Facts {
     const entry = &meta.entries[row];
     const operands = operand_masks.of(entry, code);
-    return .{ .code = code, .written = operands.written, .sources = operands.sources, .addressed = operands.addressed, .shifted = shiftedOf(code), .class = entry.class, .loaded = @intCast(@ctz(loadedOf(code))), .words = @intCast(instruction.words(entry.class, code)), .sets = setsFlags(code, false), .sets_it = setsFlags(code, true), .carries = carries(code), .extends = extends(code), .shifts = shifts(code), .quick = swift(code), .narrow = narrowLoad(code), .isb = isb(code) };
+    return .{ .code = code, .written = operands.written, .sources = operands.sources, .addressed = operands.addressed, .shifted = shiftedOf(code), .class = entry.class, .loaded = @intCast(@ctz(loadedOf(code))), .words = @intCast(instruction.words(entry.class, code)), .sets = setsFlags(code, false), .sets_it = setsFlags(code, true), .carries = carries(code), .extends = extends(code), .shifts = shifts(code), .quick = swift(code), .narrow = narrowLoad(code), .isb = isb(code), .table = code & 0xfff0_ffe0 == 0xe8d0_f000, .indexed = indexedStore(code) };
 }
 
 const facts_bits = 8;
 
 fn Pipeline(comptime entries: u8) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0) };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, stored: u32 = 0, lines: [8]u32 = @splat(0), code: [32]u32 = @splat(0), row: u32 = 0, entered: u64 = 0, slowed: [17]u64 = @splat(0) };
 }
 
 const sp_bit: u16 = 1 << 13;
@@ -192,6 +192,10 @@ fn shiftedOf(code: u32) u16 {
     if (code & 0xff80_f0f0 == 0xfa00_f000) return @as(u16, 1) << @intCast(code >> 16 & 15) | @as(u16, 1) << @intCast(code & 15);
     if (code > 0xffff) return if (shifts(code)) @as(u16, 1) << @intCast(code & 15) else 0;
     return if (code >> 13 == 0 and code >> 11 != 3 and code >> 6 != 0) @as(u16, 1) << @intCast(code >> 3 & 7) else 0;
+}
+
+fn indexedStore(code: u32) bool {
+    return if (code > 0xffff) code & 0xff90_0fc0 == 0xf800_0000 else code >> 9 >= 0x28 and code >> 9 <= 0x2a;
 }
 
 fn narrowLoad(code: u32) bool {
@@ -767,13 +771,13 @@ pub fn Processor(comptime options: Options) type {
             inline for (fits, 0..) |fit, at| {
                 const issue = (fit orelse continue).issue orelse continue;
                 if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (class) {
-                    inline else => |c| self.dual(issue, r, f, c, conditional),
+                    inline else => |c| self.dual(issue, pc, r, f, c, conditional),
                 }) +| (if (issue.targets == 0 or class != .branch) 0 else self.predict(issue, pc, r));
             }
             unreachable;
         }
 
-        inline fn dual(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, comptime class: Class, conditional: bool) u8 {
+        inline fn dual(self: *Self, comptime issue: core.Issue, pc: u32, r: arch_step.Result, f: Facts, comptime class: Class, conditional: bool) u8 {
             const shifted = f.shifted | if (conditional) f.written else 0;
             const last = self.pipeline.issued;
             const late = f.addressed & ~sp_bit & last.written != 0;
@@ -822,13 +826,44 @@ pub fn Processor(comptime options: Options) type {
             next.held = if (held) f.written else 0;
             next.port = port;
             next.shifts = f.shifts;
+            if (issue.lag_size != 0) next.lagged = if (loading and self.pipeline.data -% issue.lag_base < issue.lag_size) 1 else if (class == .store and self.pipeline.stored -% issue.lag_base < issue.lag_size) (if (last.lagged >= 2) 2 else 3) else 0;
             self.pipeline.slowed[@ctz(@as(u32, slowing) | 1 << 16)] = start + gap;
             if (paired) return 0;
             const beats = if (issue.width == 0) 0 else ((if (r.skipped) 0 else f.words) + issue.width - 1) / issue.width;
             const forward = if (store_lists.contains(last.class) and load_lists.contains(class)) issue.forward else 0;
             const flush = if (f.isb) issue.flush else 0;
-            const overlap = issue.pipelined and last.class == .load and (class == .load or class == .store) and !late;
-            return self.fetched(issue, r, (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush) -| @intFromBool(overlap));
+            const table = if (class == .branch and issue.targets == 0 and f.table) issue.table else 0;
+            const indexed = if (class == .store and f.indexed) issue.indexed else 0;
+            const lag = if (issue.lag_size == 0) 0 else @intFromBool((last.lagged == 1 and class != .load and class != .store) or (last.lagged == 2 and class != .store) or (load_lists.contains(class) and self.pipeline.data -% issue.lag_base < issue.lag_size) or (store_lists.contains(class) and f.words > 1 and self.pipeline.stored -% issue.lag_base < issue.lag_size));
+            const missed = issue.cache_size != 0 and (loading or load_lists.contains(class)) and self.pipeline.data -% issue.cache_base < issue.cache_size and !hits(&self.pipeline.lines, self.pipeline.data);
+            const overlap = issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and !missed;
+            var cycles = @as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| lag +| if (missed) issue.cache_miss else 0;
+            if (issue.fill != 0 and pc -% issue.cache_base < issue.cache_size and pc >> 3 != self.pipeline.row) {
+                @branchHint(.unlikely);
+                cycles +|= self.filled(issue, pc);
+            }
+            return self.fetched(issue, r, cycles -| @intFromBool(overlap));
+        }
+
+        noinline fn hits(held: []u32, at: u32) bool {
+            const line = at & ~@as(u32, 31);
+            const row = @as(u32, 1) << @intCast(at >> 3 & 3);
+            var i: usize = 0;
+            while (i < held.len - 1 and held[i] & ~@as(u32, 31) != line) i += 1;
+            const found = held[i] & ~@as(u32, 31) == line;
+            const hit = found and held[i] & row != 0;
+            const entry = (if (found) held[i] else line) | row;
+            std.mem.copyBackwards(u32, held[1 .. i + 1], held[0..i]);
+            held[0] = entry;
+            return hit;
+        }
+
+        noinline fn filled(self: *Self, comptime issue: core.Issue, pc: u32) u8 {
+            const jumped = pc >> 3 != self.pipeline.row +% 1;
+            self.pipeline.row = pc >> 3;
+            const wait: u8 = if (hits(&self.pipeline.code, pc)) 0 else if (jumped) issue.fill - 1 else @intCast(@min(self.pipeline.entered + issue.fill -| self.cycles, issue.fill));
+            self.pipeline.entered = self.cycles + wait;
+            return wait;
         }
 
         fn fetched(self: *Self, comptime issue: core.Issue, r: arch_step.Result, cycles: u8) u8 {
@@ -1674,6 +1709,7 @@ pub fn Processor(comptime options: Options) type {
         pub fn span(self: *Self, at: u32, comptime a: contract.Access) []u8 {
             if (Issuing != void and a.kind == .write and a.bytes < 4) self.modify(at);
             if (Issuing != void and a.kind == .read) self.pipeline.data = at;
+            if (Issuing != void and a.kind == .write) self.pipeline.stored = at;
             const kind = comptime folding(a.kind);
             const bytes = self.memory.folded.reach(at, a.bytes, kind, self, describe);
             if (builtin.mode == .Debug and bytes.len != 0) self.verify(at, kind);

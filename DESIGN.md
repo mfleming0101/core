@@ -83,7 +83,8 @@ and `unknown` where it has none (M1, M7, M33, M55, M85, the ESP32s); `fitted` fa
 
 The fitted issue model follows the previous instruction: which classes pair, the stalls on
 registers it wrote, pipelined loads, the prefetch buffer and, for the M7, dual issue, branch
-target prediction, fetch words and store port hold. It reads each code's registers from its
+target prediction, fetch words and store port hold; for the M4, a memory wait and flash
+caches. It reads each code's registers from its
 `isa` meta entry, memoised per code in a 256-entry table.
 
 ### The run loop
