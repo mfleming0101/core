@@ -101,11 +101,13 @@ pub fn build(b: *std.Build) void {
     const harness_step = b.step("harness", "Run the measurement harness tests");
     harness_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = harness })).step);
 
+    const options = b.addOptions();
+    options.addOption([]const u8, "isa", b.option([]const u8, "isa-dir", "The isa checkout whose tier-one corpus and trace pins metrics runs: ../isa by default") orelse "../isa");
     const bench = b.addRunArtifact(b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
         .root_source_file = b.path("bench/run.zig"),
         .target = target,
         .optimize = .ReleaseSafe,
-        .imports = &.{.{ .name = "harness", .module = harness }},
+        .imports = &.{ .{ .name = "harness", .module = harness }, .{ .name = "options", .module = options.createModule() } },
     }) }));
     bench.setCwd(b.path("."));
     bench.has_side_effects = true;

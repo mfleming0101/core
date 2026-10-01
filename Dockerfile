@@ -33,6 +33,8 @@ COPY bench/nullisa/ bench/nullisa/
 COPY corpus/ corpus/
 COPY oracle/ oracle/
 COPY src/ src/
-COPY --from=tier1 /isa/corpus/out/ corpus/fw/
+COPY --from=tier1 /isa/corpus/manifest.zon /isa/corpus/
+COPY --from=tier1 /isa/corpus/out/ /isa/corpus/out/
+COPY --from=tier1 /isa/oracle/trace_arm.txt /isa/oracle/trace_riscv.txt /isa/oracle/
 RUN sh corpus/build.sh
 CMD ["sh", "-ec", "zig build harness && zig build metrics"]

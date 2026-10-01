@@ -161,9 +161,7 @@ def arm_records(elf, limit, _config, interrupts=False):
 
 
 ORACLES = {
-    "riscv": ("sail_riscv_sim", records, "fw/riscv"),
     "riscv_sys": ("sail_riscv_sim", functools.partial(records, system=True), "out/riscv"),
-    "arm": ("qemu-system-arm", arm_records, "fw/arm"),
     "arm_sys": ("qemu-system-arm", functools.partial(arm_records, interrupts=True), "out/arm"),
 }
 
@@ -184,7 +182,7 @@ def main():
     config = str(root / "oracle/sail_rv32.json")
     manifest = (root / "corpus/manifest.zon").read_text()
 
-    for arch in args.arch or ["arm", "riscv"]:
+    for arch in args.arch or ["arm_sys", "riscv_sys"]:
         tool, source, directory = ORACLES[arch]
         entries = re.findall(
             r'\.name = "([\w-]+)", \.arch = "\w+", \.path = "(%s/[^"]+)", \.retired = (\d+)' % directory, manifest)

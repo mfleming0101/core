@@ -625,11 +625,11 @@ diagnosis counts, the burst equivalence, the per-class checks and the invariant 
 ### Tier
 
 How much of the library one measurement exercises. Tier one is the instruction set alone, the
-images whose manifest entry says `source = "isa"`; tier two is the same run with the system
+images of isa's corpus manifest; tier two is the same run with the system
 blocks, the devices and the interrupts in it. A [row](#row) reports nanoseconds per instruction
 for each.
 
-- `tierOf`, [bench/run.zig](bench/run.zig).
+- `Image.tier`, set by `listing`, [bench/run.zig](bench/run.zig).
 - The columns are `fw_ns_per_instr` for tier one and `sys_ns_per_instr` for tier two,
   [bench/harness/metrics.zig](bench/harness/metrics.zig).
 
@@ -640,16 +640,18 @@ where it must stop and what it must print. `corpus/src` holds the C programs, `c
 [maps](#map) they run on, `corpus/port` the two startup ports, `corpus/diag` the diagnosis cases
 whose expected explanations are checked line by line.
 
-- `corpus/manifest.zon` and `corpus/diag/manifest.zon`, read by [bench/run.zig](bench/run.zig).
+- isa's `corpus/manifest.zon` for tier one, `corpus/manifest.zon` for tier two and
+  `corpus/diag/manifest.zon`, read by [bench/run.zig](bench/run.zig).
 
 ### Oracle
 
 An outside authority the library is compared against, and the pinned files holding its answers:
-QEMU for the Arm traces and probe, Espressif's QEMU and Sail for the RISC-V ones. Every comparison is against a file in [oracle/](oracle/),
+QEMU for the Arm traces and probe, Espressif's QEMU and Sail for the RISC-V ones. Every comparison is against a file in [oracle/](oracle/) or isa's `oracle/`,
 never a tool run at measurement time, and a [divergence register](#divergence-register) records
 where the two knowingly differ and why.
 
-- The trace pins are `oracle/trace_*.txt`, the probe pins
+- The trace pins are isa's `oracle/trace_arm.txt` and `oracle/trace_riscv.txt` for tier one and
+  `oracle/trace_*_sys.txt` for tier two, the probe pins
   [oracle/probe_arm.txt](oracle/probe_arm.txt) and
   [oracle/probe_riscv.txt](oracle/probe_riscv.txt).
 

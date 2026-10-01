@@ -162,15 +162,15 @@ devices walks nothing.
 Everything that compares the library against something outside Zig runs in the image built from
 `Dockerfile`. The image is pinned by digest, its apt archive by snapshot date and Zig by
 SHA-256. It clones `isa` at the pinned tag to build the shared corpus and has no other tool: the
-oracles were run once, and what they said is pinned under `oracle/`.
+oracles were run once, and what they said is pinned under `oracle/` here and in `isa`.
 
 ### The gates
 
 | Layer | Oracle | Reference | Gate |
 |---|---|---|---|
-| Lockstep | QEMU 10.0.13 `mps2-an385` (Arm), Sail 0.14 (RISC-V) | `oracle/trace_*.txt`: one hash of the architectural state per 65536 retired instructions of each corpus image | Every window equal: 3688 Arm, 4002 RISC-V |
+| Lockstep | QEMU 10.0.13 `mps2-an385` (Arm), Sail 0.14 (RISC-V) | isa's `oracle/trace_arm.txt` and `trace_riscv.txt` for tier one, `oracle/trace_*_sys.txt` for tier two: one hash of the architectural state per 65536 retired instructions of each corpus image | Every window equal: 3688 Arm, 4002 RISC-V |
 | Probe | QEMU (Arm), Espressif's QEMU fork (RISC-V) | `oracle/probe_*.txt`: a firmware that reads and writes the system registers and prints what it saw, 107 Arm lines and 91 RISC-V | Each line agrees with the oracle, or is in the divergence register with the manual section that decides for the library, or is a QEMU behaviour the register records as fixed |
-| Corpus | The programs themselves | `corpus/manifest.zon`: 65 images with retired count, stop and checksum of console output | Count, stop and checksum equal |
+| Corpus | The programs themselves | isa's `corpus/manifest.zon` and `corpus/manifest.zon`: 48 and 17 images with retired count, stop and checksum of console output | Count, stop and checksum equal |
 | Diagnosis | The manuals | `corpus/diag/manifest.zon`: 11 programs that fault, each with the words its explanation must contain | Every case explained |
 | Burst equivalence | The library itself | The system images as one run, as single steps and in bursts of 37 instructions against a clock; every tier-one image over its first two million instructions on every core class | The three agree, on every class |
 | Invariants | The library itself | Every image with the trace ring and the event ring attached, on every core class | The result is unchanged |
@@ -232,6 +232,8 @@ Not every image runs on every core:
 - The RISC-V system images reach the ESP32-C3 interrupt matrix at 0x600c2000, which on the
   ESP32-C6 is at 0x60010000 where the bench's timer sits. So `ctxswitch`, `irq_storm`,
   `sleep`, `tickless`, `devpoll` and `intc_matrix` are out on RISC-V.
+- `floats` in isa's corpus needs the F extension, which neither the ESP32-C3 nor the C6 has, so
+  the bench leaves it out.
 
 Each exclusion applies to every class of its family, so one `sys_ns_*` column compares with
 another. What is left is `recover`, `semihost_io` and `tickless` on Arm and `recover`, `semihost_io`,
