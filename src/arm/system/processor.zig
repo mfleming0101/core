@@ -37,11 +37,16 @@ const Stop = arch_step.Stop;
 
 const sg_half: u16 = 0xe97f;
 
-/// The comptime configuration of a Processor: the cores it answers for, and the bus type.
+/// The comptime configuration of a Processor: the cores it answers for, the bus type and the wait hook.
 pub const Options = struct {
     cores: []const core.Core,
     Bus: type,
+    /// Prices fetches, reads and issued loads and stores: a type with wait(Wait, address, cycles) u32, or void.
+    Waits: type = void,
 };
+
+/// A priced access: fetch, read, issued load, store or multiple's rest, branch target, speculation, fetch-ahead, flush after speculation.
+pub const Wait = enum { fetch, ahead, call, read, load, store, burst, branch, taken, jump, speculate, flush };
 
 /// What one step produced: where it ran, what it was, what it cost and what it charged.
 pub const Step = struct {
@@ -139,7 +144,7 @@ fn Targets(comptime n: u8) type {
     };
 }
 
-const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, lagged: u2 = 0 };
+const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, folds: bool = false };
 
 const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, table: bool = false, indexed: bool = false, _: u8 = 0 };
 
@@ -152,7 +157,7 @@ fn factsOf(code: u32, row: u11) Facts {
 const facts_bits = 8;
 
 fn Pipeline(comptime entries: u8) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, stored: u32 = 0, lines: [8]u32 = @splat(0), code: [32]u32 = @splat(0), row: u32 = 0, entered: u64 = 0, slowed: [17]u64 = @splat(0) };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0) };
 }
 
 const sp_bit: u16 = 1 << 13;
@@ -225,6 +230,19 @@ fn extends(code: u32) bool {
 
 fn branchesOn(code: u32) bool {
     return if (code > 0xffff) code & 0xf800_d000 == 0xf000_8000 and code >> 23 & 7 != 7 else code >> 12 == 0xd and code >> 9 & 7 != 7;
+}
+
+fn targetOf(pc: u32, code: u32) u32 {
+    const offset: i32 = if (code > 0xffff) @as(i21, @bitCast(@as(u21, @truncate((code >> 26 & 1) << 20 | (code >> 11 & 1) << 19 | (code >> 13 & 1) << 18 | (code >> 16 & 0x3f) << 12 | (code & 0x7ff) << 1)))) else @as(i9, @bitCast(@as(u9, @truncate((code & 0xff) << 1))));
+    return pc +% 4 +% @as(u32, @bitCast(offset));
+}
+
+fn direct(code: u32) bool {
+    return if (code > 0xffff) code & 0xf800_8000 == 0xf000_8000 and (code & 0x5000 != 0 or code >> 23 & 7 != 7) else code >> 12 == 0xd or code >> 11 == 0x1c or code & 0xf500 == 0xb100;
+}
+
+fn jumps(code: u32) bool {
+    return if (code > 0xffff) code & 0xf800_9000 == 0xf000_9000 else code >> 11 == 0x1c;
 }
 
 fn isb(code: u32) bool {
@@ -300,6 +318,7 @@ pub fn Processor(comptime options: Options) type {
         break :blk most;
     };
     const Nvic = nvic_block.Nvic(lines);
+    const Waits = if (options.Waits == void) void else struct { hook: options.Waits, word: u32 = 1, next: u32 = 1, spec: bool = false };
     return struct {
         const Self = @This();
 
@@ -433,6 +452,7 @@ pub fn Processor(comptime options: Options) type {
         forced_unpriv: bool,
         taken: ?Taken,
         vector: Vector,
+        waits: Waits = if (Waits == void) {} else .{ .hook = undefined },
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -598,7 +618,9 @@ pub fn Processor(comptime options: Options) type {
             const before = self.impdef;
             const address = self.ras_address;
             const model, const timing, const pipeline = .{ self.model, self.timing, self.pipeline };
+            const hook = if (Waits == void) {} else self.waits.hook;
             self.* = build(self.memory, self.spec.core, self.built(), self.trace);
+            if (Waits != void) self.waits.hook = hook;
             if (Impdef != void) self.impdef.keep(&before);
             self.ras_address = address;
             self.model, self.timing = .{ model, timing };
@@ -747,17 +769,48 @@ pub fn Processor(comptime options: Options) type {
             if (tracing) self.forget();
             const pc = self.state.pc;
             const conditional = self.state.inIt();
+            if (Waits != void) {
+                self.cycles += self.fetchWord(pc & ~@as(u32, 3));
+                self.waits.next = pc +% 2 & ~@as(u32, 3);
+            }
             const r = @call(.always_inline, arch_step.step, .{ Self, gate, &self.state, self, model });
+            if (Waits != void) self.waits.next = 1;
             if (tracing) {
                 if (r.halt() == .data_fault or r.halt() == .data_violation or r.halt() == .unaligned_access) self.touched = self.last_access;
                 self.record(pc, r.fetchedCode(), .{ .refused = refusalOf(self.override orelse r.halt()) });
             }
             if (r.executed) {
                 self.instructions += 1;
-                self.charge(if (Issuing != void and self.pipeline.issuing) self.issued(pc, r, conditional) else r.cycles);
+                const cost = if (Issuing != void and self.pipeline.issuing) self.issued(pc, r, conditional) else r.cycles;
+                if (Waits != void) self.cycles += self.fetchedAfter(pc, r, cost);
+                self.charge(cost);
             }
             self.stop = if (r.halted) self.settle(r.stop) else null;
             return r;
+        }
+
+        fn fetchWord(self: *Self, word: u32) u32 {
+            if (word == self.waits.word) return 0;
+            self.waits.word = word;
+            return self.waits.hook.wait(.fetch, word, self.cycles);
+        }
+
+        fn waitRead(self: *Self, at: u32) void {
+            self.cycles += self.fetchWord(self.waits.next);
+            self.cycles += self.waits.hook.wait(.read, at, self.cycles);
+        }
+
+        fn fetchedAfter(self: *Self, pc: u32, r: arch_step.Result, cost: u32) u32 {
+            const second = if (r.code > 0xffff) self.fetchWord(pc +% 2 & ~@as(u32, 3)) else 0;
+            const spec = self.waits.spec;
+            self.waits.spec = !r.branched and !isb(r.code) and (branchesOn(r.code) or (r.skipped and r.code == 0x4770));
+            if (!r.branched and !isb(r.code)) return second + if (branchesOn(r.code)) self.waits.hook.wait(.speculate, targetOf(pc, r.code) & ~@as(u32, 3), self.cycles) else if (r.skipped and r.code == 0x4770) self.waits.hook.wait(.speculate, self.state.lr & ~@as(u32, 3), self.cycles) else 0;
+            self.waits.word = 1;
+            const flush = if (spec) self.waits.hook.wait(.flush, pc & ~@as(u32, 3), self.cycles) else 0;
+            const target = flush + second + self.waits.hook.wait(if (branchesOn(r.code)) .taken else if (jumps(r.code)) .jump else .branch, self.state.pc & ~@as(u32, 3), if (direct(r.code)) self.cycles else self.cycles + cost -| 2);
+            if (r.code > 0xffff or pc & 2 == 0 or self.state.pc == pc +% 2) return target;
+            const kind: Wait = if (r.code >> 12 == 0xd) .ahead else if (r.code >> 7 == 0b010001111) .call else return target;
+            return target + self.waits.hook.wait(kind, pc +% 2, self.cycles + cost -| 1);
         }
 
         inline fn issued(self: *Self, pc: u32, r: arch_step.Result, conditional: bool) u8 {
@@ -771,16 +824,17 @@ pub fn Processor(comptime options: Options) type {
             inline for (fits, 0..) |fit, at| {
                 const issue = (fit orelse continue).issue orelse continue;
                 if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (class) {
-                    inline else => |c| self.dual(issue, pc, r, f, c, conditional),
+                    inline else => |c| self.dual(issue, r, f, c, conditional),
                 }) +| (if (issue.targets == 0 or class != .branch) 0 else self.predict(issue, pc, r));
             }
             unreachable;
         }
 
-        inline fn dual(self: *Self, comptime issue: core.Issue, pc: u32, r: arch_step.Result, f: Facts, comptime class: Class, conditional: bool) u8 {
+        inline fn dual(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, comptime class: Class, conditional: bool) u8 {
             const shifted = f.shifted | if (conditional) f.written else 0;
             const last = self.pipeline.issued;
-            const late = f.addressed & ~sp_bit & last.written != 0;
+            if (issue.fold and class == .system and last.folds and r.code >> 8 == 0xbf and r.code & 0xf != 0) return self.fetched(issue, r, 0);
+            const late = f.addressed & (if (issue.stack) ~@as(u16, 0) else ~sp_bit) & last.written != 0;
             const stalled = late and issue.delays.contains(last.class);
             const reads = f.sources & last.written != 0;
             const product = if (f.sources & last.product != 0) last.ready else 0;
@@ -804,6 +858,7 @@ pub fn Processor(comptime options: Options) type {
             const slowing: u16 = if (issue.slow != 0 and (loading or (class == .data_processing and (dependent or behind or held or lagging or !quick)))) written & -%written else 0;
             const gap: u64 = if (held) issue.slow + 1 else issue.slow;
             const sets = if (conditional) f.sets_it else f.sets;
+            const hidden = issue.fold and class == .system and r.code == 0xbf00 and last.class == .load;
             const next = &self.pipeline.issued;
             next.class = class;
             if (sets) next.flagged = start;
@@ -826,7 +881,7 @@ pub fn Processor(comptime options: Options) type {
             next.held = if (held) f.written else 0;
             next.port = port;
             next.shifts = f.shifts;
-            if (issue.lag_size != 0) next.lagged = if (loading and self.pipeline.data -% issue.lag_base < issue.lag_size) 1 else if (class == .store and self.pipeline.stored -% issue.lag_base < issue.lag_size) (if (last.lagged >= 2) 2 else 3) else 0;
+            next.folds = issue.fold and r.code <= 0xffff and !conditional and !hidden and (class == .data_processing or class == .system);
             self.pipeline.slowed[@ctz(@as(u32, slowing) | 1 << 16)] = start + gap;
             if (paired) return 0;
             const beats = if (issue.width == 0) 0 else ((if (r.skipped) 0 else f.words) + issue.width - 1) / issue.width;
@@ -834,36 +889,15 @@ pub fn Processor(comptime options: Options) type {
             const flush = if (f.isb) issue.flush else 0;
             const table = if (class == .branch and issue.targets == 0 and f.table) issue.table else 0;
             const indexed = if (class == .store and f.indexed) issue.indexed else 0;
-            const lag = if (issue.lag_size == 0) 0 else @intFromBool((last.lagged == 1 and class != .load and class != .store) or (last.lagged == 2 and class != .store) or (load_lists.contains(class) and self.pipeline.data -% issue.lag_base < issue.lag_size) or (store_lists.contains(class) and f.words > 1 and self.pipeline.stored -% issue.lag_base < issue.lag_size));
-            const missed = issue.cache_size != 0 and (loading or load_lists.contains(class)) and self.pipeline.data -% issue.cache_base < issue.cache_size and !hits(&self.pipeline.lines, self.pipeline.data);
-            const overlap = issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and !missed;
-            var cycles = @as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| lag +| if (missed) issue.cache_miss else 0;
-            if (issue.fill != 0 and pc -% issue.cache_base < issue.cache_size and pc >> 3 != self.pipeline.row) {
-                @branchHint(.unlikely);
-                cycles +|= self.filled(issue, pc);
-            }
-            return self.fetched(issue, r, cycles -| @intFromBool(overlap));
+            const overlap = (issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and (port < 0x2000_0000) == (last.port < 0x2000_0000)) or hidden;
+            const port_wait = if (Waits != void and (class == .load or stores or load_lists.contains(class))) self.ported(stores, f.words, start - @intFromBool(overlap)) else 0;
+            return self.fetched(issue, r, (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait) -| @intFromBool(overlap));
         }
 
-        noinline fn hits(held: []u32, at: u32) bool {
-            const line = at & ~@as(u32, 31);
-            const row = @as(u32, 1) << @intCast(at >> 3 & 3);
-            var i: usize = 0;
-            while (i < held.len - 1 and held[i] & ~@as(u32, 31) != line) i += 1;
-            const found = held[i] & ~@as(u32, 31) == line;
-            const hit = found and held[i] & row != 0;
-            const entry = (if (found) held[i] else line) | row;
-            std.mem.copyBackwards(u32, held[1 .. i + 1], held[0..i]);
-            held[0] = entry;
-            return hit;
-        }
-
-        noinline fn filled(self: *Self, comptime issue: core.Issue, pc: u32) u8 {
-            const jumped = pc >> 3 != self.pipeline.row +% 1;
-            self.pipeline.row = pc >> 3;
-            const wait: u8 = if (hits(&self.pipeline.code, pc)) 0 else if (jumped) issue.fill - 1 else @intCast(@min(self.pipeline.entered + issue.fill -| self.cycles, issue.fill));
-            self.pipeline.entered = self.cycles + wait;
-            return wait;
+        fn ported(self: *Self, stores: bool, words: u6, at: u64) u8 {
+            const first = self.waits.hook.wait(if (stores) .store else .load, self.pipeline.data, at);
+            const rest = if (words > 1) self.waits.hook.wait(.burst, self.pipeline.data +% 4 * (@as(u32, words) - 1), at + first + 1) else 0;
+            return @intCast(first + rest);
         }
 
         fn fetched(self: *Self, comptime issue: core.Issue, r: arch_step.Result, cycles: u8) u8 {
@@ -1708,10 +1742,11 @@ pub fn Processor(comptime options: Options) type {
         /// The bytes an access may use directly, from the folded lane, refolding out of line if it must.
         pub fn span(self: *Self, at: u32, comptime a: contract.Access) []u8 {
             if (Issuing != void and a.kind == .write and a.bytes < 4) self.modify(at);
-            if (Issuing != void and a.kind == .read) self.pipeline.data = at;
-            if (Issuing != void and a.kind == .write) self.pipeline.stored = at;
+            if (Issuing != void and (a.kind == .read or a.kind == .write)) self.pipeline.data = at;
+            if (Waits != void and a.kind == .read and self.waits.next != 1) self.waitRead(at);
             const kind = comptime folding(a.kind);
             const bytes = self.memory.folded.reach(at, a.bytes, kind, self, describe);
+            if (Waits != void and a.kind == .fetch and bytes.len >= 2 and bytes[1] == 0xbd) self.waits.next = 1;
             if (builtin.mode == .Debug and bytes.len != 0) self.verify(at, kind);
             return bytes;
         }

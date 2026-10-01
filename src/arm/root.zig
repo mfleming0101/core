@@ -5,8 +5,10 @@
 
 /// The Arm core: the isa host, the private peripheral bus, the exceptions, the clock and the bus.
 pub const Processor = @import("system/processor.zig").Processor;
-/// The comptime configuration of a Processor: the cores it answers for and the bus type.
+/// The comptime configuration of a Processor: the cores it answers for, the bus type and the wait hook.
 pub const Options = @import("system/processor.zig").Options;
+/// What a wait hook, Options.Waits, prices: a word fetch, a fetch ahead after a branch, a read.
+pub const Wait = @import("system/processor.zig").Wait;
 /// What one step produced: the address, the class, its cost, what was charged and the stop.
 pub const Step = @import("system/processor.zig").Step;
 /// What one run produced, including the cycles spent in exception entry and return.

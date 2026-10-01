@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .isa = .{
-            .url = "git+https://github.com/mfleming0101/isa.git?ref=v0.5.0#2cd662d64ca0c2a3a24d132aaec6a511f05ec941",
-            .hash = "isa-0.5.0-0alfDJ1REAAGwZIj5gq0KtYT2qJnerReWyWGKH5rZquM",
+            .url = "git+https://github.com/mfleming0101/isa.git?ref=v0.6.0#8c88504522f7ce095b353f6301afab4c57c55808",
+            .hash = "isa-0.6.0-0alfDM1REAAgJvB_zl8xvsU8kmln28e2_8rUCZlafB51",
         },
     },
     .paths = .{

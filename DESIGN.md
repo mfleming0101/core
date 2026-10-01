@@ -82,10 +82,10 @@ and `unknown` where it has none (M1, M7, M33, M55, M85, the ESP32s); `fitted` fa
 `trm` and `trm` to `unknown`.
 
 The fitted issue model follows the previous instruction: which classes pair, the stalls on
-registers it wrote, pipelined loads, the prefetch buffer and, for the M7, dual issue, branch
-target prediction, fetch words and store port hold; for the M4, a memory wait and flash
-caches. It reads each code's registers from its
-`isa` meta entry, memoised per code in a 256-entry table.
+registers it wrote, loads pipelined on one bus, the prefetch buffer, for the M4, IT and NOP
+folding and SP-based accesses waiting on an SP write and, for the M7, dual issue, branch target
+prediction, fetch words and store port hold. It reads each code's registers from its `isa` meta
+entry, memoised per code in a 256-entry table.
 
 ### The run loop
 
@@ -170,7 +170,7 @@ oracles were run once, and what they said is pinned under `oracle/`.
 
 | Layer | Oracle | Reference | Gate |
 |---|---|---|---|
-| Lockstep | QEMU 10.0.13 `mps2-an385` (Arm), Sail 0.14 (RISC-V) | `oracle/trace_*.txt`: one hash of the architectural state per 65536 retired instructions of each corpus image | Every window equal: 3949 Arm, 4308 RISC-V |
+| Lockstep | QEMU 10.0.13 `mps2-an385` (Arm), Sail 0.14 (RISC-V) | `oracle/trace_*.txt`: one hash of the architectural state per 65536 retired instructions of each corpus image | Every window equal: 3994 Arm, 4308 RISC-V |
 | Probe | QEMU (Arm), Espressif's QEMU fork (RISC-V) | `oracle/probe_*.txt`: a firmware that reads and writes the system registers and prints what it saw, 107 Arm lines and 91 RISC-V | Each line agrees with the oracle, or is in the divergence register with the manual section that decides for the library, or is a QEMU behaviour the register records as fixed |
 | Corpus | The programs themselves | `corpus/manifest.zon`: 67 images with retired count, stop and checksum of console output | Count, stop and checksum equal |
 | Diagnosis | The manuals | `corpus/diag/manifest.zon`: 11 programs that fault, each with the words its explanation must contain | Every case explained |

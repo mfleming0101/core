@@ -124,7 +124,7 @@ pub fn Mpu(comptime capacity: u8) type {
                 if (attributes & region_enable == 0) continue;
                 const power: u5 = @intCast((attributes >> size_shift) & 0x1f);
                 if (power < 4) continue;
-                const span = @as(u64, 1) << (power + 1);
+                const span = @as(u64, 1) << (@as(u6, power) + 1);
                 const offset = @as(u64, address) -% (self.base[i] & ~@as(u32, @truncate(span - 1)));
                 if (offset >= span) continue;
                 if (power >= 7 and attributes >> srd_shift & (@as(u32, 1) << @intCast(offset >> (power - 2))) != 0) continue;

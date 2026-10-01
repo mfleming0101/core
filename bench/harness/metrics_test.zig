@@ -125,7 +125,7 @@ test "a row reads back by column name" {
 
 test "a column left null reads back blank" {
     try std.testing.expectEqualStrings("", try valueOf("timing_m7_error_pct"));
-    try std.testing.expectEqualStrings("", try valueOf("programs_m4_within5"));
+    try std.testing.expectEqualStrings("", try valueOf("programs_m0plus_within5"));
 }
 
 test "a failing correctness gate makes the row inadmissible" {

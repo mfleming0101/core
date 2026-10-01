@@ -204,6 +204,14 @@ test "a PMSAv7 region covers a power of two from a base aligned to it, B3.5.3" {
     try std.testing.expect(!block.permits(0x2000_1000, true, .read));
 }
 
+test "a PMSAv7 region of SIZE 31 covers the whole 4 GB address space, B3.5.9" {
+    var block = v7();
+    _ = block.writeRegister(mpu.ctrl, mpu.enable);
+    sized(&block, 0, 0, 31, 3 << mpu.ap_shift);
+    try std.testing.expect(block.permits(0x0000_0000, false, .read));
+    try std.testing.expect(block.permits(0xffff_fffc, false, .read));
+}
+
 test "the PMSAv7 access permission field says what each privilege may do, B3.5.9" {
     var block = v7();
     _ = block.writeRegister(mpu.ctrl, mpu.enable);
