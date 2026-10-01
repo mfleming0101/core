@@ -8,11 +8,11 @@ const snapshot = @import("snapshot.zig");
 pub const usage =
     \\machine run       <map.zon> [<image.elf>] [--budget N] [--semihosting] [--history N] [--events N] [--timing unknown|fitted] [--final]
     \\machine steps     <map.zon> [<image.elf>] [--budget N] [--semihosting]
-    \\machine burst     <map.zon> [<image.elf>] [--span N] [--mhz N] [--budget N] [--semihosting] [--history N] [--events N]
+    \\machine burst     <map.zon> [<image.elf>] [--span N] [--budget N] [--semihosting] [--history N] [--events N]
     \\machine trace     <map.zon> [<image.elf>] [--budget N] [--semihosting]
     \\machine diag      <map.zon> [<image.elf>] [--semihosting]
-    \\machine access    <map.zon> [<image.elf>] [--count N]
-    \\machine ppb       <map.zon> [<image.elf>] [--count N]
+    \\machine access    <map.zon> [<image.elf>]
+    \\machine ppb       <map.zon> [<image.elf>]
     \\machine irq       <map.zon> [<image.elf>] [--budget N] [--semihosting]
     \\machine about
     \\
@@ -149,8 +149,6 @@ pub fn Consumer(comptime M: type) type {
             history: usize = 0,
             events: usize = 0,
             span: u64 = span_instructions,
-            mhz: u64 = chip_mhz,
-            count: usize = accesses,
             semihosting: bool = false,
             final: bool = false,
             timing: Timing = .fitted,
@@ -167,10 +165,6 @@ pub fn Consumer(comptime M: type) type {
                     job.events = std.math.cast(usize, try number(args)) orelse return error.Usage;
                 } else if (std.mem.eql(u8, arg, "--span")) {
                     job.span = try number(args);
-                } else if (std.mem.eql(u8, arg, "--mhz")) {
-                    job.mhz = try number(args);
-                } else if (std.mem.eql(u8, arg, "--count")) {
-                    job.count = std.math.cast(usize, try number(args)) orelse return error.Usage;
                 } else if (std.mem.eql(u8, arg, "--timing")) {
                     job.timing = std.meta.stringToEnum(Timing, args.next() orelse return error.Usage) orelse return error.Usage;
                 } else if (std.mem.eql(u8, arg, "--semihosting")) {
@@ -296,9 +290,9 @@ pub fn Consumer(comptime M: type) type {
         }
 
         fn burst(init: std.process.Init, out: *std.Io.Writer, job: Job) !u8 {
-            if (job.span == 0 or job.mhz == 0) return error.Usage;
+            if (job.span == 0) return error.Usage;
             const machine = try open(init, out, job, job.history);
-            var clock: core.memory.Clock = .at(job.mhz * 1_000_000);
+            var clock: core.memory.Clock = .at(chip_mhz * 1_000_000);
             const period = blk: {
                 var one = clock;
                 one.charge(job.span);
@@ -373,7 +367,6 @@ pub fn Consumer(comptime M: type) type {
         };
 
         fn access(init: std.process.Init, out: *std.Io.Writer, job: Job, over: enum { memory, ppb }) !u8 {
-            if (job.count == 0) return error.Usage;
             const machine = try open(init, out, job, 0);
             const base = switch (over) {
                 .memory => opened.base,
@@ -388,7 +381,7 @@ pub fn Consumer(comptime M: type) type {
             var read: u32 = 0;
             var at: u32 = 0;
             const started = std.Io.Timestamp.now(init.io, .awake);
-            for (0..job.count) |_| {
+            for (0..accesses) |_| {
                 read +%= machine.read32(base + at) orelse 0;
                 at += 4;
                 if (at >= span) at = 0;
@@ -396,7 +389,7 @@ pub fn Consumer(comptime M: type) type {
             const ns = elapsedOf(started, init.io);
             std.mem.doNotOptimizeAway(read);
             try out.print("accesses={d} ns={d} ns_per_access={d:.4}\n", .{
-                job.count, ns, @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(job.count)),
+                accesses, ns, @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(accesses)),
             });
             return 0;
         }
