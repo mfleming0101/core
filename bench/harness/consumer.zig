@@ -6,7 +6,7 @@ const facade = @import("facade.zig");
 const snapshot = @import("snapshot.zig");
 
 pub const usage =
-    \\machine run       <map.zon> [<image.elf>] [--budget N] [--semihosting] [--history N] [--events N] [--timing unknown|fitted] [--final]
+    \\machine run       <map.zon> [<image.elf>] [--budget N] [--semihosting] [--history N] [--events N]
     \\machine steps     <map.zon> [<image.elf>] [--budget N] [--semihosting]
     \\machine burst     <map.zon> [<image.elf>] [--span N] [--budget N] [--semihosting] [--history N] [--events N]
     \\machine trace     <map.zon> [<image.elf>] [--budget N] [--semihosting]
@@ -25,10 +25,7 @@ pub const Loaded = struct {
     console: ?*std.Io.Writer,
     registry: core.memory.map.Registry,
     history: usize,
-    timing: Timing = .fitted,
 };
-
-pub const Timing = enum { unknown, fitted };
 
 pub fn bus(loaded: Loaded) !*core.memory.Regions {
     var blame: core.memory.map.Blame = .{};
@@ -150,8 +147,6 @@ pub fn Consumer(comptime M: type) type {
             events: usize = 0,
             span: u64 = span_instructions,
             semihosting: bool = false,
-            final: bool = false,
-            timing: Timing = .fitted,
         };
 
         fn jobOf(args: *std.process.Args.Iterator) !Job {
@@ -165,12 +160,8 @@ pub fn Consumer(comptime M: type) type {
                     job.events = std.math.cast(usize, try number(args)) orelse return error.Usage;
                 } else if (std.mem.eql(u8, arg, "--span")) {
                     job.span = try number(args);
-                } else if (std.mem.eql(u8, arg, "--timing")) {
-                    job.timing = std.meta.stringToEnum(Timing, args.next() orelse return error.Usage) orelse return error.Usage;
                 } else if (std.mem.eql(u8, arg, "--semihosting")) {
                     job.semihosting = true;
-                } else if (std.mem.eql(u8, arg, "--final")) {
-                    job.final = true;
                 } else if (job.elf != null or std.mem.startsWith(u8, arg, "--")) {
                     return error.Usage;
                 } else job.elf = arg;
@@ -182,7 +173,7 @@ pub fn Consumer(comptime M: type) type {
             return std.fmt.parseInt(u64, args.next() orelse return error.Usage, 0) catch error.Usage;
         }
 
-        var opened: struct { heap: Counting = .{}, base: u32 = 0, span: u32 = 0, regions: []const core.memory.map.Region = &.{} } = .{};
+        var opened: struct { heap: Counting = .{}, base: u32 = 0, span: u32 = 0 } = .{};
 
         fn open(init: std.process.Init, out: *std.Io.Writer, job: Job, history: usize) !*M {
             const arena = init.arena.allocator();
@@ -200,7 +191,6 @@ pub fn Consumer(comptime M: type) type {
             const image = dir.readFileAlloc(init.io, name, arena, .limited(elf_limit)) catch
                 return reported(init, "cannot read {s}\n", .{name});
 
-            opened.regions = map.regions;
             for (map.regions) |region| {
                 if (!region.writable) continue;
                 opened.base = region.base;
@@ -218,7 +208,6 @@ pub fn Consumer(comptime M: type) type {
                 .console = if (job.semihosting) out else null,
                 .registry = if (job.events != 0) device.watching else device.registry,
                 .history = history,
-                .timing = job.timing,
             }) catch |err| return reported(init, "{s}: {s}\n", .{ job.map, @errorName(err) });
             device.events.follow(machine.clock());
             return machine;
@@ -255,22 +244,7 @@ pub fn Consumer(comptime M: type) type {
             try out.print("retired={d} cycles={d} latency={d} stop={s} exceptions={d} irqs={d} ns={d} checksum={x:0>8} heap={d}\n", .{
                 ran.retired, ran.cycles, ran.latency, @tagName(ran.stop), ran.exceptions, ran.irqs, ns, checksum(machine), opened.heap.peak,
             });
-            if (job.final) try final(out, machine);
             return 0;
-        }
-
-        fn final(out: *std.Io.Writer, machine: *M) !void {
-            const state = machine.snapshot();
-            for (state.regs[0..16], 0..) |value, i| try out.print("r{d}={x:0>8} ", .{ i, value });
-            var crc: std.hash.Crc32 = .init();
-            for (opened.regions) |region| {
-                if (!region.writable) continue;
-                var at: u32 = 0;
-                while (at < region.size) : (at += 4) {
-                    crc.update(&std.mem.toBytes(std.mem.nativeToLittle(u32, machine.read32(region.base + at) orelse 0)));
-                }
-            }
-            try out.print("flags={x:0>8} memory={x:0>8}\n", .{ state.flags, crc.final() });
         }
 
         fn steps(init: std.process.Init, out: *std.Io.Writer, job: Job) !u8 {

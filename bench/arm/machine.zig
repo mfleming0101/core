@@ -33,10 +33,6 @@ pub const Machine = struct {
         self.cpu.state.lr = harness.facade.armv7m_reset.lr;
         self.cpu.state.xpsr = harness.facade.armv7m_reset.xpsr;
         self.cpu.state.branchTo(harness.consumer.entryOf(loaded.elf));
-        _ = self.cpu.setTiming(switch (loaded.timing) {
-            .unknown => .unknown,
-            .fitted => .fitted,
-        });
         if (self.cpu.trace.recording()) self.cpu.last = core.arm.trace.snapshot(&self.cpu.state);
         return self;
     }
