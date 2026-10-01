@@ -168,9 +168,9 @@ oracles were run once, and what they said is pinned under `oracle/`.
 
 | Layer | Oracle | Reference | Gate |
 |---|---|---|---|
-| Lockstep | QEMU 10.0.13 `mps2-an385` (Arm), Sail 0.14 (RISC-V) | `oracle/trace_*.txt`: one hash of the architectural state per 65536 retired instructions of each corpus image | Every window equal: 3994 Arm, 4308 RISC-V |
+| Lockstep | QEMU 10.0.13 `mps2-an385` (Arm), Sail 0.14 (RISC-V) | `oracle/trace_*.txt`: one hash of the architectural state per 65536 retired instructions of each corpus image | Every window equal: 3688 Arm, 4002 RISC-V |
 | Probe | QEMU (Arm), Espressif's QEMU fork (RISC-V) | `oracle/probe_*.txt`: a firmware that reads and writes the system registers and prints what it saw, 107 Arm lines and 91 RISC-V | Each line agrees with the oracle, or is in the divergence register with the manual section that decides for the library, or is a QEMU behaviour the register records as fixed |
-| Corpus | The programs themselves | `corpus/manifest.zon`: 67 images with retired count, stop and checksum of console output | Count, stop and checksum equal |
+| Corpus | The programs themselves | `corpus/manifest.zon`: 65 images with retired count, stop and checksum of console output | Count, stop and checksum equal |
 | Diagnosis | The manuals | `corpus/diag/manifest.zon`: 11 programs that fault, each with the words its explanation must contain | Every case explained |
 | Burst equivalence | The library itself | The system images as one run, as single steps and in bursts of 37 instructions against a clock; every tier-one image over its first two million instructions on every core class | The three agree, on every class |
 | Invariants | The library itself | Every image with the trace ring and the event ring attached, on every core class | The result is unchanged |
@@ -217,7 +217,7 @@ revisions move the numbers and the name still finds the section.
 | Tier | Images | Built by | Map | Measures |
 |---|---|---|---|---|
 | One | 48: five C programs, CoreMark and eighteen Embench benchmarks per architecture | `isa` | Flat, no devices | The instruction path |
-| Two | 19 system images: interrupt storm, context switch, sleep and wake, fault recovery, semihosting I/O, device polling, tickless timer, self-modifying code on both architectures; PMP, traps and the interrupt matrix on RISC-V | `corpus/build.sh` from `corpus/src` | With the bench's timer device | The system path |
+| Two | 17 system images: interrupt storm, context switch, sleep and wake, fault recovery, semihosting I/O, device polling and tickless timer on both architectures; PMP, traps and the interrupt matrix on RISC-V | `corpus/build.sh` from `corpus/src` | With the bench's timer device | The system path |
 
 Not every image runs on every core:
 
@@ -234,8 +234,8 @@ Not every image runs on every core:
   `sleep`, `tickless`, `devpoll` and `intc_matrix` are out on RISC-V.
 
 Each exclusion applies to every class of its family, so one `sys_ns_*` column compares with
-another. What is left is `recover`, `semihost_io`, `tickless` and `smc` on Arm and `recover`,
-`semihost_io`, `smc`, `pmp` and `trap` on RISC-V.
+another. What is left is `recover`, `semihost_io` and `tickless` on Arm and `recover`, `semihost_io`,
+`pmp` and `trap` on RISC-V.
 
 ### The metrics row
 

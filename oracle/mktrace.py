@@ -28,7 +28,7 @@ from the entry itself -- the number is the last one, because that is the handler
 Both events sit between the register dump of the instruction that caused them and the dump of the
 instruction that follows, so they belong to the record the second dump completes.
 
-Two of the eight ARM system images are pinned that way, and the other six cannot be. `irq_storm`,
+One of the seven ARM system images is pinned that way, and the other six cannot be. `irq_storm`,
 `sleep`, `devpoll` and `tickless` drive the harness's `probe-timer`, which `mps2-an385` does not
 map, so QEMU never runs them. `ctxswitch` runs, but its control flow is SysTick-driven and QEMU
 counts SysTick off the host clock where this layer counts retired cycles, so two QEMU runs of it

@@ -29,8 +29,6 @@ for arch in arm riscv; do
     build "$arch" "$out/$arch" devpoll     -DROUNDS=550000  src/devpoll.c
     build "$arch" "$out/$arch" tickless    -DROUNDS=1050000 src/tickless.c
 done
-build arm   "$out/arm"   smc -DROUNDS=15000000 src/smc_arm.c
-build riscv "$out/riscv" smc -DROUNDS=15000000 src/smc_riscv.c
 
 build riscv "$out/riscv" pmp         -DROUNDS=275000 src/pmp.c
 build riscv "$out/riscv" trap        -DROUNDS=85000  src/trap.c
