@@ -6,7 +6,7 @@ const facade = @import("facade.zig");
 const snapshot = @import("snapshot.zig");
 
 pub const usage =
-    \\machine run       <map.zon> [<image.elf>] [--budget N] [--semihosting] [--history N] [--events N] [--timing unknown|trm|fitted] [--final]
+    \\machine run       <map.zon> [<image.elf>] [--budget N] [--semihosting] [--history N] [--events N] [--timing unknown|fitted] [--final]
     \\machine steps     <map.zon> [<image.elf>] [--budget N] [--semihosting]
     \\machine burst     <map.zon> [<image.elf>] [--span N] [--mhz N] [--budget N] [--semihosting] [--history N] [--events N]
     \\machine trace     <map.zon> [<image.elf>] [--budget N] [--semihosting]
@@ -25,10 +25,10 @@ pub const Loaded = struct {
     console: ?*std.Io.Writer,
     registry: core.memory.map.Registry,
     history: usize,
-    timing: Timing = .trm,
+    timing: Timing = .fitted,
 };
 
-pub const Timing = enum { unknown, trm, fitted };
+pub const Timing = enum { unknown, fitted };
 
 pub fn bus(loaded: Loaded) !*core.memory.Regions {
     var blame: core.memory.map.Blame = .{};
@@ -153,7 +153,7 @@ pub fn Consumer(comptime M: type) type {
             count: usize = accesses,
             semihosting: bool = false,
             final: bool = false,
-            timing: Timing = .trm,
+            timing: Timing = .fitted,
         };
 
         fn jobOf(args: *std.process.Args.Iterator) !Job {

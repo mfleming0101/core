@@ -1,8 +1,8 @@
 //! What the library knows about each Espressif part, one Spec per core. A Spec is comptime
-//! data: the decode groups the part implements, its cycle table or null where none is
-//! published, its reset PC and flat memory, its CSR implementation, the addresses of its
-//! interrupt matrix and controller, and its PMP priority rule. Processor builds a table of
-//! these and holds the one it was built as; nothing here is read on the instruction path.
+//! data: the decode groups the part implements, its reset PC and flat memory, its CSR
+//! implementation, the addresses of its interrupt matrix and controller, and its PMP priority
+//! rule. Processor builds a table of these and holds the one it was built as; nothing here is
+//! read on the instruction path.
 const std = @import("std");
 const Class = @import("isa").riscv.instruction.Class;
 const decode = @import("isa").riscv.decode;
@@ -12,9 +12,8 @@ const intc = @import("intc.zig");
 /// A cycle table: what each instruction class costs and the extra a taken one adds.
 pub const Table = struct { cycles: std.EnumArray(Class, u8), taken: std.EnumArray(Class, u8) };
 
-/// Which cycles a hart charges: one per instruction, its manual's table, the fitted table, or the
-/// caller's.
-pub const Timing = union(enum) { unknown, trm, fitted, custom: Table };
+/// Which cycles a hart charges: one per instruction, or the fitted table.
+pub const Timing = enum { unknown, fitted };
 
 /// The Espressif parts this half models.
 pub const Core = enum { esp32c3, esp32c6 };
@@ -25,11 +24,10 @@ pub const Flat = struct {
     ram_base: u32,
 };
 
-/// One part as comptime data: its groups, its cycle table, its reset and its blocks.
+/// One part as comptime data: its groups, its reset and its blocks.
 pub const Spec = struct {
     core: Core,
     groups: decode.Groups,
-    trm: ?Table,
     reset_pc: u32,
     flat: Flat,
 
@@ -73,7 +71,6 @@ pub fn spec(comptime core: Core) Spec {
         .esp32c3 => .{
             .core = .esp32c3,
             .groups = decode.only(&.{ .rv32i, .m, .c, .zicsr }),
-            .trm = null,
             .reset_pc = 0x4200_0000,
             .flat = .{ .flash_base = 0x4200_0000, .ram_base = 0x3FC8_0000 },
             .model = esp32c3_csr,

@@ -733,11 +733,11 @@ test "arbitrary guest bytes never crash the host" {
     }
 }
 
-test "the M4 runs MOVW, MOVT, BL, PUSH, CBZ, and POP with the cycles of its Table 3-1" {
+test "the M4 runs MOVW, MOVT, BL, PUSH, CBZ, and POP with the cycles of its fit" {
     var m = callAndReturn();
     var cpu = fast(.m4, &m);
     cpu.reset();
-    try std.testing.expectEqual(arm.Run{ .instructions = 7, .cycles = 15, .latency = 0, .stop = .breakpoint, .ended = .stopped }, cpu.run(.{ .instructions = 100 }));
+    try std.testing.expectEqual(arm.Run{ .instructions = 7, .cycles = 14, .latency = 0, .stop = .breakpoint, .ended = .stopped }, cpu.run(.{ .instructions = 100 }));
     try std.testing.expectEqual(@as(u32, 0x16), cpu.state.pc);
     try std.testing.expectEqual(@as(u32, 0x15), cpu.state.lr);
     try std.testing.expectEqual(@as(u32, 0x800), cpu.state.msp);
@@ -767,11 +767,11 @@ test "the M4 debug trace shows 32-bit codes with eight digits and the call throu
         \\at      0  pc=00000008 code=f2412034 movw r0, #4660 ; r0=00001234
         \\at      1  pc=0000000c code=f2c56078 movt r0, #22136 ; r0=56781234
         \\at      2  pc=00000010 code=f000f802 bl 0x18 ; lr=00000015
-        \\at      5  pc=00000018 code=b500 push {lr} ; sp=000007fc mem=000007fc
-        \\at      7  pc=0000001a code=b109 cbz r1, 0x20
-        \\at     10  pc=00000020 code=bd00 pop {pc} ; sp=00000800 mem=000007fc
-        \\at     14  pc=00000014 code=2000 movs r0, #0 ; r0=00000000 xpsr=41000000
-        \\at     15  pc=00000016 code=be00 bkpt #0
+        \\at      4  pc=00000018 code=b500 push {lr} ; sp=000007fc mem=000007fc
+        \\at      6  pc=0000001a code=b109 cbz r1, 0x20
+        \\at      8  pc=00000020 code=bd00 pop {pc} ; sp=00000800 mem=000007fc
+        \\at     13  pc=00000014 code=2000 movs r0, #0 ; r0=00000000 xpsr=41000000
+        \\at     14  pc=00000016 code=be00 bkpt #0
         \\
     , w.buffered());
 }
@@ -788,7 +788,7 @@ test "the M0+ locks up at the first ARMv7-M-only instruction of the same program
     try std.testing.expectEqualStrings("The code f2412034 at pc=00000008 is not an instruction of this architecture. The core locked up.\n", w.buffered());
 }
 
-test "the M33 charges one cycle an instruction, because its own manual publishes no table" {
+test "the M33 charges one cycle an instruction, because it has no fit" {
     var m = releaseAndAcquire();
     var cpu = fast(.m33, &m);
     cpu.reset();
@@ -799,7 +799,7 @@ test "the M33 charges one cycle an instruction, because its own manual publishes
     try std.testing.expectEqual(@as(u32, 7), std.mem.readInt(u32, m.bytes[0x100..0x104], .little));
 }
 
-test "a step of the M4 reports the cycles its Table 3-1 publishes, and a step of the M33 reports none, because no table of its own exists" {
+test "a step of the M4 reports the cycles its fit charges, and a step of the M33 reports none, because it has no fit" {
     var m = storeAndLoad(0x100);
     var cpu = fast(.m4, &m);
     cpu.reset();
@@ -907,7 +907,7 @@ test "the M0+ charges BL three cycles and BX two, Table 3-1, while the M4 charge
     m = callAndExchange();
     var cpu4 = fast(.m4, &m);
     cpu4.reset();
-    try std.testing.expectEqual(arm.Run{ .instructions = 2, .cycles = 6, .latency = 0, .stop = .breakpoint, .ended = .stopped }, cpu4.run(.{ .instructions = 100 }));
+    try std.testing.expectEqual(arm.Run{ .instructions = 2, .cycles = 4, .latency = 0, .stop = .breakpoint, .ended = .stopped }, cpu4.run(.{ .instructions = 100 }));
 }
 
 test "the core does not fetch from the execute-never regions of the default memory map and locks up with a MemManage violation, B3.1 B3.5.2" {
@@ -1105,7 +1105,7 @@ test "the M4 charges 12 cycles to enter an exception and 10 to return, M4 TRM 3.
     });
     var cpu = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m4, .{}, .{});
     cpu.reset();
-    try std.testing.expectEqual(arm.Run{ .instructions = 2, .cycles = 1 + 12 + 3 + 10, .latency = 12 + 10, .stop = .breakpoint, .ended = .stopped }, cpu.run(.{ .instructions = 100 }));
+    try std.testing.expectEqual(arm.Run{ .instructions = 2, .cycles = 1 + 12 + 2 + 10, .latency = 12 + 10, .stop = .breakpoint, .ended = .stopped }, cpu.run(.{ .instructions = 100 }));
 }
 
 test "the M3 charges 12 cycles to enter an exception and 12 to return, M3 TRM 3.9.2" {
@@ -1115,7 +1115,7 @@ test "the M3 charges 12 cycles to enter an exception and 12 to return, M3 TRM 3.
     });
     var cpu = arm.Processor(.{ .cores = every, .Bus = Memory }).init(&m, .m3, .{}, .{});
     cpu.reset();
-    try std.testing.expectEqual(arm.Run{ .instructions = 2, .cycles = 1 + 12 + 3 + 12, .latency = 12 + 12, .stop = .breakpoint, .ended = .stopped }, cpu.run(.{ .instructions = 100 }));
+    try std.testing.expectEqual(arm.Run{ .instructions = 2, .cycles = 1 + 12 + 1 + 12, .latency = 12 + 12, .stop = .breakpoint, .ended = .stopped }, cpu.run(.{ .instructions = 100 }));
 }
 
 test "the step that enters an exception retires no instruction and reports the entry latency it charged, M4 TRM 3.9.2" {
@@ -4524,28 +4524,31 @@ test "the implementation defined registers' Non-secure alias shows Secure code t
     try std.testing.expectEqual(@as(?u32, null), m33.peek(4, 0xe003_e300));
 }
 
-test "setTiming answers the table it charges by: the M4's and M7's fits, the M3's TRM table in place of a fit, and one a cycle where the M33 has neither" {
+test "a core starts at its fit, the M0+'s, M4's or M7's, and setTiming answers one a cycle where the M3 and M33 have none" {
     var m = loaded();
+    var m0plus = fast(.m0plus, &m);
+    try std.testing.expectEqual(.fitted, m0plus.timing);
+    try std.testing.expectEqual(@as(u8, 2), m0plus.costOf(.load).cycles);
+    try std.testing.expect(m0plus.model.rules.divide == null and !m0plus.model.rules.straddle and !m0plus.pipeline.issuing);
     var m4 = fast(.m4, &m);
-    try std.testing.expectEqual(.fitted, m4.setTiming(.fitted));
+    try std.testing.expectEqual(.fitted, m4.timing);
     try std.testing.expectEqual(@as(u8, 1), m4.costOf(.store).cycles);
     try std.testing.expect(m4.model.rules.divide != null and m4.model.rules.straddle);
-    try std.testing.expectEqual(.trm, m4.setTiming(.trm));
-    try std.testing.expectEqual(@as(u8, 2), m4.costOf(.store).cycles);
-    try std.testing.expect(m4.model.rules.divide == null and !m4.model.rules.straddle);
     try std.testing.expectEqual(.unknown, m4.setTiming(.unknown));
     try std.testing.expectEqual(@as(u8, 1), m4.costOf(.divide).cycles);
-    var m3 = fast(.m3, &m);
-    try std.testing.expectEqual(.trm, m3.setTiming(.fitted));
-    try std.testing.expectEqual(@as(u8, 12), m3.costOf(.divide).cycles);
+    try std.testing.expect(m4.model.rules.divide == null and !m4.model.rules.straddle);
     var m7 = fast(.m7, &m);
+    try std.testing.expect(m7.pipeline.issuing);
+    try std.testing.expectEqual(.unknown, m7.setTiming(.unknown));
+    try std.testing.expect(!m7.pipeline.issuing);
     try std.testing.expectEqual(.fitted, m7.setTiming(.fitted));
     try std.testing.expect(m7.pipeline.issuing);
-    try std.testing.expectEqual(.unknown, m7.setTiming(.trm));
-    try std.testing.expect(!m7.pipeline.issuing);
-    var m33 = fast(.m33, &m);
-    try std.testing.expectEqual(.unknown, m33.setTiming(.fitted));
-    try std.testing.expectEqual(@as(u8, 1), m33.costOf(.divide).cycles);
+    for ([_]arm.Core{ .m3, .m33 }) |c| {
+        var cpu = fast(c, &m);
+        try std.testing.expectEqual(.unknown, cpu.timing);
+        try std.testing.expectEqual(.unknown, cpu.setTiming(.fitted));
+        try std.testing.expectEqual(@as(u8, 1), cpu.costOf(.divide).cycles);
+    }
 }
 
 fn codeOf(codes: []const u16) Memory {
@@ -4567,18 +4570,6 @@ test "the fitted M7 issues an instruction with the one before when their classes
     _ = cpu.setTiming(.fitted);
     cpu.reset();
     try std.testing.expectEqual(@as(u64, 3), cpu.run(.{ .instructions = 100 }).cycles);
-}
-
-test "setTiming charges a caller's own table as given, with no fitted rules" {
-    var m = loaded();
-    var cpu = fast(.m4, &m);
-    _ = cpu.setTiming(.fitted);
-    var table: arm.Table = .{ .cycles = .initFill(3), .taken = .initFill(5), .per_register = .initFill(0) };
-    table.cycles.set(.divide, 7);
-    try std.testing.expectEqual(.custom, cpu.setTiming(.{ .custom = table }));
-    try std.testing.expectEqual(@as(u8, 7), cpu.costOf(.divide).cycles);
-    try std.testing.expectEqual(@as(u8, 5), cpu.costOf(.branch).taken);
-    try std.testing.expect(cpu.model.rules.divide == null and !cpu.model.rules.straddle and !cpu.pipeline.issuing);
 }
 
 test "unknown charges one cycle an instruction on every core, whatever its class, taken or not and however many registers it lists" {

@@ -10,7 +10,7 @@ const core = @import("core");
 
 | Export | What |
 |---|---|
-| `core.arm`, `core.riscv` | `Processor`, `Options`, `Step`, `Run`, `Limit`, `Ended`, `Stop`, `Core`, `spec`, `Timing`, `Table`, `trace`, `semihosting`, and `decode` from `isa` |
+| `core.arm`, `core.riscv` | `Processor`, `Options`, `Step`, `Run`, `Limit`, `Ended`, `Stop`, `Core`, `spec`, `Timing`, `trace`, `semihosting`, and `decode` from `isa` |
 | `core.memory` | `Regions`, `Device`, `Width`, `Line`, `Lines`, `Clock`, `map`, `elf` |
 | `core.trace` | `Ring`, the record ring both families instantiate |
 | `core.contract` | `Kind`, `Access`, `Failure`, `Word`: the vocabulary a bus is reached with |
@@ -25,8 +25,7 @@ A `core.arm.Core` (`m0`, `m0plus`, `m1`, `m3`, `m4`, `m7`, `m23`, `m33`, `m55`, 
 
 `core.arm.spec(.m4)` is the table a core is built from:
 
-- Arm: architecture, `trm`, the cycle table its Technical Reference Manual publishes or
-  `null`, exception entry and exit cycles, priority bits, CPUID, reset CCR, and which of
+- Arm: architecture, exception entry and exit cycles, priority bits, CPUID, reset CCR, and which of
   the Security, floating-point, MVE and PACBTI extensions it has.
 - RISC-V: instruction groups, reset PC, flat memory layout, CSR implementation, interrupt
   matrix layout and PMP priority rule.
@@ -96,13 +95,10 @@ var cpu = Cpu.init(&board.memory, .m0plus, .{}, .{});
 | `Timing` | Charges |
 |---|---|
 | `.unknown` | One cycle an instruction |
-| `.trm` | `spec(core).trm`, the table the core's TRM publishes |
-| `.fitted` | A table fitted to measurements, with the rules and issue model it needs, for the M4 and the M7 |
-| `.custom` | The caller's `Table`: cycles per class, the extra when taken and, on Arm, per listed register |
+| `.fitted` | A table fitted to measurements, with the rules and issue model it needs, for the M0+, the M4 and the M7 |
 
-`.fitted` falls back to `.trm` where the core has no fit, and `.trm` to `.unknown` where it has
-no table. A core starts at `.trm` where it has a table, else `.unknown`. No RISC-V part has a
-table or a fit.
+`.fitted` falls back to `.unknown` where the core has no fit. A core starts at `.fitted` where it
+has a fit, else `.unknown`. No RISC-V part has a fit.
 
 ### Running
 

@@ -38,15 +38,16 @@ test "one processor type built for three cores runs the same program with each c
     var memory = try core.memory.Regions.adopt(&entries);
 
     try std.testing.expectEqual(@as(u64, 5), cyclesOn(&memory, .m0plus));
-    try std.testing.expectEqual(@as(u64, 5), cyclesOn(&memory, .m4));
+    try std.testing.expectEqual(@as(u64, 4), cyclesOn(&memory, .m4));
     try std.testing.expectEqual(@as(u64, 3), cyclesOn(&memory, .m7));
 }
 
-test "the cycle table behind those counts is the core's spec, which a caller can read directly" {
+test "a caller reads the cycle table behind those counts with costOf, and the rest of a core in its spec" {
+    var memory = try core.memory.Regions.adopt(&entries);
+    var cpu = Cpu.init(&memory, .m0plus, .{}, .{});
+    try std.testing.expectEqual(@as(u8, 2), cpu.costOf(.load).cycles);
     const m0plus = core.arm.spec(.m0plus);
-    try std.testing.expectEqual(@as(u8, 2), m0plus.trm.?.cycles.get(.load));
     try std.testing.expectEqual(@as(u8, 15), m0plus.entry);
-    try std.testing.expect(comptime core.arm.spec(.m7).trm == null);
     try std.testing.expect(comptime core.arm.spec(.m4).floating_point);
     try std.testing.expect(!m0plus.floating_point);
 }

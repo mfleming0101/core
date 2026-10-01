@@ -68,18 +68,16 @@ unfolds the cache.
 ### What one core knows
 
 `core.zig` in each family is a table, one entry per core, of what its Technical Reference Manual
-says: architecture, the published cycle table (`trm`) of cycles per instruction class, the extra
-cost of a taken branch and, on Arm, the cost of each listed register, exception entry and exit
-cycles, priority bits, id registers, reset CCR, extensions fitted, and for RISC-V the CSR
+says: architecture, exception entry and exit cycles, priority bits, id registers, reset CCR, extensions fitted, and for RISC-V the CSR
 implementation, interrupt matrix layout and reset address.
 
 `Processor(.{ .cores })` builds a table of these at compile time and the union of their
 instruction groups, which prunes the decode tree. `setTiming` chooses what a processor charges:
-`unknown`, one cycle an instruction with `null` costs; `trm`, the published table; `fitted`, a
-table fitted to measurements with the rules and issue model it needs (`fitOf`, for the M4 and
-the M7); or `custom`, the caller's table. A processor starts at `trm` where its core has a table
-and `unknown` where it has none (M1, M7, M33, M55, M85, the ESP32s); `fitted` falls back to
-`trm` and `trm` to `unknown`.
+`unknown`, one cycle an instruction with `null` costs, or `fitted`, a table of cycles per
+instruction class, the extra when taken and, on Arm, per listed register, fitted to measurements
+with the rules and issue model it needs (`fitOf`, for the M0+, the M4 and the M7). A processor
+starts at `fitted` where its core has a fit and `unknown` where it has none, to which `fitted`
+falls back.
 
 The fitted issue model follows the previous instruction: which classes pair, the stalls on
 registers it wrote, loads pipelined on one bus, the prefetch buffer, for the M4, IT and NOP

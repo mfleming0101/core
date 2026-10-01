@@ -1,10 +1,8 @@
 //! What the library knows about each Cortex-M core, one Spec per core. A Spec is comptime
-//! data: the architecture, the cycle counts the Technical Reference Manual publishes per
-//! instruction class and for a taken branch, the exception entry and exit cycles, the
-//! priority bits, CPUID and MVFR, the reset CCR, the MPU region count, and which of the
-//! Security, floating-point, MVE and PACBTI extensions are fitted. A core with no published
-//! table has a null trm and charges one cycle an instruction. Cores are written as
-//! differences from one another.
+//! data: the architecture, the exception entry and exit cycles, the priority bits, CPUID and
+//! MVFR, the reset CCR, the MPU region count, and which of the Security, floating-point, MVE
+//! and PACBTI extensions are fitted. Cores are written as differences from one another. fitOf
+//! holds the cycle tables fitted to boards; a core with none charges one cycle an instruction.
 const std = @import("std");
 const Class = @import("isa").arm.instruction.Class;
 const Architecture = @import("isa").arm.Architecture;
@@ -13,11 +11,10 @@ const Rules = @import("isa").arm.step.Model.Rules;
 /// The Cortex-M cores this half models.
 pub const Core = enum { m0, m0plus, m1, m23, m3, m4, m7, m33, m55, m85 };
 
-/// One core as comptime data: its architecture, its cycle tables, its ids and its extensions.
+/// One core as comptime data: its architecture, its exception cycles, its ids and its extensions.
 pub const Spec = struct {
     core: Core,
     architecture: Architecture,
-    trm: ?Table,
     entry: u8,
     exit: u8,
     priority_bits: u4,
@@ -40,9 +37,8 @@ pub const Table = struct { cycles: std.EnumArray(Class, u8), taken: std.EnumArra
 
 const register_lists: std.EnumArray(Class, u8) = .init(.{ .data_processing = 0, .load = 0, .store = 0, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 1, .branch = 0, .branch_link = 0, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0, .multiply = 0 });
 
-/// Which cycles a core charges: one per instruction, its TRM table, the fitted table with its rules,
-/// or the caller's.
-pub const Timing = union(enum) { unknown, trm, fitted, custom: Table };
+/// Which cycles a core charges: one per instruction, or the fitted table with its rules.
+pub const Timing = enum { unknown, fitted };
 
 /// For each class, a set of the classes that may follow it.
 pub const Pairs = std.EnumArray(Class, std.EnumSet(Class));
@@ -168,19 +164,13 @@ pub fn choicesOf(comptime core: Core) Choices {
     };
 }
 
-/// A core's spec from its TRM: cycle tables, M4 TRM 3.3, and interrupt entry and exit cycles, M4
-/// TRM 3.9.2.
+/// A core's spec from its TRM: interrupt entry and exit cycles, M4 TRM 3.9.2, ids and extensions.
 pub fn spec(comptime core: Core) Spec {
     @setEvalBranchQuota(200_000);
     var out: Spec = switch (core) {
         .m0plus => .{
             .core = .m0plus,
             .architecture = .armv6m,
-            .trm = .{
-                .cycles = .init(.{ .data_processing = 1, .load = 2, .store = 2, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 3, .branch = 1, .branch_link = 2, .system = 1, .sleep = 2, .special_register = 3, .barrier = 3, .divide = 1, .multiply = 1 }),
-                .taken = .init(.{ .data_processing = 1, .load = 0, .store = 0, .load_multiple = 0, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 0, .branch = 1, .branch_link = 1, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0, .multiply = 0 }),
-                .per_register = register_lists,
-            },
             .entry = 15,
             .exit = 10,
             .priority_bits = 2,
@@ -193,11 +183,6 @@ pub fn spec(comptime core: Core) Spec {
         .m4 => .{
             .core = .m4,
             .architecture = .armv7em,
-            .trm = .{
-                .cycles = .init(.{ .data_processing = 1, .load = 2, .store = 2, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 1, .branch = 1, .branch_link = 1, .system = 1, .sleep = 1, .special_register = 1, .barrier = 1, .divide = 12, .multiply = 1 }),
-                .taken = .init(.{ .data_processing = 2, .load = 2, .store = 0, .load_multiple = 2, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 2, .branch = 2, .branch_link = 2, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0, .multiply = 0 }),
-                .per_register = register_lists,
-            },
             .entry = 12,
             .exit = 10,
             .priority_bits = 4,
@@ -210,28 +195,18 @@ pub fn spec(comptime core: Core) Spec {
         },
         .m0 => like(.m0plus, .{
             .mpu_regions = 0,
-            .trm = @as(?Table, .{
-                .cycles = .init(.{ .data_processing = 1, .load = 2, .store = 2, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 4, .branch = 1, .branch_link = 2, .system = 1, .sleep = 2, .special_register = 4, .barrier = 4, .divide = 1, .multiply = 1 }),
-                .taken = .init(.{ .data_processing = 2, .load = 0, .store = 0, .load_multiple = 0, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 0, .branch = 2, .branch_link = 2, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0, .multiply = 0 }),
-                .per_register = register_lists,
-            }),
             .cpuid = 0x410c_c200,
         }),
-        .m1 => like(.m0, .{ .cpuid = 0x410c_c210, .trm = @as(?Table, null) }),
+        .m1 => like(.m0, .{ .cpuid = 0x410c_c210 }),
         .m23 => like(.m0plus, .{
             .architecture = .armv8m_base,
-            .trm = @as(?Table, blk: {
-                var t = spec(.m0plus).trm.?;
-                t.cycles.set(.divide, 17);
-                break :blk t;
-            }),
             .cpuid = 0x411c_d200,
             .ccr = 0x0000_0209,
             .security = true,
         }),
         .m3 => like(.m4, .{ .architecture = .armv7m, .cpuid = 0x410f_c231, .exit = 12, .floating_point = false, .mvfr = [3]u32{ 0, 0, 0 } }),
-        .m7 => like(.m4, .{ .cpuid = 0x411f_c272, .trm = @as(?Table, null), .ccr = 0x0004_0200, .double_precision = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0221, 0x1200_0011, 0x0000_0040 }, .caches = true }),
-        .m33 => like(.m4, .{ .architecture = .armv8m_main, .cpuid = 0x410f_d213, .trm = @as(?Table, null), .ccr = 0x0000_0201, .security = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0021, 0x1100_0011, 0x0000_0040 } }),
+        .m7 => like(.m4, .{ .cpuid = 0x411f_c272, .ccr = 0x0004_0200, .double_precision = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0221, 0x1200_0011, 0x0000_0040 }, .caches = true }),
+        .m33 => like(.m4, .{ .architecture = .armv8m_main, .cpuid = 0x410f_d213, .ccr = 0x0000_0201, .security = true, .fpv5 = true, .mvfr = [3]u32{ 0x1011_0021, 0x1100_0011, 0x0000_0040 } }),
         .m55 => like(.m33, .{ .architecture = .armv8_1m_main, .cpuid = 0x411f_d221, .double_precision = true, .half_precision = true, .mve = true, .mvfr = [3]u32{ 0x1011_0221, 0x1210_0211, 0x0000_0040 }, .caches = true }),
         .m85 => like(.m55, .{ .cpuid = 0x411f_d230, .pacbti = true }),
     };
@@ -242,12 +217,20 @@ pub fn spec(comptime core: Core) Spec {
 /// A core's fitted timing, or null where it has none.
 pub fn fitOf(comptime core: Core) ?Fit {
     return switch (core) {
+        .m0plus => .{
+            .table = .{
+                .cycles = .init(.{ .data_processing = 1, .load = 2, .store = 2, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 3, .branch = 1, .branch_link = 2, .system = 1, .sleep = 2, .special_register = 3, .barrier = 3, .divide = 1, .multiply = 1 }),
+                .taken = .init(.{ .data_processing = 1, .load = 0, .store = 0, .load_multiple = 0, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 0, .branch = 1, .branch_link = 1, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0, .multiply = 0 }),
+                .per_register = register_lists,
+            },
+            .rules = .{},
+        },
         .m4 => blk: {
-            var table = spec(.m4).trm.?;
-            table.cycles.set(.store, 1);
-            table.taken.set(.branch, 1);
-            table.taken.set(.branch_link, 1);
-            table.taken.set(.pop_pc, 3);
+            const table: Table = .{
+                .cycles = .init(.{ .data_processing = 1, .load = 2, .store = 1, .load_multiple = 1, .store_multiple = 1, .push = 1, .pop = 1, .pop_pc = 1, .branch = 1, .branch_link = 1, .system = 1, .sleep = 1, .special_register = 1, .barrier = 1, .divide = 12, .multiply = 1 }),
+                .taken = .init(.{ .data_processing = 2, .load = 2, .store = 0, .load_multiple = 2, .store_multiple = 0, .push = 0, .pop = 0, .pop_pc = 3, .branch = 1, .branch_link = 1, .system = 0, .sleep = 0, .special_register = 0, .barrier = 0, .divide = 0, .multiply = 0 }),
+                .per_register = register_lists,
+            };
             const alone: Pairs = .initFill(.initEmpty());
             break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 2, .zero_dividend = 2, .narrower = 3, .base = 4, .bits = 4, .signed = 0 }, .straddle = true }, .issue = .{ .pairs = alone, .waits = alone, .delays = .initMany(&.{ .data_processing, .multiply }), .address = 1, .product = 0, .load = 0, .shift = 0, .pipelined = true, .width = 0, .miss = 0, .mispredict = 0, .flush = 2, .forward = 0, .rmw = 0, .indexed = 1, .buffer = 0, .slow = 0, .prefetch = 12, .fetch = 0, .targets = 0, .reach = 0, .table = 4, .settle = 0, .fold = true, .stack = true } };
         },

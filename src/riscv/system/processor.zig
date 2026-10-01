@@ -59,14 +59,6 @@ fn costsOf(table: core.Table) arch_step.Model.Costs {
 
 /// Builds the hart type: one struct answering the host contract over the caller's bus.
 pub fn Processor(comptime options: Options) type {
-    const costs = blk: {
-        var out: [options.cores.len]arch_step.Model.Costs = undefined;
-        for (options.cores, 0..) |c, i| {
-            const s = core.spec(c);
-            out[i] = if (s.trm) |table| costsOf(table) else one_each;
-        }
-        break :blk out;
-    };
     const fits = blk: {
         var out: [options.cores.len]?core.Table = undefined;
         for (options.cores, 0..) |c, i| out[i] = core.fitOf(c);
@@ -110,7 +102,7 @@ pub fn Processor(comptime options: Options) type {
 
         spec: core.Spec,
         model: arch_step.Model,
-        timing: std.meta.Tag(core.Timing),
+        timing: core.Timing,
         state: State,
         memory: *options.Bus,
         pmp: pmp_block.Pmp,
@@ -149,8 +141,8 @@ pub fn Processor(comptime options: Options) type {
             const spec = specs[at];
             var made: Self = .{
                 .spec = spec,
-                .model = .{ .decoding = spec.groups, .costs = costs[at] },
-                .timing = if (spec.trm != null) .trm else .unknown,
+                .model = .{ .decoding = spec.groups, .costs = one_each },
+                .timing = .unknown,
                 .state = .{ .csr = .{ .implementation = spec.model, .mtvec = @intFromBool(spec.model.tvec_modes == .vectored) } },
                 .memory = memory,
                 .pmp = .{ .static_priority = spec.pmp_static_priority },
@@ -176,6 +168,7 @@ pub fn Processor(comptime options: Options) type {
                 .last_fetch = 0,
                 .returns = 0,
             };
+            _ = made.setTiming(.fitted);
             made.reguard();
             made.atReset();
             return made;
@@ -188,21 +181,13 @@ pub fn Processor(comptime options: Options) type {
             return self.model.decoding;
         }
 
-        /// Selects a timing and returns the one used: fitted falls back to trm, and trm to unknown,
-        /// where missing.
-        pub fn setTiming(self: *Self, timing: core.Timing) std.meta.Tag(core.Timing) {
-            const at = slotOf(self.spec.core);
-            self.timing, self.model.costs = switch (timing) {
-                .custom => |table| .{ .custom, costsOf(table) },
-                .fitted => if (fits[at]) |table| .{ .fitted, costsOf(table) } else fallback(at, true),
-                .trm => fallback(at, true),
-                .unknown => fallback(at, false),
-            };
+        /// Selects a timing and returns the one used: fitted falls back to unknown where the part
+        /// has no fit.
+        pub fn setTiming(self: *Self, timing: core.Timing) core.Timing {
+            const fit = if (timing == .fitted) fits[slotOf(self.spec.core)] else null;
+            self.model.costs = if (fit) |table| costsOf(table) else one_each;
+            self.timing = if (fit != null) .fitted else .unknown;
             return self.timing;
-        }
-
-        fn fallback(at: usize, published: bool) struct { std.meta.Tag(core.Timing), arch_step.Model.Costs } {
-            return if (published and specs[at].trm != null) .{ .trm, costs[at] } else .{ .unknown, one_each };
         }
 
         /// What the cycle table charges an instruction class.

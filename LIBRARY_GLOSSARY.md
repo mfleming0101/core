@@ -79,21 +79,18 @@ its reset defaults and its optional blocks. Comptime data, selected by `spec(cor
 [processor](#processor) holds a copy of the one it was built as.
 
 - `Spec` and `spec`: [arm](src/arm/system/core.zig), [riscv](src/riscv/system/core.zig).
-- `Spec.trm` is the published table: what an instruction of each class costs, what a taken
-  branch adds and, on Arm, what each register of a list adds; `null` where no table is
-  published, and such a processor charges one cycle an instruction.
 - `Spec.model` is the RISC-V CSR implementation, `isa`'s word, not a model of the part.
 
 ### Timing
 
 Which cycles a [processor](#processor) charges, chosen by `setTiming`: `unknown`, one cycle an
-instruction; `trm`, the [spec](#spec)'s published table; `fitted`, a table fitted to
-measurements with the rules and issue model it needs; `custom`, a caller's `Table`. `fitted`
-falls back to `trm` and `trm` to `unknown` where a core has none.
+instruction; `fitted`, a table fitted to measurements with the rules and issue model it needs:
+what an instruction of each class costs, what a taken branch adds and, on Arm, what each
+register of a list adds. `fitted` falls back to `unknown` where a core has none.
 
 - `Timing` and `Table`: [arm](src/arm/system/core.zig), [riscv](src/riscv/system/core.zig);
   `setTiming` in each processor.
-- `fitOf` holds the fits, the M4's and the M7's. No RISC-V part has one.
+- `fitOf` holds the fits, the M0+'s, the M4's and the M7's. No RISC-V part has one.
 
 ### Hart
 

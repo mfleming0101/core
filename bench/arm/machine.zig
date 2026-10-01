@@ -35,7 +35,6 @@ pub const Machine = struct {
         self.cpu.state.branchTo(harness.consumer.entryOf(loaded.elf));
         _ = self.cpu.setTiming(switch (loaded.timing) {
             .unknown => .unknown,
-            .trm => .trm,
             .fitted => .fitted,
         });
         if (self.cpu.trace.recording()) self.cpu.last = core.arm.trace.snapshot(&self.cpu.state);
@@ -157,7 +156,7 @@ const isa_requirements = [_]harness.contract.Requirement{
     .{ .name = "touch", .Signature = @TypeOf(Cpu.touch), .why = "the address a run of accesses begins at, once per lookup rather than once per word, for the fault address registers Armv7-M B3.2.17 and B3.2.18 and the trace line" },
     .{ .name = "allowed", .Signature = @TypeOf(Cpu.allowed), .why = "comptime group word; selects which rows the decode tables hold" },
     .{ .name = "model", .Signature = @FieldType(Cpu, "model"), .why = "the decode selection and the cost table this core steps with" },
-    .{ .name = "costOf", .Signature = @TypeOf(Cpu.costOf), .why = "what the core's published table charges the class it just retired" },
+    .{ .name = "costOf", .Signature = @TypeOf(Cpu.costOf), .why = "what the core's cycle table charges the class it just retired" },
     .{ .name = "architecture", .Signature = @TypeOf(Cpu.architecture), .why = "profile test, so one build answers for several architectures" },
     .{ .name = "security", .Signature = @TypeOf(Cpu.security), .why = "whether the security extension is present" },
     .{ .name = "priorityBits", .Signature = @TypeOf(Cpu.priorityBits), .why = "how many priority bits BASEPRI keeps" },

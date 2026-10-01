@@ -264,14 +264,6 @@ pub fn Processor(comptime options: Options) type {
         for (options.cores, 0..) |c, i| out[i] = scb_block.profileOf(c);
         break :blk out;
     };
-    const costs = blk: {
-        var out: [options.cores.len]arch_step.Model.Costs = undefined;
-        for (options.cores, 0..) |c, i| {
-            const s = core.spec(c);
-            out[i] = if (s.trm) |table| costsOf(table) else one_each;
-        }
-        break :blk out;
-    };
     const fits = blk: {
         var out: [options.cores.len]?core.Fit = undefined;
         for (options.cores, 0..) |c, i| out[i] = core.fitOf(c);
@@ -406,7 +398,7 @@ pub fn Processor(comptime options: Options) type {
 
         spec: core.Spec,
         model: arch_step.Model,
-        timing: std.meta.Tag(core.Timing),
+        timing: core.Timing,
         pipeline: Issuing,
         state: State,
         memory: *options.Bus,
@@ -485,8 +477,8 @@ pub fn Processor(comptime options: Options) type {
             const spec = specs[at];
             var made: Self = .{
                 .spec = spec,
-                .model = .{ .decoding = decode.selectionOf(spec.architecture), .costs = costs[at] },
-                .timing = if (spec.trm != null) .trm else .unknown,
+                .model = .{ .decoding = decode.selectionOf(spec.architecture), .costs = one_each },
+                .timing = .unknown,
                 .pipeline = if (Issuing == void) {} else .{},
                 .state = .{ .secure = spec.security, .fpscr = fp.fixedFields(spec.architecture, 0) },
                 .memory = memory,
@@ -533,32 +525,21 @@ pub fn Processor(comptime options: Options) type {
                 .taken = null,
                 .vector = .{},
             };
+            _ = made.setTiming(.fitted);
             made.reguard();
             made.atReset();
             return made;
         }
 
-        /// Selects a timing and returns the one used: fitted falls back to trm, and trm to unknown,
-        /// where missing.
-        pub fn setTiming(self: *Self, timing: core.Timing) std.meta.Tag(core.Timing) {
-            const at = slotOf(self.spec.core);
-            self.model.rules = .{};
-            if (Issuing != void) self.pipeline = .{};
-            self.timing, self.model.costs = switch (timing) {
-                .custom => |table| .{ .custom, costsOf(table) },
-                .fitted => if (fits[at]) |fit| blk: {
-                    self.model.rules = fit.rules;
-                    if (Issuing != void) self.pipeline.issuing = fit.issue != null;
-                    break :blk .{ .fitted, costsOf(fit.table) };
-                } else fallback(at, true),
-                .trm => fallback(at, true),
-                .unknown => fallback(at, false),
-            };
+        /// Selects a timing and returns the one used: fitted falls back to unknown where the core
+        /// has no fit.
+        pub fn setTiming(self: *Self, timing: core.Timing) core.Timing {
+            const fit = if (timing == .fitted) fits[slotOf(self.spec.core)] else null;
+            self.model.rules = if (fit) |f| f.rules else .{};
+            self.model.costs = if (fit) |f| costsOf(f.table) else one_each;
+            if (Issuing != void) self.pipeline = .{ .issuing = fit != null and fit.?.issue != null };
+            self.timing = if (fit != null) .fitted else .unknown;
             return self.timing;
-        }
-
-        fn fallback(at: usize, published: bool) struct { std.meta.Tag(core.Timing), arch_step.Model.Costs } {
-            return if (published and specs[at].trm != null) .{ .trm, costs[at] } else .{ .unknown, one_each };
         }
 
         /// What the cycle table charges an instruction class.

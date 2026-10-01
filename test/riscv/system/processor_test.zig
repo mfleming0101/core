@@ -148,7 +148,7 @@ test "a step reports the class and the address of the instruction it ran, and ch
     try std.testing.expectEqual(@as(u64, 1), cpu.cycles);
 }
 
-test "a step reports no cycle count on either part, because neither TRM publishes a cycle table" {
+test "a step reports no cycle count on either part, because neither has a fit" {
     for ([_]riscv.Core{ .esp32c3, .esp32c6 }) |c| {
         var memory: Memory = .{};
         memory.program(&.{ li_a0_5, ebreak });
@@ -1301,27 +1301,13 @@ test "a build that carries the ESP32-C3 alone decodes no atomic row, so the A ex
     try std.testing.expect(c6.spec.pmp_static_priority);
 }
 
-test "setTiming answers unknown for every part, one cycle an instruction, until a table is published or fitted, and charges a caller's table as given" {
+test "setTiming answers unknown for every part, one cycle an instruction, until one is fitted" {
     var records: [4]riscv.trace.Record = undefined;
     for (every) |c| {
         var memory: Memory = .{};
         var cpu = Cpu.init(&memory, c, riscv.trace.Ring.init(&records) catch unreachable);
         try std.testing.expectEqual(.unknown, cpu.timing);
         try std.testing.expectEqual(.unknown, cpu.setTiming(.fitted));
-        try std.testing.expectEqual(.unknown, cpu.setTiming(.trm));
         for (std.enums.values(Class)) |class| try std.testing.expectEqual(@as(u8, 1), cpu.costOf(class).cycles);
-        try std.testing.expectEqual(.custom, cpu.setTiming(.{ .custom = .{ .cycles = .initFill(3), .taken = .initFill(2) } }));
-        try std.testing.expectEqual(@as(u8, 3), cpu.costOf(.branch).cycles);
-        try std.testing.expectEqual(@as(u8, 2), cpu.costOf(.branch).taken);
     }
-}
-
-test "a reset keeps the timing setTiming chose" {
-    var records: [4]riscv.trace.Record = undefined;
-    var memory: Memory = .{};
-    var cpu = Cpu.init(&memory, .esp32c3, riscv.trace.Ring.init(&records) catch unreachable);
-    _ = cpu.setTiming(.{ .custom = .{ .cycles = .initFill(3), .taken = .initFill(2) } });
-    cpu.reset();
-    try std.testing.expectEqual(.custom, cpu.timing);
-    try std.testing.expectEqual(@as(u8, 3), cpu.costOf(.branch).cycles);
 }
