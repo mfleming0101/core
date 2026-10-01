@@ -1,7 +1,7 @@
 //! Public surface of the Arm half, reached as core.arm. Re-exports the processor and
 //! everything a caller names around it: its options, what a step and a run produce, the
 //! limits and end reasons, the exception numbering, the core enum and its spec, the
-//! stop enum, and the trace and semihosting modules.
+//! stop enum, and the trace module.
 
 /// The Arm core: the isa host, the private peripheral bus, the exceptions, the clock and the bus.
 pub const Processor = @import("system/processor.zig").Processor;
@@ -41,5 +41,3 @@ pub const Class = @import("isa").arm.instruction.Class;
 pub const decode = @import("isa").arm.decode;
 /// The record, the ring, the line renderer and explain for this family.
 pub const trace = @import("trace.zig");
-/// Recognising and performing a semihosting call made through BKPT 0xab.
-pub const semihosting = @import("semihosting.zig");

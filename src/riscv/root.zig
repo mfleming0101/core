@@ -1,7 +1,6 @@
 //! Public surface of the RISC-V half, reached as core.riscv. Re-exports the processor and
 //! everything a caller names around it: its options, what a step and a run produce, the
-//! limits and end reasons, the part enum and its spec, the stops, and the trace and
-//! semihosting modules.
+//! limits and end reasons, the part enum and its spec, the stops, and the trace module.
 
 /// The RISC-V hart: the isa host, the interrupt matrix, the PMP, the clock and the bus.
 pub const Processor = @import("system/processor.zig").Processor;
@@ -29,5 +28,3 @@ pub const Class = @import("isa").riscv.instruction.Class;
 pub const decode = @import("isa").riscv.decode;
 /// The record, the ring, the line renderer and explain for this family.
 pub const trace = @import("trace.zig");
-/// Recognising and performing a semihosting call made through EBREAK.
-pub const semihosting = @import("semihosting.zig");

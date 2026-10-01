@@ -10,7 +10,7 @@ const core = @import("core");
 
 | Export | What |
 |---|---|
-| `core.arm`, `core.riscv` | `Processor`, `Options`, `Step`, `Run`, `Limit`, `Ended`, `Stop`, `Core`, `spec`, `Timing`, `trace`, `semihosting`, and `decode` from `isa` |
+| `core.arm`, `core.riscv` | `Processor`, `Options`, `Step`, `Run`, `Limit`, `Ended`, `Stop`, `Core`, `spec`, `Timing`, `trace`, and `decode` from `isa` |
 | `core.memory` | `Regions`, `Device`, `Width`, `Line`, `Lines`, `Clock`, `map`, `elf` |
 | `core.trace` | `Ring`, the record ring both families instantiate |
 | `core.contract` | `Kind`, `Access`, `Failure`, `Word`: the vocabulary a bus is reached with |
