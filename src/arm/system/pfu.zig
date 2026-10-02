@@ -72,15 +72,15 @@ pub const Stream = struct {
     }
 
     fn read(self: *Stream, hook: anytype, line: u32, index: u32, at: u64) void {
-        var t = at + pass + hook.wait(.fetch, line << 5 | index << 3, at);
-        self.beats[index] = t;
+        var t = at + hook.wait(.fetch, line << 5 | index << 3, at);
+        self.beats[index] = t + pass;
         for (index + 1..4) |j| {
             t += hook.wait(.burst, line << 5 | @as(u32, @intCast(j)) << 3, t);
-            self.beats[j] = t;
+            self.beats[j] = t + pass;
         }
         self.line = line;
         self.from = index;
-        self.done = t;
-        self.ahead = t;
+        self.done = t + pass;
+        self.ahead = t + pass;
     }
 };
