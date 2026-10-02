@@ -23,6 +23,8 @@ const nvic_block = @import("nvic.zig");
 const dwt_block = @import("dwt.zig");
 const sau_block = @import("sau.zig");
 const m7_block = @import("m7.zig");
+const l1_block = @import("l1.zig");
+const pfu_block = @import("pfu.zig");
 const icb_block = @import("icb.zig");
 const impdef_block = @import("impdef.zig");
 const ras_block = @import("ras.zig");
@@ -45,8 +47,8 @@ pub const Options = struct {
     Waits: type = void,
 };
 
-/// A priced access: fetch, read, issued load, store or multiple's rest, branch target, speculation, fetch-ahead, flush after speculation.
-pub const Wait = enum { fetch, ahead, call, read, load, store, burst, branch, taken, jump, speculate, flush };
+/// A priced access: fetch, read, issued load, store or multiple's rest, branch target, speculation, fetch-ahead, flush, linefill.
+pub const Wait = enum { fetch, ahead, call, read, load, store, burst, branch, taken, jump, speculate, flush, line };
 
 /// What one step produced: where it ran, what it was, what it cost and what it charged.
 pub const Step = struct {
@@ -156,8 +158,10 @@ fn factsOf(code: u32, row: u11) Facts {
 
 const facts_bits = 8;
 
+const Side = enum { instruction, data };
+
 fn Pipeline(comptime entries: u8) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0) };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, turned: bool = false, guess: u32 = 1, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0) };
 }
 
 const sp_bit: u16 = 1 << 13;
@@ -310,7 +314,7 @@ pub fn Processor(comptime options: Options) type {
         break :blk most;
     };
     const Nvic = nvic_block.Nvic(lines);
-    const Waits = if (options.Waits == void) void else struct { hook: options.Waits, word: u32 = 1, next: u32 = 1, spec: bool = false };
+    const Waits = if (options.Waits == void) void else struct { hook: options.Waits, word: u32 = 1, next: u32 = 1, spec: bool = false, l1: if (M7 == void) void else l1_block.L1, pfu: if (M7 == void) void else pfu_block.Stream = if (M7 == void) {} else .{} };
     return struct {
         const Self = @This();
 
@@ -444,7 +448,7 @@ pub fn Processor(comptime options: Options) type {
         forced_unpriv: bool,
         taken: ?Taken,
         vector: Vector,
-        waits: Waits = if (Waits == void) {} else .{ .hook = undefined },
+        waits: Waits,
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -524,6 +528,7 @@ pub fn Processor(comptime options: Options) type {
                 .forced_unpriv = false,
                 .taken = null,
                 .vector = .{},
+                .waits = if (Waits == void) {} else .{ .hook = undefined, .l1 = if (M7 == void) {} else .init(part) },
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -773,7 +778,27 @@ pub fn Processor(comptime options: Options) type {
         fn fetchWord(self: *Self, word: u32) u32 {
             if (word == self.waits.word) return 0;
             self.waits.word = word;
+            if (M7 != void and self.spec.core == .m7 and self.cacheable(word)) {
+                if (self.inCache(.instruction, word)) |hit| return if (hit) 0 else self.waits.hook.wait(.line, word, self.cycles);
+                return self.waits.pfu.fetch(self.waits.hook, word, self.cycles);
+            }
             return self.waits.hook.wait(.fetch, word, self.cycles);
+        }
+
+        fn inCache(self: *Self, comptime side: Side, address: u32) ?bool {
+            if (!self.caches(side, address)) return null;
+            return @field(self.waits.l1, @tagName(side)).present(address);
+        }
+
+        fn caches(self: *const Self, comptime side: Side, address: u32) bool {
+            const enable: u32 = if (side == .instruction) 1 << 17 else 1 << 16;
+            return self.scb.get(scb_block.ccr) & enable != 0 and self.cacheable(address);
+        }
+
+        fn cacheable(self: *const Self, address: u32) bool {
+            if (address >> 29 >= 5 or address >> 29 == 2) return false;
+            const tcm = if (address >> 29 == 0) self.m7.itcm else if (address >> 29 == 1) self.m7.dtcm else return true;
+            return !tcm.enabled or address & 0x1fff_ffff >= @as(u32, 1) << (@as(u5, @intFromEnum(tcm.size)) + 9);
         }
 
         fn waitRead(self: *Self, at: u32) void {
@@ -783,6 +808,17 @@ pub fn Processor(comptime options: Options) type {
 
         fn fetchedAfter(self: *Self, pc: u32, r: arch_step.Result, cost: u32) u32 {
             const second = if (r.code > 0xffff) self.fetchWord(pc +% 2 & ~@as(u32, 3)) else 0;
+            if (M7 != void and self.spec.core == .m7) {
+                const turned = Issuing != void and self.pipeline.turned;
+                const guess = if (Issuing != void) self.pipeline.guess else 1;
+                if (Issuing != void) {
+                    self.pipeline.turned = false;
+                    self.pipeline.guess = 1;
+                }
+                if (guess != 1 and !turned and !self.caches(.instruction, guess) and self.cacheable(guess)) self.waits.pfu.stray(self.waits.hook, guess, self.cycles);
+                const table = if (!turned and r.code & 0xfff0_ffe0 == 0xe8d0_f000) self.cycles + self.priced(false, .load, self.pipeline.data, self.cycles) else 0;
+                if (r.branched and self.state.pc != pc +% 2) self.waits.pfu.turn = .{ .at = if (turned) self.cycles else @max(self.cycles + cost -| 2, table), .early = turned } else if (turned) self.waits.pfu.restart(self.cycles + cost -| 2);
+            }
             const spec = self.waits.spec;
             self.waits.spec = !r.branched and !isb(r.code) and (branchesOn(r.code) or (r.skipped and r.code == 0x4770));
             if (!r.branched and !isb(r.code)) return second + if (branchesOn(r.code)) self.waits.hook.wait(.speculate, targetOf(pc, r.code) & ~@as(u32, 3), self.cycles) else if (r.skipped and r.code == 0x4770) self.waits.hook.wait(.speculate, self.state.lr & ~@as(u32, 3), self.cycles) else 0;
@@ -864,7 +900,7 @@ pub fn Processor(comptime options: Options) type {
             next.shifts = f.shifts;
             next.folds = issue.fold and r.code <= 0xffff and !conditional and !hidden and (class == .data_processing or class == .system);
             self.pipeline.slowed[@ctz(@as(u32, slowing) | 1 << 16)] = start + gap;
-            if (paired) return 0;
+            if (paired) return if (Waits != void and loading) self.ported(false, f.words, start) else 0;
             const beats = if (issue.width == 0) 0 else ((if (r.skipped) 0 else f.words) + issue.width - 1) / issue.width;
             const forward = if (store_lists.contains(last.class) and load_lists.contains(class)) issue.forward else 0;
             const flush = if (f.isb) issue.flush else 0;
@@ -876,9 +912,14 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn ported(self: *Self, stores: bool, words: u6, at: u64) u8 {
-            const first = self.waits.hook.wait(if (stores) .store else .load, self.pipeline.data, at);
-            const rest = if (words > 1) self.waits.hook.wait(.burst, self.pipeline.data +% 4 * (@as(u32, words) - 1), at + first + 1) else 0;
+            const first = self.priced(stores, if (stores) .store else .load, self.pipeline.data, at);
+            const rest = if (words > 1) self.priced(stores, .burst, self.pipeline.data +% 4 * (@as(u32, words) - 1), at + first + 1) else 0;
             return @intCast(first + rest);
+        }
+
+        fn priced(self: *Self, stores: bool, kind: Wait, address: u32, at: u64) u32 {
+            if (M7 != void and self.spec.core == .m7 and !stores) if (self.inCache(.data, address)) |hit| return if (hit) 0 else self.waits.hook.wait(.line, address, at);
+            return self.waits.hook.wait(kind, address, at);
         }
 
         fn fetched(self: *Self, comptime issue: core.Issue, r: arch_step.Result, cycles: u8) u8 {
@@ -896,6 +937,7 @@ pub fn Processor(comptime options: Options) type {
             const t = &self.pipeline.targets;
             const found = t.find(pc);
             const taken = if (found) |i| t.counts[i] >= 2 else false;
+            self.pipeline.guess = if (taken) t.to[found.?] else 1;
             if (r.branched) {
                 const target = self.state.pc;
                 const moved = if (found) |i| t.to[i] != target else false;
@@ -906,10 +948,12 @@ pub fn Processor(comptime options: Options) type {
                 const sequential = r.code <= 0xffff and target == pc +% 2;
                 const far = @max(target, pc) - @min(target, pc) >= issue.reach and self.due & returned_due == 0;
                 const wrong = (taken and moved) or far;
+                self.pipeline.turned = taken and !wrong;
                 const table = if (!wrong and r.code & 0xfff0_ffe0 == 0xe8d0_f000) issue.table else 0;
                 return if (sequential) 0 else self.refetch(issue, pc, r.code, taken, wrong) +| table;
             }
             if (found) |i| t.counts[i] -|= 1;
+            self.pipeline.turned = taken;
             return if (taken) issue.mispredict else 0;
         }
 
@@ -1724,7 +1768,7 @@ pub fn Processor(comptime options: Options) type {
         pub fn span(self: *Self, at: u32, comptime a: contract.Access) []u8 {
             if (Issuing != void and a.kind == .write and a.bytes < 4) self.modify(at);
             if (Issuing != void and (a.kind == .read or a.kind == .write)) self.pipeline.data = at;
-            if (Waits != void and a.kind == .read and self.waits.next != 1) self.waitRead(at);
+            if (Waits != void and a.kind == .read and self.waits.next != 1 and (M7 == void or self.spec.core != .m7)) self.waitRead(at);
             const kind = comptime folding(a.kind);
             const bytes = self.memory.folded.reach(at, a.bytes, kind, self, describe);
             if (Waits != void and a.kind == .fetch and bytes.len >= 2 and bytes[1] == 0xbd) self.waits.next = 1;
