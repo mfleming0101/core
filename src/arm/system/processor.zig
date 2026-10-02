@@ -862,6 +862,7 @@ pub fn Processor(comptime options: Options) type {
             const product = if (f.sources & last.product != 0) last.ready else 0;
             const shift = if (shifted & last.group != 0) last.start + 1 + issue.shift else if (shifted & last.prior != 0) last.start + issue.shift else 0;
             const stores = class == .store or store_lists.contains(class);
+            const lookup = Waits != void and issue.targets != 0 and f.table and self.caches(.instruction, self.waits.word);
             const fed = if (f.sources & last.loaded != 0 and !stores and (class == .multiply or last.narrow)) last.fed else 0;
             const pending = f.addressed & ~sp_bit & last.slow;
             const slowed = if (pending == 0) 0 else @max(self.pipeline.slowed[@ctz(pending)], self.pipeline.slowed[15 - @clz(pending)]);
@@ -905,14 +906,14 @@ pub fn Processor(comptime options: Options) type {
             next.shifts = f.shifts;
             next.folds = issue.fold and r.code <= 0xffff and !conditional and !hidden and (class == .data_processing or class == .system);
             self.pipeline.slowed[@ctz(@as(u32, slowing) | 1 << 16)] = start + gap;
-            if (paired) return if (Waits != void and loading) self.ported(false, f.words, start) else 0;
+            if (paired) return if (Waits != void and (loading or lookup)) self.ported(false, f.words, start) else 0;
             const beats = if (issue.width == 0) 0 else ((if (r.skipped) 0 else f.words) + issue.width - 1) / issue.width;
             const forward = if (store_lists.contains(last.class) and load_lists.contains(class)) issue.forward else 0;
             const flush = if (f.isb) issue.flush else 0;
             const table = if (class == .branch and issue.targets == 0 and f.table) issue.table else 0;
             const indexed = if (class == .store and f.indexed) issue.indexed else 0;
             const overlap = (issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and (port < 0x2000_0000) == (last.port < 0x2000_0000)) or hidden;
-            const port_wait = if (Waits != void and (class == .load or stores or load_lists.contains(class))) self.ported(stores, f.words, start - @intFromBool(overlap)) else 0;
+            const port_wait = if (Waits != void and (class == .load or stores or load_lists.contains(class) or lookup)) self.ported(stores, f.words, start - @intFromBool(overlap)) else 0;
             return self.fetched(issue, r, (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait) -| @intFromBool(overlap));
         }
 
