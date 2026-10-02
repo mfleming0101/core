@@ -1295,6 +1295,11 @@ pub fn Processor(comptime options: Options) type {
             self.pendAll(@as(Lines, 1) << @intCast(line));
         }
 
+        /// Whether the core waits in a WFI or WFE that nothing has woken yet.
+        pub fn asleep(self: *const Self) bool {
+            return self.due & asleep_due != 0;
+        }
+
         /// Raises a whole set of lines, waking a sleeping core if one of them can be taken.
         pub fn pendAll(self: *Self, raised: Lines) void {
             self.pending |= @as(Set, raised & self.nvic.present()) << first_interrupt;

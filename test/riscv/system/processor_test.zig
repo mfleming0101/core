@@ -991,9 +991,11 @@ test "a step of a hart standing in a WFI retires nothing, charges nothing and re
     try std.testing.expectEqual(@as(?u8, null), standing.cost);
     try std.testing.expectEqual(@as(u8, 0), standing.charged);
     try std.testing.expect(standing.asleep);
+    try std.testing.expect(cpu.asleep());
     try std.testing.expectEqual(@as(u64, 1), cpu.instructions);
     try std.testing.expectEqual(@as(u64, 1), cpu.cycles);
     cpu.pend(@intCast(sw_intr_0));
+    try std.testing.expect(!cpu.asleep());
     const resumed = cpu.step();
     try std.testing.expect(!resumed.asleep);
     try std.testing.expectEqual(@as(?Class, .data_processing), resumed.class);
