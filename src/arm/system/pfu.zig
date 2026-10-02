@@ -1,10 +1,9 @@
-//! The M7 prefetch unit's reads outside the instruction cache, M7 TRM 1.2.2 and Table 5-3: one read
-//! outstanding, an INCR burst from the doubleword wanted to its 32-byte line's end, held until
-//! left. It reads the next line once fetch passes the end, or ahead of a later data read. The
-//! predictor turns one branch a cycle, once fetched, after the last redirect, at most eight
-//! doublewords ahead of decode; a predicted table branch reads its table after the next read. A
-//! wrong prediction first reads the guessed target; a missed branch turns once resolved, after any
-//! next-line read.
+//! The M7 prefetch unit's uncached reads, M7 TRM 1.2.2 and Table 5-3: one read outstanding, an INCR
+//! burst from the doubleword wanted to its 32-byte line's end, held until left. It reads the next
+//! line once fetch passes the end, or ahead of a later data read. The predictor turns one branch a
+//! cycle, once fetched, after the last redirect, at most eight doublewords ahead of decode; a
+//! predicted table branch reads its table after the next read. A wrong prediction reads on along
+//! the guessed path until resolved; a missed branch turns once resolved, after any next-line read.
 const std = @import("std");
 
 const none = std.math.maxInt(u32);
@@ -32,6 +31,7 @@ pub const Stream = struct {
     turned: bool = false,
     back: u32 = none,
     decoding: u32 = none,
+    strayed: bool = false,
     table: u32 = none,
     table_at: u64 = 0,
 
@@ -40,6 +40,8 @@ pub const Stream = struct {
         const line = word >> 5;
         const index = word >> 3 & 3;
         const behind = self.decoded[self.newest +% 1];
+        const strayed = self.strayed;
+        self.strayed = false;
         if (word >> 3 != self.dword) {
             self.dword = word >> 3;
             self.newest +%= 1;
@@ -58,20 +60,26 @@ pub const Stream = struct {
                     self.ahead = never;
                 } else self.read(hook, line, index, @max(self.done, self.since));
             } else {
-                const passed = t.at > self.ahead and self.line != none;
+                const passed = !strayed and t.at > self.ahead and self.line != none;
                 if (passed) self.read(hook, next, 0, self.ahead);
-                self.since = @max(self.done, t.at);
-                if (!(passed and line == next)) self.read(hook, line, index, self.since);
+                if (strayed) while (t.at > self.done) self.cut(hook, self.line +% 1, self.done - pass, t.at);
+                self.since = @max(if (strayed) self.done - pass else self.done, t.at);
+                const covered = strayed and line == self.line and index >= self.from;
+                if (!covered and !(passed and line == next)) self.read(hook, line, index, self.since);
             }
         } else if (!held) self.read(hook, line, index, if (line == next and self.ahead != never) self.ahead else @max(self.done, now));
         self.last = self.beats[index];
         return @intCast(self.beats[index] -| now);
     }
 
-    /// A wrongly predicted taken branch issued at `at`: fetch reads on from `target` until resolved.
-    pub fn stray(self: *Stream, hook: anytype, target: u32, at: u64) void {
+    /// A wrongly predicted taken branch issued at `at`: fetch reads on from `target`, or `onward` if held, until resolved.
+    pub fn stray(self: *Stream, hook: anytype, target: u32, onward: u32, at: u64) void {
         const line = target >> 5;
-        self.read(hook, line, target >> 3 & 3, @max(self.done, self.last, at -| lead));
+        const index = target >> 3 & 3;
+        const start = @max(self.done, self.last, at -| lead);
+        const held = line == self.line and index >= self.from;
+        self.strayed = !held or onward >> 5 != line;
+        if (held and self.strayed) self.read(hook, onward >> 5, onward >> 3 & 3, start) else self.read(hook, line, index, start);
     }
 
     /// A data read at `at` queues behind the next line's read if the unit started it before then.
@@ -87,6 +95,16 @@ pub const Stream = struct {
         if (target != 1 and target >> 5 != self.line and start < at) self.read(hook, target >> 5, target >> 3 & 3, start);
         self.ahead = @max(self.done, at);
         self.since = at;
+    }
+
+    fn cut(self: *Stream, hook: anytype, line: u32, at: u64, until: u64) void {
+        var t = at + hook.wait(.fetch, line << 5, at);
+        var j: u32 = 1;
+        while (j < 4 and t < until) : (j += 1) t += hook.wait(.burst, line << 5 | j << 3, t);
+        self.line = if (j == 4) line else none;
+        self.from = 0;
+        self.done = t + pass;
+        self.ahead = t + pass;
     }
 
     fn read(self: *Stream, hook: anytype, line: u32, index: u32, at: u64) void {

@@ -141,6 +141,18 @@ fn Targets(comptime n: u8) type {
             return @reduce(.Or, in & taken);
         }
 
+        fn onward(self: *const @This(), from: u32) u32 {
+            var first: u32 = (from | 31) + 1;
+            var target = first;
+            for (self.addresses, self.to, self.counts) |at, to, count| {
+                if (at >> 5 == from >> 5 and at >= from and at < first and count >= 2) {
+                    first = at;
+                    target = to;
+                }
+            }
+            return target;
+        }
+
         fn add(self: *@This(), pc: u32, target: u32) void {
             const old = self.addresses[self.next];
             if (old != 1) self.present[bucket(old)] -= 1;
@@ -820,7 +832,7 @@ pub fn Processor(comptime options: Options) type {
                 const guess = self.waits.pfu.guess;
                 self.waits.pfu.turned = false;
                 self.waits.pfu.guess = 1;
-                if (guess != 1 and !turned and !self.caches(.instruction, guess) and self.cacheable(guess)) self.waits.pfu.stray(self.waits.hook, guess, self.cycles);
+                if (guess != 1 and !turned and !self.caches(.instruction, guess) and self.cacheable(guess)) self.waits.pfu.stray(self.waits.hook, guess, self.pipeline.targets.onward(guess), self.cycles);
                 const table = if (!turned and r.code & 0xfff0_ffe0 == 0xe8d0_f000) self.cycles + self.priced(false, .load, self.pipeline.data, self.cycles) else 0;
                 if (turned and r.code & 0xfff0_ffe0 == 0xe8d0_f000 and !self.caches(.instruction, pc) and !self.caches(.data, self.pipeline.data)) {
                     self.waits.pfu.table = self.pipeline.data;
