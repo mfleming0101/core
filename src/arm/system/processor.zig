@@ -860,7 +860,7 @@ pub fn Processor(comptime options: Options) type {
             const fed = if (f.sources & last.loaded != 0 and !stores and (class == .multiply or last.narrow)) last.fed else 0;
             const pending = f.addressed & ~sp_bit & last.slow;
             const slowed = if (pending == 0) 0 else @max(self.pipeline.slowed[@ctz(pending)], self.pipeline.slowed[15 - @clz(pending)]);
-            const port = self.pipeline.data & 0xe000_0004;
+            const port = if (Waits != void and M7 != void and self.spec.core == .m7 and self.caches(.data, self.pipeline.data)) 0x2000_0000 | (self.pipeline.data & 4) else self.pipeline.data & 0xe000_0004;
             const ready = @max(product, shift, fed, slowed);
             const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port);
             const start = if (paired) last.start else @max(self.cycles + (if (stalled) issue.address + (if (last.narrow) issue.load -| 1 else 0) else 0), ready);
