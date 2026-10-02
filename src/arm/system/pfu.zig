@@ -2,8 +2,8 @@
 //! Table 5-3: one read outstanding, an INCR burst of doublewords from the one wanted to the end
 //! of its 32-byte line, which the unit holds until it leaves the line. It reads the next line once
 //! its fetch passes the line's end, or ahead of a data read issued after the line arrived, unless
-//! a predicted branch in the line turns it there. A branch the prediction missed turns the fetch
-//! only once resolved, after any next-line read under way.
+//! a predicted branch in the line turns it there. A wrong prediction first reads the guessed
+//! target; a missed branch turns the fetch once resolved, after any next-line read under way.
 const std = @import("std");
 
 const none = std.math.maxInt(u32);
@@ -53,11 +53,10 @@ pub const Stream = struct {
         return @intCast(self.beats[index] -| now);
     }
 
-    /// A wrongly predicted taken branch issued at `at`: fetch followed it to `target`'s line until resolved.
+    /// A wrongly predicted taken branch issued at `at`: fetch reads on from `target` until resolved.
     pub fn stray(self: *Stream, hook: anytype, target: u32, at: u64) void {
         const line = target >> 5;
-        if (line != self.line) self.read(hook, line, target >> 3 & 3, @max(self.done, self.last, at -| lead));
-        self.ahead = never;
+        self.read(hook, line, target >> 3 & 3, @max(self.done, self.last, at -| lead));
     }
 
     /// A data read at `at` queues behind the next line's read if the unit started it before then.
