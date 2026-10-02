@@ -1,9 +1,9 @@
 //! The M7 prefetch unit's instruction reads outside the instruction cache, M7 TRM 1.2.2 and
 //! Table 5-3: one read outstanding, an INCR burst of doublewords from the one wanted to the end
-//! of its 32-byte line, which the unit holds until it leaves the line. Once the unit's fetch
-//! passes the end of the line it reads the next one. A predicted branch turns the fetch where
-//! the unit meets it, so a loop within the line never passes its end; a branch the prediction
-//! missed turns it only once resolved, after any read of the next line already under way.
+//! of its 32-byte line, which the unit holds until it leaves the line. It reads the next line once
+//! its fetch passes the line's end, or ahead of a data read issued after the line arrived, unless
+//! a predicted branch in the line turns it there. A branch the prediction missed turns the fetch
+//! only once resolved, after any next-line read under way.
 const std = @import("std");
 
 const none = std.math.maxInt(u32);
@@ -25,11 +25,16 @@ pub const Stream = struct {
     turn: ?Turn = null,
     guess: u32 = 1,
     turned: bool = false,
+    back: u32 = none,
+    decoding: u32 = none,
 
     /// The cycles decode waits at `now` for the word at `word` from `hook`.
     pub fn fetch(self: *Stream, hook: anytype, word: u32, now: u64) u32 {
         const line = word >> 5;
         const index = word >> 3 & 3;
+        if (line == self.back and self.turn == null) return 0;
+        self.back = none;
+        self.decoding = line;
         const held = line == self.line and index >= self.from;
         const next = self.line +% 1;
         if (self.turn) |t| {
@@ -53,6 +58,13 @@ pub const Stream = struct {
         const line = target >> 5;
         if (line != self.line) self.read(hook, line, target >> 3 & 3, @max(self.done, self.last, at -| lead));
         self.ahead = never;
+    }
+
+    /// A data read at `at` queues behind the next line's read if the unit started it before then.
+    pub fn advance(self: *Stream, hook: anytype, at: u64) void {
+        if (self.turn != null or self.line == none or self.decoding != self.line or self.ahead > at) return;
+        self.back = self.line;
+        self.read(hook, self.line +% 1, 0, self.ahead);
     }
 
     /// A predicted branch found not taken at `at`: the fetch resumes past it.

@@ -134,6 +134,13 @@ fn Targets(comptime n: u8) type {
             return i;
         }
 
+        fn turnsIn(self: *const @This(), from: u32) bool {
+            const at = @as(@Vector(n, u32), self.addresses);
+            const in = (at >> @splat(5) == @as(@Vector(n, u32), @splat(from >> 5))) & (at >= @as(@Vector(n, u32), @splat(from)));
+            const taken = @as(@Vector(n, u2), self.counts) >= @as(@Vector(n, u2), @splat(2));
+            return @reduce(.Or, in & taken);
+        }
+
         fn add(self: *@This(), pc: u32, target: u32) void {
             const old = self.addresses[self.next];
             if (old != 1) self.present[bucket(old)] -= 1;
@@ -916,7 +923,10 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn priced(self: *Self, stores: bool, kind: Wait, address: u32, at: u64) u32 {
-            if (M7 != void and self.spec.core == .m7 and !stores) if (self.inCache(.data, address)) |hit| return if (hit) 0 else self.waits.hook.wait(.line, address, at);
+            if (M7 != void and self.spec.core == .m7 and !stores) {
+                if (self.inCache(.data, address)) |hit| return if (hit) 0 else self.waits.hook.wait(.line, address, at);
+                if (Issuing != void and self.cacheable(address) and !self.pipeline.targets.turnsIn(self.waits.word)) self.waits.pfu.advance(self.waits.hook, at);
+            }
             return self.waits.hook.wait(kind, address, at);
         }
 
