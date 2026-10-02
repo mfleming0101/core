@@ -66,8 +66,10 @@ pub const Stream = struct {
         self.read(hook, self.line +% 1, 0, self.ahead);
     }
 
-    /// A predicted branch found not taken at `at`: the fetch resumes past it.
-    pub fn restart(self: *Stream, at: u64) void {
+    /// A predicted branch issued at `from` falls through at `at`: a guessed target read begun before then still runs.
+    pub fn restart(self: *Stream, hook: anytype, target: u32, from: u64, at: u64) void {
+        const start = @max(self.done, self.last, from -| lead);
+        if (target != 1 and target >> 5 != self.line and start < at) self.read(hook, target >> 5, target >> 3 & 3, start);
         self.ahead = @max(self.done, at);
     }
 
