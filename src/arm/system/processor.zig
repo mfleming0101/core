@@ -906,7 +906,7 @@ pub fn Processor(comptime options: Options) type {
             next.shifts = f.shifts;
             next.folds = issue.fold and r.code <= 0xffff and !conditional and !hidden and (class == .data_processing or class == .system);
             self.pipeline.slowed[@ctz(@as(u32, slowing) | 1 << 16)] = start + gap;
-            if (paired) return if (Waits != void and (loading or lookup)) self.ported(false, f.words, start) else 0;
+            if (paired) return if (Waits != void and (loading or lookup)) @intCast((start + self.ported(false, f.words, start)) -| self.cycles) else 0;
             const beats = if (issue.width == 0) 0 else ((if (r.skipped) 0 else f.words) + issue.width - 1) / issue.width;
             const forward = if (store_lists.contains(last.class) and load_lists.contains(class)) issue.forward else 0;
             const flush = if (f.isb) issue.flush else 0;
