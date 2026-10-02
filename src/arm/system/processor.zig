@@ -161,7 +161,7 @@ const facts_bits = 8;
 const Side = enum { instruction, data };
 
 fn Pipeline(comptime entries: u8) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, turned: bool = false, guess: u32 = 1, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0) };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0) };
 }
 
 const sp_bit: u16 = 1 << 13;
@@ -809,12 +809,10 @@ pub fn Processor(comptime options: Options) type {
         fn fetchedAfter(self: *Self, pc: u32, r: arch_step.Result, cost: u32) u32 {
             const second = if (r.code > 0xffff) self.fetchWord(pc +% 2 & ~@as(u32, 3)) else 0;
             if (M7 != void and self.spec.core == .m7) {
-                const turned = Issuing != void and self.pipeline.turned;
-                const guess = if (Issuing != void) self.pipeline.guess else 1;
-                if (Issuing != void) {
-                    self.pipeline.turned = false;
-                    self.pipeline.guess = 1;
-                }
+                const turned = self.waits.pfu.turned;
+                const guess = self.waits.pfu.guess;
+                self.waits.pfu.turned = false;
+                self.waits.pfu.guess = 1;
                 if (guess != 1 and !turned and !self.caches(.instruction, guess) and self.cacheable(guess)) self.waits.pfu.stray(self.waits.hook, guess, self.cycles);
                 const table = if (!turned and r.code & 0xfff0_ffe0 == 0xe8d0_f000) self.cycles + self.priced(false, .load, self.pipeline.data, self.cycles) else 0;
                 if (r.branched and self.state.pc != pc +% 2) self.waits.pfu.turn = .{ .at = if (turned) self.cycles else @max(self.cycles + cost -| 2, table), .early = turned } else if (turned) self.waits.pfu.restart(self.cycles + cost -| 2);
@@ -937,7 +935,7 @@ pub fn Processor(comptime options: Options) type {
             const t = &self.pipeline.targets;
             const found = t.find(pc);
             const taken = if (found) |i| t.counts[i] >= 2 else false;
-            self.pipeline.guess = if (taken) t.to[found.?] else 1;
+            if (M7 != void and Waits != void) self.waits.pfu.guess = if (taken) t.to[found.?] else 1;
             if (r.branched) {
                 const target = self.state.pc;
                 const moved = if (found) |i| t.to[i] != target else false;
@@ -948,12 +946,12 @@ pub fn Processor(comptime options: Options) type {
                 const sequential = r.code <= 0xffff and target == pc +% 2;
                 const far = @max(target, pc) - @min(target, pc) >= issue.reach and self.due & returned_due == 0;
                 const wrong = (taken and moved) or far;
-                self.pipeline.turned = taken and !wrong;
+                if (M7 != void and Waits != void) self.waits.pfu.turned = taken and !wrong;
                 const table = if (!wrong and r.code & 0xfff0_ffe0 == 0xe8d0_f000) issue.table else 0;
                 return if (sequential) 0 else self.refetch(issue, pc, r.code, taken, wrong) +| table;
             }
             if (found) |i| t.counts[i] -|= 1;
-            self.pipeline.turned = taken;
+            if (M7 != void and Waits != void) self.waits.pfu.turned = taken;
             return if (taken) issue.mispredict else 0;
         }
 

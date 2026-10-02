@@ -23,6 +23,8 @@ pub const Stream = struct {
     ahead: u64 = 0,
     last: u64 = 0,
     turn: ?Turn = null,
+    guess: u32 = 1,
+    turned: bool = false,
 
     /// The cycles decode waits at `now` for the word at `word` from `hook`.
     pub fn fetch(self: *Stream, hook: anytype, word: u32, now: u64) u32 {
