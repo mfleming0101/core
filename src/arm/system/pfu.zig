@@ -1,10 +1,10 @@
-//! The M7 prefetch unit's instruction reads outside the instruction cache, M7 TRM 1.2.2 and
-//! Table 5-3: one read outstanding, an INCR burst of doublewords from the one wanted to the end
-//! of its 32-byte line, held until the unit leaves it. It reads the next line once fetch passes
-//! the line's end, or ahead of a later data read. The predictor turns one branch a cycle, once
-//! its doubleword arrived, after the last redirect, at most eight doublewords ahead of decode. A
-//! wrong prediction first reads the guessed target; a missed branch turns once resolved, after
-//! any next-line read.
+//! The M7 prefetch unit's reads outside the instruction cache, M7 TRM 1.2.2 and Table 5-3: one read
+//! outstanding, an INCR burst from the doubleword wanted to its 32-byte line's end, held until
+//! left. It reads the next line once fetch passes the end, or ahead of a later data read. The
+//! predictor turns one branch a cycle, once fetched, after the last redirect, at most eight
+//! doublewords ahead of decode; a predicted table branch reads its table after the next read. A
+//! wrong prediction first reads the guessed target; a missed branch turns once resolved, after any
+//! next-line read.
 const std = @import("std");
 
 const none = std.math.maxInt(u32);
@@ -32,6 +32,8 @@ pub const Stream = struct {
     turned: bool = false,
     back: u32 = none,
     decoding: u32 = none,
+    table: u32 = none,
+    table_at: u64 = 0,
 
     /// The cycles decode waits at `now` for the word at `word` from `hook`.
     pub fn fetch(self: *Stream, hook: anytype, word: u32, now: u64) u32 {
@@ -98,5 +100,11 @@ pub const Stream = struct {
         self.from = index;
         self.done = t + pass;
         self.ahead = t + pass;
+        if (self.table != none) self.lookup(hook);
+    }
+
+    fn lookup(self: *Stream, hook: anytype) void {
+        _ = hook.wait(.fetch, self.table, self.table_at);
+        self.table = none;
     }
 };
