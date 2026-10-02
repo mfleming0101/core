@@ -857,7 +857,7 @@ pub fn Processor(comptime options: Options) type {
             const last = self.pipeline.issued;
             if (issue.fold and class == .system and last.folds and r.code >> 8 == 0xbf and r.code & 0xf != 0) return self.fetched(issue, r, 0);
             const late = f.addressed & (if (issue.stack) ~@as(u16, 0) else ~sp_bit) & last.written != 0;
-            const stalled = late and !(issue.targets != 0 and f.table) and issue.delays.contains(last.class);
+            const stalled = late and !(issue.targets != 0 and class == .branch) and issue.delays.contains(last.class);
             const reads = f.sources & last.written != 0;
             const product = if (f.sources & last.product != 0) last.ready else 0;
             const shift = if (shifted & last.group != 0) last.start + 1 + issue.shift else if (shifted & last.prior != 0) last.start + issue.shift else 0;
