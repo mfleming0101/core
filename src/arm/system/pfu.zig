@@ -1,9 +1,10 @@
 //! The M7 prefetch unit's instruction reads outside the instruction cache, M7 TRM 1.2.2 and
 //! Table 5-3: one read outstanding, an INCR burst of doublewords from the one wanted to the end
-//! of its 32-byte line, which the unit holds until it leaves the line. It reads the next line once
-//! its fetch passes the line's end, or ahead of a data read issued after the line arrived, unless
-//! a predicted branch in the line turns it there. A wrong prediction first reads the guessed
-//! target; a missed branch turns the fetch once resolved, after any next-line read under way.
+//! of its 32-byte line, held until the unit leaves it. It reads the next line once fetch passes
+//! the line's end, or ahead of a later data read. The predictor turns one branch a cycle, once
+//! its doubleword arrived, after the last redirect, at most eight doublewords ahead of decode. A
+//! wrong prediction first reads the guessed target; a missed branch turns once resolved, after
+//! any next-line read.
 const std = @import("std");
 
 const none = std.math.maxInt(u32);
@@ -22,6 +23,10 @@ pub const Stream = struct {
     done: u64 = 0,
     ahead: u64 = 0,
     last: u64 = 0,
+    since: u64 = 0,
+    decoded: [8]u64 = @splat(0),
+    newest: u3 = 0,
+    dword: u32 = none,
     turn: ?Turn = null,
     guess: u32 = 1,
     turned: bool = false,
@@ -32,6 +37,12 @@ pub const Stream = struct {
     pub fn fetch(self: *Stream, hook: anytype, word: u32, now: u64) u32 {
         const line = word >> 5;
         const index = word >> 3 & 3;
+        const behind = self.decoded[self.newest +% 1];
+        if (word >> 3 != self.dword) {
+            self.dword = word >> 3;
+            self.newest +%= 1;
+            self.decoded[self.newest] = now;
+        }
         if (line == self.back and self.turn == null) return 0;
         self.back = none;
         self.decoding = line;
@@ -40,13 +51,15 @@ pub const Stream = struct {
         if (self.turn) |t| {
             self.turn = null;
             if (t.early) {
+                self.since = @max(self.since + 1, self.last, behind);
                 if (held) {
                     self.ahead = never;
-                } else self.read(hook, line, index, @max(self.done, self.last, t.at -| lead));
+                } else self.read(hook, line, index, @max(self.done, self.since));
             } else {
                 const passed = t.at > self.ahead and self.line != none;
                 if (passed) self.read(hook, next, 0, self.ahead);
-                if (!(passed and line == next)) self.read(hook, line, index, @max(self.done, t.at));
+                self.since = @max(self.done, t.at);
+                if (!(passed and line == next)) self.read(hook, line, index, self.since);
             }
         } else if (!held) self.read(hook, line, index, if (line == next and self.ahead != never) self.ahead else @max(self.done, now));
         self.last = self.beats[index];
@@ -71,6 +84,7 @@ pub const Stream = struct {
         const start = @max(self.done, self.last, from -| lead);
         if (target != 1 and target >> 5 != self.line and start < at) self.read(hook, target >> 5, target >> 3 & 3, start);
         self.ahead = @max(self.done, at);
+        self.since = at;
     }
 
     fn read(self: *Stream, hook: anytype, line: u32, index: u32, at: u64) void {
