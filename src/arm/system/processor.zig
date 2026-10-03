@@ -158,7 +158,7 @@ fn Targets(comptime n: u8) type {
     };
 }
 
-const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, folds: bool = false };
+const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, folds: bool = false, blocks: bool = false };
 
 const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, table: bool = false, indexed: bool = false, _: u8 = 0 };
 
@@ -865,7 +865,7 @@ pub fn Processor(comptime options: Options) type {
             const shifted = f.shifted | if (conditional) f.written else 0;
             const last = self.pipeline.issued;
             if (issue.fold and class == .system and last.folds and r.code >> 8 == 0xbf and r.code & 0xf != 0) return self.fetched(issue, r, 0);
-            const late = f.addressed & (if (issue.stack) ~@as(u16, 0) else ~sp_bit) & last.written != 0;
+            const late = f.addressed & (if (issue.stack) ~@as(u16, 0) else ~sp_bit) & (if (last.blocks) last.loaded else last.written) != 0;
             const stalled = late and !(issue.targets != 0 and class == .branch) and issue.delays.contains(last.class);
             const reads = f.sources & last.written != 0;
             const product = if (f.sources & last.product != 0) last.ready else 0;
@@ -877,7 +877,8 @@ pub fn Processor(comptime options: Options) type {
             const slowed = if (pending == 0) 0 else @max(self.pipeline.slowed[@ctz(pending)], self.pipeline.slowed[15 - @clz(pending)]);
             const port = if (Waits != void and M7 != void and self.spec.core == .m7 and self.caches(.data, self.pipeline.data)) 0x2000_0000 | (self.pipeline.data & 4) else self.pipeline.data & 0xe000_0004;
             const ready = @max(product, shift, fed, slowed);
-            const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port);
+            const blocks = class == .load and M7 != void and Waits != void and self.spec.core == .m7 and self.cacheable(self.pipeline.data) and !self.caches(.data, self.pipeline.data);
+            const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port) and !blocks and !last.blocks;
             const start = if (paired) last.start else @max(self.cycles + (if (stalled) issue.address + (if (last.narrow) issue.load -| 1 else 0) else 0), ready);
             const multiply = class == .multiply;
             const loading = class == .load;
@@ -913,6 +914,7 @@ pub fn Processor(comptime options: Options) type {
             next.held = if (held) f.written else 0;
             next.port = port;
             next.shifts = f.shifts;
+            next.blocks = blocks;
             next.folds = issue.fold and r.code <= 0xffff and !conditional and !hidden and (class == .data_processing or class == .system);
             self.pipeline.slowed[@ctz(@as(u32, slowing) | 1 << 16)] = start + gap;
             if (paired) return if (Waits != void and (loading or lookup)) @intCast((start + self.ported(false, f.words, start)) -| self.cycles) else 0;
@@ -921,9 +923,9 @@ pub fn Processor(comptime options: Options) type {
             const flush = if (f.isb) issue.flush else 0;
             const table = if (class == .branch and issue.targets == 0 and f.table) issue.table else 0;
             const indexed = if (class == .store and f.indexed) issue.indexed else 0;
-            const overlap = (issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and (port < 0x2000_0000) == (last.port < 0x2000_0000)) or hidden;
+            const overlap = (issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and (port < 0x2000_0000) == (last.port < 0x2000_0000) and !blocks) or hidden;
             const port_wait = if (Waits != void and (class == .load or stores or load_lists.contains(class) or lookup)) self.ported(stores, f.words, start - @intFromBool(overlap)) else 0;
-            return self.fetched(issue, r, (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait) -| @intFromBool(overlap));
+            return self.fetched(issue, r, (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait) -| @intFromBool(overlap or (blocks and !last.blocks)));
         }
 
         fn ported(self: *Self, stores: bool, words: u6, at: u64) u8 {
