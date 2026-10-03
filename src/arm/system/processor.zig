@@ -173,7 +173,7 @@ const facts_bits = 8;
 const Side = enum { instruction, data };
 
 fn Pipeline(comptime entries: u8) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_at: u64 = 0, extended: u32 = 0 };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0 };
 }
 
 const sp_bit: u16 = 1 << 13;
@@ -877,7 +877,7 @@ pub fn Processor(comptime options: Options) type {
             const blocks = class == .load and M7 != void and Waits != void and self.spec.core == .m7 and self.cacheable(self.pipeline.data) and !self.caches(.data, self.pipeline.data);
             const slowed = if (pending == 0) 0 else @max(self.pipeline.slowed[@ctz(pending)], self.pipeline.slowed[15 - @clz(pending)]);
             const port = if (Waits != void and M7 != void and self.spec.core == .m7 and self.caches(.data, self.pipeline.data)) 0x2000_0000 | (self.pipeline.data & 4) else self.pipeline.data & 0xe000_0004;
-            const axi = if (blocks and f.addressed & self.pipeline.axi != 0) self.pipeline.axi_at + 3 else 0;
+            const axi = if (blocks and f.addressed & self.pipeline.axi_alu != 0) self.pipeline.axi_at + 4 else if (blocks and f.addressed & self.pipeline.axi != 0) self.pipeline.axi_at + 3 else 0;
             const ready = @max(product, shift, fed, slowed, axi);
             const extended = f.addressed & @as(u16, @truncate(self.pipeline.extended)) != 0;
             const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port) and !blocks and !last.blocks;
@@ -920,6 +920,7 @@ pub fn Processor(comptime options: Options) type {
             next.folds = issue.fold and r.code <= 0xffff and !conditional and !hidden and (class == .data_processing or class == .system);
             self.pipeline.slowed[@ctz(@as(u32, slowing) | 1 << 16)] = start + gap;
             if (M7 != void) {
+                self.pipeline.axi_alu = (self.pipeline.axi_alu & ~written) | if (class == .data_processing and f.sources & (self.pipeline.axi | self.pipeline.axi_alu) != 0) written else 0;
                 self.pipeline.axi &= ~written;
                 const widened: u32 = if (f.extends) written else 0;
                 self.pipeline.extended = (self.pipeline.extended >> 16 & ~@as(u32, written)) | widened << 16 | widened;
@@ -935,6 +936,7 @@ pub fn Processor(comptime options: Options) type {
             const cost = (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait +| @intFromBool(blocks and extended)) -| @intFromBool(overlap or (blocks and !last.blocks));
             if (blocks) {
                 self.pipeline.axi = written;
+                self.pipeline.axi_alu = 0;
                 self.pipeline.axi_at = self.cycles + cost - @intFromBool(last.blocks);
             }
             return self.fetched(issue, r, cost);
