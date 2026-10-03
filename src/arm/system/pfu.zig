@@ -1,10 +1,9 @@
-//! The M7 prefetch unit's uncached reads, TRM 1.2.2 and Table 5-3: one read outstanding, an INCR
-//! burst from the doubleword wanted to its line's end, held until left. Once fetch passes it,
-//! or ahead of a later data read, it reads the next line or the line's predicted target. The
-//! predictor turns one branch a cycle, once fetched, after the last redirect, at most eight
-//! doublewords ahead of decode; a predicted table branch reads its table after the next read. A
-//! wrong prediction reads along the guessed path until resolved; a missed branch turns once
-//! resolved, after any next-line read.
+//! The M7 prefetch unit's reads, TRM 1.2.2 and Table 5-3: one read outstanding, an INCR burst from
+//! the doubleword wanted to its line's end, held until left. It reads the next line or predicted
+//! target once fetch passes the end, after a turn into a held line without another, or ahead of a
+//! later data read. The predictor turns one branch a cycle, once fetched, after the last redirect,
+//! at most eight doublewords ahead; a predicted table branch's table read follows the next read. A
+//! wrong prediction reads the guessed path until resolved; a missed branch turns once resolved.
 const std = @import("std");
 
 const none = std.math.maxInt(u32);
@@ -12,8 +11,8 @@ const never = std.math.maxInt(u64);
 const pass: u64 = 2;
 const lead: u64 = 2;
 
-/// A taken branch: when it resolved, and whether the prediction turned the fetch before then.
-pub const Turn = struct { at: u64, early: bool };
+/// A taken branch: when it resolved, whether predicted early, and whether the target's line turns again.
+pub const Turn = struct { at: u64, early: bool, within: bool = false };
 
 /// The line held, when each of its doublewords arrived, and the branch turning the fetch.
 pub const Stream = struct {
@@ -58,7 +57,7 @@ pub const Stream = struct {
             if (t.early) {
                 self.since = @max(self.since + 1, self.last, behind);
                 if (held) {
-                    self.ahead = never;
+                    self.ahead = if (t.within) never else @max(self.done, self.since);
                 } else self.read(hook, line, index, @max(self.done, self.since));
             } else {
                 const passed = !strayed and t.at > self.ahead and self.line != none;
