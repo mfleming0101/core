@@ -876,11 +876,11 @@ pub fn Processor(comptime options: Options) type {
             const pending = f.addressed & ~sp_bit & last.slow;
             const blocks = class == .load and M7 != void and Waits != void and self.spec.core == .m7 and self.cacheable(self.pipeline.data) and !self.caches(.data, self.pipeline.data);
             const slowed = if (pending == 0) 0 else @max(self.pipeline.slowed[@ctz(pending)], self.pipeline.slowed[15 - @clz(pending)]);
-            const port = if (Waits != void and M7 != void and self.spec.core == .m7 and self.caches(.data, self.pipeline.data)) 0x2000_0000 | (self.pipeline.data & 4) else self.pipeline.data & 0xe000_0004;
+            const port = if (blocks) self.pipeline.data & ~@as(u32, 3) else if (Waits != void and M7 != void and self.spec.core == .m7 and self.caches(.data, self.pipeline.data)) 0x2000_0000 | (self.pipeline.data & 4) else self.pipeline.data & 0xe000_0004;
             const axi = if (blocks and f.addressed & self.pipeline.axi_alu != 0) self.pipeline.axi_at + 4 else if (blocks and f.addressed & self.pipeline.axi != 0) self.pipeline.axi_at + 3 else 0;
             const ready = @max(product, shift, fed, slowed, axi);
             const extended = f.addressed & @as(u16, @truncate(self.pipeline.extended)) != 0;
-            const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port) and !blocks and !last.blocks;
+            const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port) and blocks == last.blocks and (!blocks or (port >> 3 == last.port >> 3 and f.addressed & last.written == 0));
             const start = if (paired) last.start else @max(self.cycles + (if (stalled) issue.address + (if (last.narrow and !blocks) issue.load -| 1 else 0) else 0), ready);
             const multiply = class == .multiply;
             const loading = class == .load;
@@ -925,6 +925,10 @@ pub fn Processor(comptime options: Options) type {
                 self.pipeline.axi_prev &= ~written;
                 const widened: u32 = if (f.extends) written else 0;
                 self.pipeline.extended = (self.pipeline.extended >> 16 & ~@as(u32, written)) | widened << 16 | widened;
+            }
+            if (paired and blocks) {
+                self.pipeline.axi |= written;
+                return 0;
             }
             if (paired) return if (Waits != void and (loading or lookup)) @intCast((start + self.ported(false, f.words, start)) -| self.cycles) else 0;
             const beats = if (issue.width == 0) 0 else ((if (r.skipped) 0 else f.words) + issue.width - 1) / issue.width;
