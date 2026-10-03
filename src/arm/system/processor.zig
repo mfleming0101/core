@@ -47,8 +47,8 @@ pub const Options = struct {
     Waits: type = void,
 };
 
-/// A priced access: fetch, read, issued load, store or multiple's rest, branch target, speculation, fetch-ahead, flush, linefill.
-pub const Wait = enum { fetch, ahead, call, read, load, store, burst, branch, taken, jump, speculate, flush, line };
+/// A priced access: fetch, read, issued load, table read, store or multiple's rest, branch target, speculation, fetch-ahead, flush, linefill.
+pub const Wait = enum { fetch, ahead, call, read, load, table, store, burst, branch, taken, jump, speculate, flush, line };
 
 /// What one step produced: where it ran, what it was, what it cost and what it charged.
 pub const Step = struct {
@@ -826,7 +826,7 @@ pub fn Processor(comptime options: Options) type {
                 self.waits.pfu.turned = false;
                 self.waits.pfu.guess = 1;
                 if (guess != 1 and !turned and !self.caches(.instruction, guess) and self.cacheable(guess)) self.waits.pfu.stray(self.waits.hook, guess, self.pipeline.targets.onward(guess), self.cycles);
-                const table = if (!turned and r.code & 0xfff0_ffe0 == 0xe8d0_f000) self.cycles + self.priced(false, .load, self.pipeline.data, self.cycles) else 0;
+                const table = if (!turned and r.code & 0xfff0_ffe0 == 0xe8d0_f000) self.cycles + self.priced(false, .table, self.pipeline.data, self.cycles) else 0;
                 if (turned and r.code & 0xfff0_ffe0 == 0xe8d0_f000 and !self.caches(.instruction, pc) and !self.caches(.data, self.pipeline.data)) {
                     self.waits.pfu.table = self.pipeline.data;
                     self.waits.pfu.table_at = self.cycles;
@@ -957,7 +957,12 @@ pub fn Processor(comptime options: Options) type {
         fn priced(self: *Self, stores: bool, kind: Wait, address: u32, at: u64) u32 {
             if (M7 != void and self.spec.core == .m7 and !stores) {
                 if (self.inCache(.data, address)) |hit| return if (hit) 0 else self.waits.hook.wait(.line, address, at);
-                if (Issuing != void and self.cacheable(address)) self.waits.pfu.advance(self.waits.hook, self.pipeline.targets.onward(self.waits.word), at);
+                if (Issuing != void and self.cacheable(address)) {
+                    self.waits.pfu.advance(self.waits.hook, self.pipeline.targets.onward(self.waits.word), at);
+                    const wait = self.waits.hook.wait(kind, address, at);
+                    self.waits.pfu.release = at + wait;
+                    return wait;
+                }
             }
             return self.waits.hook.wait(kind, address, at);
         }

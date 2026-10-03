@@ -1,15 +1,16 @@
-//! The M7 prefetch unit's reads, TRM 1.2.2 and Table 5-3: one read outstanding, an INCR burst from
-//! the doubleword wanted to its line's end, held until left. It reads the next line or predicted
-//! target once fetch passes the end, after a turn into a held line without another, or ahead of a
-//! later data read. The predictor turns one branch a cycle, once fetched, after the last redirect,
-//! at most eight doublewords ahead; a predicted table branch's table read follows the next read. A
-//! wrong prediction reads the guessed path until resolved; a missed branch turns once resolved.
+//! The M7 prefetch unit's reads, TRM 1.2.2 and Table 5-3: one read outstanding, an INCR burst to
+//! the line's end, held until left. It reads the next line or predicted target once fetch passes
+//! the end, after a turn into a held line, or ahead of a later data read, but not until decode
+//! settled two cycles into the held line and the last uncached data access returned. The predictor
+//! turns one branch a cycle, at most eight doublewords ahead; a predicted table branch's table
+//! read follows the next read. A wrong prediction reads the guessed path until resolved.
 const std = @import("std");
 
 const none = std.math.maxInt(u32);
 const never = std.math.maxInt(u64);
 const pass: u64 = 2;
 const lead: u64 = 2;
+const settle: u64 = 2;
 
 /// A taken branch: when it resolved, whether predicted early, and whether the target's line turns again.
 pub const Turn = struct { at: u64, early: bool, within: bool = false };
@@ -34,6 +35,8 @@ pub const Stream = struct {
     strayed: bool = false,
     table: u32 = none,
     table_at: u64 = 0,
+    release: u64 = 0,
+    entered: u64 = 0,
 
     /// The cycles decode waits at `now` for the word at `word` from `hook`.
     pub fn fetch(self: *Stream, hook: anytype, word: u32, now: u64) u32 {
@@ -49,8 +52,10 @@ pub const Stream = struct {
         }
         if (line == self.back and self.turn == null) return 0;
         self.back = none;
+        const entering = line != self.decoding;
         self.decoding = line;
         const held = line == self.line and index >= self.from;
+        if (entering and held and self.turn == null) self.entered = now + settle;
         const next = self.line +% 1;
         if (self.turn) |t| {
             self.turn = null;
@@ -67,7 +72,7 @@ pub const Stream = struct {
                 const covered = strayed and line == self.line and index >= self.from;
                 if (!covered and !(passed and line == next)) self.read(hook, line, index, self.since);
             }
-        } else if (!held) self.read(hook, line, index, if (line == next and self.ahead != never) self.ahead else @max(self.done, now));
+        } else if (!held) self.read(hook, line, index, if (line == next and self.ahead != never) self.sequel() else @max(self.done, now));
         self.last = self.beats[index];
         return @intCast(self.beats[index] -| now);
     }
@@ -84,9 +89,10 @@ pub const Stream = struct {
 
     /// A data read at `at` queues behind the read of `onward`, the line's predicted target or next line, begun before then.
     pub fn advance(self: *Stream, hook: anytype, onward: u32, at: u64) void {
-        if (self.turn != null or self.line == none or self.decoding != self.line or self.ahead > at or onward >> 5 == self.line) return;
+        const start = self.sequel();
+        if (self.turn != null or self.line == none or self.decoding != self.line or start > at or onward >> 5 == self.line) return;
         self.back = self.line;
-        self.read(hook, onward >> 5, onward >> 3 & 3, self.ahead);
+        self.read(hook, onward >> 5, onward >> 3 & 3, start);
     }
 
     /// A predicted branch issued at `from` falls through at `at`: a guessed target read begun before then still runs.
@@ -95,6 +101,10 @@ pub const Stream = struct {
         if (target != 1 and target >> 5 != self.line and start < at) self.read(hook, target >> 5, target >> 3 & 3, start);
         self.ahead = @max(self.done, at);
         self.since = at;
+    }
+
+    fn sequel(self: *const Stream) u64 {
+        return @max(self.ahead, @max(self.entered, self.release));
     }
 
     fn cut(self: *Stream, hook: anytype, line: u32, at: u64, until: u64) void {
