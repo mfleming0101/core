@@ -1498,8 +1498,10 @@ test "a WFI halts the core where it stands and a line the chip pends resumes it 
     try std.testing.expectEqual(@as(?Class, null), standing.class);
     try std.testing.expectEqual(@as(u8, 0), standing.charged);
     try std.testing.expect(standing.asleep);
+    try std.testing.expect(cpu.asleep());
     try std.testing.expectEqual(@as(u64, 2), cpu.instructions);
     cpu.pend(1);
+    try std.testing.expect(!cpu.asleep());
     const resumed = cpu.step();
     try std.testing.expect(!resumed.asleep);
     try std.testing.expectEqual(@as(u32, 0x104), resumed.address);

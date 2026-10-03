@@ -354,6 +354,11 @@ pub fn Processor(comptime options: Options) type {
             self.pendAll(@as(regions.Lines, 1) << line);
         }
 
+        /// Whether the hart waits in a WFI that nothing has woken yet.
+        pub fn asleep(self: *const Self) bool {
+            return self.due & asleep_due != 0;
+        }
+
         /// Raises a whole set of sources, then recomputes what the hart owes attention to.
         pub fn pendAll(self: *Self, lines: regions.Lines) void {
             self.observe();
