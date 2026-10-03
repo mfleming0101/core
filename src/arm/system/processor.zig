@@ -173,7 +173,7 @@ const facts_bits = 8;
 const Side = enum { instruction, data };
 
 fn Pipeline(comptime entries: u8) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_at: u64 = 0 };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_at: u64 = 0, extended: u32 = 0 };
 }
 
 const sp_bit: u16 = 1 << 13;
@@ -879,8 +879,9 @@ pub fn Processor(comptime options: Options) type {
             const port = if (Waits != void and M7 != void and self.spec.core == .m7 and self.caches(.data, self.pipeline.data)) 0x2000_0000 | (self.pipeline.data & 4) else self.pipeline.data & 0xe000_0004;
             const axi = if (blocks and f.addressed & self.pipeline.axi != 0) self.pipeline.axi_at + 3 else 0;
             const ready = @max(product, shift, fed, slowed, axi);
+            const extended = f.addressed & @as(u16, @truncate(self.pipeline.extended)) != 0;
             const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port) and !blocks and !last.blocks;
-            const start = if (paired) last.start else @max(self.cycles + (if (stalled) issue.address + (if (last.narrow) issue.load -| 1 else 0) else 0), ready);
+            const start = if (paired) last.start else @max(self.cycles + (if (stalled) issue.address + (if (last.narrow and !blocks) issue.load -| 1 else 0) else 0), ready);
             const multiply = class == .multiply;
             const loading = class == .load;
             const held = issue.slow != 0 and conditional and class == .data_processing;
@@ -918,7 +919,11 @@ pub fn Processor(comptime options: Options) type {
             next.blocks = blocks;
             next.folds = issue.fold and r.code <= 0xffff and !conditional and !hidden and (class == .data_processing or class == .system);
             self.pipeline.slowed[@ctz(@as(u32, slowing) | 1 << 16)] = start + gap;
-            self.pipeline.axi &= ~written;
+            if (M7 != void) {
+                self.pipeline.axi &= ~written;
+                const widened: u32 = if (f.extends) written else 0;
+                self.pipeline.extended = (self.pipeline.extended >> 16 & ~@as(u32, written)) | widened << 16 | widened;
+            }
             if (paired) return if (Waits != void and (loading or lookup)) @intCast((start + self.ported(false, f.words, start)) -| self.cycles) else 0;
             const beats = if (issue.width == 0) 0 else ((if (r.skipped) 0 else f.words) + issue.width - 1) / issue.width;
             const forward = if (store_lists.contains(last.class) and load_lists.contains(class)) issue.forward else 0;
@@ -927,7 +932,7 @@ pub fn Processor(comptime options: Options) type {
             const indexed = if (class == .store and f.indexed) issue.indexed else 0;
             const overlap = (issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and (port < 0x2000_0000) == (last.port < 0x2000_0000) and !blocks) or hidden;
             const port_wait = if (Waits != void and (class == .load or stores or load_lists.contains(class) or lookup)) self.ported(stores, f.words, start - @intFromBool(overlap)) else 0;
-            const cost = (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait) -| @intFromBool(overlap or (blocks and !last.blocks));
+            const cost = (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait +| @intFromBool(blocks and extended)) -| @intFromBool(overlap or (blocks and !last.blocks));
             if (blocks) {
                 self.pipeline.axi = written;
                 self.pipeline.axi_at = self.cycles + cost - @intFromBool(last.blocks);
