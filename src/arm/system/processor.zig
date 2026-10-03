@@ -173,7 +173,7 @@ const facts_bits = 8;
 const Side = enum { instruction, data };
 
 fn Pipeline(comptime entries: u8) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0 };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0 };
 }
 
 const sp_bit: u16 = 1 << 13;
@@ -922,6 +922,7 @@ pub fn Processor(comptime options: Options) type {
             if (M7 != void) {
                 self.pipeline.axi_alu = (self.pipeline.axi_alu & ~written) | if (class == .data_processing and f.sources & (self.pipeline.axi | self.pipeline.axi_alu) != 0) written else 0;
                 self.pipeline.axi &= ~written;
+                self.pipeline.axi_prev &= ~written;
                 const widened: u32 = if (f.extends) written else 0;
                 self.pipeline.extended = (self.pipeline.extended >> 16 & ~@as(u32, written)) | widened << 16 | widened;
             }
@@ -933,8 +934,9 @@ pub fn Processor(comptime options: Options) type {
             const indexed = if (class == .store and f.indexed) issue.indexed else 0;
             const overlap = (issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and (port < 0x2000_0000) == (last.port < 0x2000_0000) and !blocks) or hidden;
             const port_wait = if (Waits != void and (class == .load or stores or load_lists.contains(class) or lookup)) self.ported(stores, f.words, start - @intFromBool(overlap)) else 0;
-            const cost = (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait +| @intFromBool(blocks and extended)) -| @intFromBool(overlap or (blocks and !last.blocks));
+            const cost = (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait +| @intFromBool(blocks and extended) +| @intFromBool(blocks and f.addressed & self.pipeline.axi_prev != 0)) -| @intFromBool(overlap or (blocks and !last.blocks));
             if (blocks) {
+                self.pipeline.axi_prev = self.pipeline.axi;
                 self.pipeline.axi = written;
                 self.pipeline.axi_alu = 0;
                 self.pipeline.axi_at = self.cycles + cost - @intFromBool(last.blocks);
