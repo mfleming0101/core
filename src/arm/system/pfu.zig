@@ -1,9 +1,10 @@
-//! The M7 prefetch unit's uncached reads, M7 TRM 1.2.2 and Table 5-3: one read outstanding, an INCR
-//! burst from the doubleword wanted to its 32-byte line's end, held until left. It reads the next
-//! line once fetch passes the end, or ahead of a later data read. The predictor turns one branch a
-//! cycle, once fetched, after the last redirect, at most eight doublewords ahead of decode; a
-//! predicted table branch reads its table after the next read. A wrong prediction reads on along
-//! the guessed path until resolved; a missed branch turns once resolved, after any next-line read.
+//! The M7 prefetch unit's uncached reads, TRM 1.2.2 and Table 5-3: one read outstanding, an INCR
+//! burst from the doubleword wanted to its line's end, held until left. Once fetch passes it,
+//! or ahead of a later data read, it reads the next line or the line's predicted target. The
+//! predictor turns one branch a cycle, once fetched, after the last redirect, at most eight
+//! doublewords ahead of decode; a predicted table branch reads its table after the next read. A
+//! wrong prediction reads along the guessed path until resolved; a missed branch turns once
+//! resolved, after any next-line read.
 const std = @import("std");
 
 const none = std.math.maxInt(u32);
@@ -82,11 +83,11 @@ pub const Stream = struct {
         if (held and self.strayed) self.read(hook, onward >> 5, onward >> 3 & 3, start) else self.read(hook, line, index, start);
     }
 
-    /// A data read at `at` queues behind the next line's read if the unit started it before then.
-    pub fn advance(self: *Stream, hook: anytype, at: u64) void {
-        if (self.turn != null or self.line == none or self.decoding != self.line or self.ahead > at) return;
+    /// A data read at `at` queues behind the read of `onward`, the line's predicted target or next line, begun before then.
+    pub fn advance(self: *Stream, hook: anytype, onward: u32, at: u64) void {
+        if (self.turn != null or self.line == none or self.decoding != self.line or self.ahead > at or onward >> 5 == self.line) return;
         self.back = self.line;
-        self.read(hook, self.line +% 1, 0, self.ahead);
+        self.read(hook, onward >> 5, onward >> 3 & 3, self.ahead);
     }
 
     /// A predicted branch issued at `from` falls through at `at`: a guessed target read begun before then still runs.
