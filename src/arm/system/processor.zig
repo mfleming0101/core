@@ -919,7 +919,7 @@ pub fn Processor(comptime options: Options) type {
             next.blocks = blocks;
             next.folds = issue.fold and r.code <= 0xffff and !conditional and !hidden and (class == .data_processing or class == .system);
             self.pipeline.slowed[@ctz(@as(u32, slowing) | 1 << 16)] = start + gap;
-            if (M7 != void) {
+            if (M7 != void and Waits != void) {
                 self.pipeline.axi_alu = (self.pipeline.axi_alu & ~written) | if (class == .data_processing and f.sources & (self.pipeline.axi | self.pipeline.axi_alu) != 0) written else 0;
                 self.pipeline.axi &= ~written;
                 self.pipeline.axi_prev &= ~written;
