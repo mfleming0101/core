@@ -67,9 +67,10 @@ pub const Stream = struct {
             } else {
                 const passed = !strayed and t.at > self.ahead and self.line != none;
                 if (passed) self.read(hook, next, 0, self.ahead);
-                if (strayed) while (t.at > self.done) self.cut(hook, self.line +% 1, self.done - pass, t.at);
-                self.since = @max(if (strayed) self.done - pass else self.done, t.at);
+                var cutting = false;
+                if (strayed) while (t.at > self.done) : (cutting = true) self.cut(hook, self.line +% 1, self.done - pass, t.at);
                 const covered = strayed and line == self.line and index >= self.from;
+                self.since = @max(if (cutting or covered) self.done - pass else self.done, t.at);
                 if (!covered and !(passed and line == next)) self.read(hook, line, index, self.since);
             }
         } else if (!held) self.read(hook, line, index, if (line == next and self.ahead != never) self.sequel() else @max(self.done, now));
