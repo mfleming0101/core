@@ -831,7 +831,7 @@ pub fn Processor(comptime options: Options) type {
                     self.waits.pfu.table = self.pipeline.data;
                     self.waits.pfu.table_at = self.cycles;
                 }
-                if (r.branched and self.state.pc != pc +% 2) self.waits.pfu.turn = .{ .at = if (turned) self.cycles else @max(self.cycles + cost -| 2, table), .early = turned, .within = turned and self.pipeline.targets.onward(self.state.pc) >> 5 == self.state.pc >> 5 } else if (turned) self.waits.pfu.restart(self.waits.hook, if (!self.caches(.instruction, guess) and self.cacheable(guess)) guess else 1, self.cycles, self.cycles + cost -| 2);
+                if (r.branched and self.state.pc != pc +% 2) self.waits.pfu.turn = .{ .at = if (turned) self.cycles else @max(self.cycles + cost -| 2, table), .early = turned, .within = turned and self.pipeline.targets.onward(self.state.pc) >> 5 == self.state.pc >> 5 } else if (turned) self.waits.pfu.restart(self.waits.hook, if (!self.caches(.instruction, guess) and self.cacheable(guess)) guess else 1, self.pipeline.targets.onward(guess), self.cycles, self.cycles + cost -| 2);
             }
             const spec = self.waits.spec;
             self.waits.spec = !r.branched and !isb(r.code) and (branchesOn(r.code) or (r.skipped and r.code == 0x4770));

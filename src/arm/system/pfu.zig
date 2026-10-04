@@ -96,10 +96,12 @@ pub const Stream = struct {
         self.read(hook, onward >> 5, onward >> 3 & 3, start);
     }
 
-    /// A predicted branch issued at `from` falls through at `at`: a guessed target read begun before then still runs.
-    pub fn restart(self: *Stream, hook: anytype, target: u32, from: u64, at: u64) void {
+    /// A predicted branch issued at `from` falls through at `at`; a guessed read of `target`, `onward` if held, still runs.
+    pub fn restart(self: *Stream, hook: anytype, target: u32, onward: u32, from: u64, at: u64) void {
         const start = @max(self.done, self.last, from -| lead);
-        if (target != 1 and target >> 5 != self.line and start < at) self.read(hook, target >> 5, target >> 3 & 3, start);
+        const onto = target >> 5 == self.line and target >> 3 & 3 >= self.from and onward != (target | 31) +% 1;
+        const next = if (onto) onward else target;
+        if (target != 1 and next >> 5 != self.line and start + @as(u64, if (onto) lead else 0) < at) self.read(hook, next >> 5, next >> 3 & 3, start);
         self.ahead = @max(self.done, at);
         self.since = at;
     }
