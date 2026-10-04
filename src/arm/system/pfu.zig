@@ -1,9 +1,10 @@
-//! The M7 prefetch unit's reads, TRM 1.2.2 and Table 5-3: one read outstanding, an INCR burst to
-//! the line's end, held until left. It reads the next line or predicted target once fetch passes
-//! the end, after a turn into a held line, or ahead of a later data read, but not until decode
-//! settled two cycles into the held line and the last uncached data access returned. The predictor
-//! turns one branch a cycle, at most eight doublewords ahead; a predicted table branch's table
-//! read follows the next read. A wrong prediction reads the guessed path until resolved.
+//! M7 prefetch, TRM 1.2.2 and Table 5-3: one read outstanding, an INCR burst to the line's
+//! end, held until left. It reads the next line or predicted target once fetch passes the end,
+//! after a turn into a held line, or ahead of a later data read, but not until decode settled two
+//! cycles into the held line, one where a misprediction landed, and the last uncached data
+//! access returned. The predictor turns one branch a cycle, at most eight doublewords ahead; a
+//! predicted table branch's table read follows the next. A wrong prediction reads its guessed
+//! path until resolved.
 const std = @import("std");
 
 const none = std.math.maxInt(u32);
@@ -11,6 +12,7 @@ const never = std.math.maxInt(u64);
 const pass: u64 = 2;
 const lead: u64 = 2;
 const settle: u64 = 2;
+const landed: u64 = 1;
 
 /// A taken branch: when it resolved, whether predicted early, and whether the target's line turns again.
 pub const Turn = struct { at: u64, early: bool, within: bool = false };
@@ -72,6 +74,7 @@ pub const Stream = struct {
                 const covered = strayed and line == self.line and index >= self.from;
                 self.since = @max(if (cutting or covered) self.done - pass else self.done, t.at);
                 if (!covered and !(passed and line == next)) self.read(hook, line, index, self.since);
+                if (passed and line == next) self.entered = now + landed;
             }
         } else if (!held) self.read(hook, line, index, if (line == next and self.ahead != never) self.sequel() else @max(self.done, now));
         self.last = self.beats[index];
