@@ -22,6 +22,7 @@ const Image = struct {
     semihosting: bool = false,
     halts: bool = false,
     tier: u8 = 2,
+    v6m: bool = false,
 };
 
 const Case = struct {
@@ -115,6 +116,14 @@ const bound = [_]Bound{
 const unrunnable = [_]Bound{
     .{ .arch = "riscv", .name = "floats" },
 };
+
+fn serves(class: metrics.Class, image: Image) bool {
+    return std.mem.eql(u8, image.arch, class.arch) and image.v6m == class.v6m;
+}
+
+fn archOf(image: Image) []const u8 {
+    return if (image.v6m) "armv6m" else image.arch;
+}
 
 fn listed(list: []const Bound, image: Image) bool {
     for (list) |one| {
@@ -296,17 +305,20 @@ const Runner = struct {
 
     fn manifest(self: *Runner) ![]const Image {
         var out: std.ArrayList(Image) = .empty;
-        try self.listing(&out, isa ++ "/corpus", 1);
-        try self.listing(&out, "corpus", 2);
+        try self.listing(&out, isa ++ "/corpus", "manifest.zon", 1, false);
+        try self.listing(&out, isa ++ "/corpus", "manifest_armv6m.zon", 1, true);
+        try self.listing(&out, "corpus", "manifest.zon", 2, false);
+        try self.listing(&out, "corpus", "manifest_armv6m.zon", 2, true);
         return out.items;
     }
 
-    fn listing(self: *Runner, into: *std.ArrayList(Image), root: []const u8, tier: u8) !void {
-        for (try self.zon([]const Image, try std.fmt.allocPrint(self.gpa, "{s}/manifest.zon", .{root}))) |entry| {
+    fn listing(self: *Runner, into: *std.ArrayList(Image), root: []const u8, file: []const u8, tier: u8, v6m: bool) !void {
+        for (try self.zon([]const Image, try std.fmt.allocPrint(self.gpa, "{s}/{s}", .{ root, file }))) |entry| {
             if (listed(&unrunnable, entry)) continue;
             var image = entry;
             image.path = try std.fmt.allocPrint(self.gpa, "{s}/{s}", .{ root, image.path });
             image.tier = tier;
+            image.v6m = v6m;
             try into.append(self.gpa, image);
         }
     }
@@ -335,7 +347,7 @@ const Runner = struct {
     fn integrity(self: *Runner) !Digests {
         const harness_files = try self.sources(&.{ "bench/harness", "bench/nullisa", "bench/arm", "bench/riscv" });
         var files: std.ArrayList([]const u8) = .empty;
-        try files.appendSlice(self.gpa, try self.sources(&.{ "corpus", isa ++ "/corpus/manifest.zon" }));
+        try files.appendSlice(self.gpa, try self.sources(&.{ "corpus", isa ++ "/corpus/manifest.zon", isa ++ "/corpus/manifest_armv6m.zon" }));
         for (self.images) |image| try self.hashable(&files, image.path);
         return .{
             .harness_sha = try self.digestOf(harness_files),
@@ -503,9 +515,9 @@ const Runner = struct {
         return out;
     }
 
-    fn firstOf(self: *Runner, arch: []const u8) ?Image {
+    fn firstOf(self: *Runner, class: metrics.Class) ?Image {
         for (self.images) |image| {
-            if (image.tier == 1 and std.mem.eql(u8, image.arch, arch)) return image;
+            if (image.tier == 1 and serves(class, image)) return image;
         }
         return null;
     }
@@ -537,7 +549,7 @@ const Runner = struct {
             out[i].processor_bytes = try self.machineBytes(binary);
             out[i].link_delta = @as(i64, @intCast((try self.read(binary)).len)) -
                 @as(i64, @intCast((try self.read(try self.classNull(class))).len));
-            if (class.corpus) try self.checkedClass(class, binary, &out[i], checks);
+            try self.checkedClass(class, binary, &out[i], checks);
             try self.say("class    {s:<6} timed={} fw={d:.3} sys={d:.3} ns/instr  entry={d:.3} cycles  {d} bytes  text={d} rodata={d} decode={d}\n", .{
                 class.name, out[i].timed, out[i].fw, out[i].sys, out[i].irq, out[i].processor_bytes, out[i].text, out[i].rodata, out[i].link_delta,
             });
@@ -546,13 +558,13 @@ const Runner = struct {
     }
 
     fn checkedClass(self: *Runner, class: metrics.Class, binary: []const u8, into: *Classed, checks: *metrics.Ratio) !void {
-        into.timed = try self.fitted(binary, class.arch);
+        into.timed = try self.fitted(binary, class);
         var firmware: Geo = .{};
         var system: Geo = .{};
         var entries: u64 = 0;
         var cycles: u64 = 0;
         for (self.images) |image| {
-            if (!std.mem.eql(u8, image.arch, class.arch)) continue;
+            if (!serves(class, image)) continue;
             const tier = image.tier;
             if (tier == 2 and into.timed and !image.halts) {
                 const result = try std.process.run(self.gpa, self.io, .{ .argv = try self.onOneCore(try self.argvOf(binary, "irq", image, &.{})) });
@@ -577,8 +589,8 @@ const Runner = struct {
         into.irq = if (entries == 0) 0 else @as(f64, @floatFromInt(cycles)) / @as(f64, @floatFromInt(entries));
     }
 
-    fn fitted(self: *Runner, binary: []const u8, arch: []const u8) !bool {
-        const image = self.firstOf(arch) orelse return false;
+    fn fitted(self: *Runner, binary: []const u8, class: metrics.Class) !bool {
+        const image = self.firstOf(class) orelse return false;
         const ran = try self.once(try self.argvOf(binary, "run", image, &.{ "--budget", "1" }));
         return std.mem.eql(u8, ran.timing, "fitted");
     }
@@ -602,10 +614,10 @@ const Runner = struct {
 
     fn record(self: *Runner, tier: u8, image: Image, cost: f64, seen: Best, ok: bool) !void {
         try self.detail.print(self.gpa, "{d}\t{s}\t{s}\t{d:.4}\t{d}\t{s}\t{x:0>8}\t{d}\n", .{
-            tier, image.name, image.arch, cost, seen.ran.retired, seen.ran.stop, seen.ran.checksum, @intFromBool(ok),
+            tier, image.name, archOf(image), cost, seen.ran.retired, seen.ran.stop, seen.ran.checksum, @intFromBool(ok),
         });
         try self.say("{s:<6} {s:<18} {d:>8.3} ns/instr  {s}\n", .{
-            image.arch, image.name, cost, if (!seen.steady) "UNSTEADY" else if (ok) "ok" else "MISMATCH",
+            archOf(image), image.name, cost, if (!seen.steady) "UNSTEADY" else if (ok) "ok" else "MISMATCH",
         });
     }
 
@@ -656,7 +668,7 @@ const Runner = struct {
                 else
                     try std.fmt.allocPrint(self.gpa, "oracle/trace_{s}_sys.txt", .{arch})) catch continue;
                 for (self.images) |image| {
-                    if (!std.mem.eql(u8, image.arch, arch) or image.tier != tier) continue;
+                    if (!std.mem.eql(u8, image.arch, arch) or image.tier != tier or image.v6m) continue;
                     const pin = try self.pinOf(pins, image.name) orelse continue;
                     if (pin.windows.len == 0) continue;
                     const seen = try self.traced(binary, image, pin, tier, buffer);

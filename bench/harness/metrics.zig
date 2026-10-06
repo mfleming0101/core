@@ -4,12 +4,12 @@ pub const Class = struct {
     name: []const u8,
     arch: []const u8,
     build: []const u8,
-    corpus: bool = true,
+    v6m: bool = false,
 };
 
 pub const classes = [_]Class{
-    .{ .name = "m0plus", .arch = "arm", .build = "m0plus", .corpus = false },
-    .{ .name = "m23", .arch = "arm", .build = "m23", .corpus = false },
+    .{ .name = "m0plus", .arch = "arm", .build = "m0plus", .v6m = true },
+    .{ .name = "m23", .arch = "arm", .build = "m23", .v6m = true },
     .{ .name = "m3", .arch = "arm", .build = "arm" },
     .{ .name = "m4", .arch = "arm", .build = "m4" },
     .{ .name = "m7", .arch = "arm", .build = "m7" },
