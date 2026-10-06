@@ -239,61 +239,50 @@ Each exclusion applies to every class of its family, so one `sys_ns_*` column co
 another. What is left is `recover`, `semihost_io` and `tickless` on Arm and `recover`, `semihost_io`,
 `pmp` and `trap` on RISC-V.
 
-### The metrics row
+### The metrics tables
 
-`zig build metrics` runs every layer and appends one row to `bench/summary.tsv`, or to
-[bench/release-metrics.tsv](bench/release-metrics.tsv) with `--release`. The row is written
-even when a gate fails, with `status` set to `fail`, so a regression stays visible. The timing
-columns come from the `machine` programs under `bench/arm` and `bench/riscv`, driven by
-`bench/run.zig`.
+`zig build metrics` runs every layer and appends rows to five tables in `bench/summary/`, or in
+[bench/metrics/](bench/metrics/) with `--release`. The rows are written even when a gate fails,
+with `status` set to `fail`, so a regression stays visible. Every table starts with `date` and
+`commit`, which join them. A gate is written `pass/total`.
+
+| Table | Rows per run | Holds |
+|---|---|---|
+| `run.tsv` | One | Which tree was measured and where: `target`, `zig`, `optimize`, `variant`, `cpu_mhz`, and digests of the bench sources, the corpus with its images, and `oracle/` |
+| `correctness.tsv` | One | The gates: `oracle_arm`, `oracle_rv`, `probe_arm`, `probe_rv`, `corpus`, `diag`, `class_checks`, `burst_equivalent`, `trace_violations`; `status` is `pass` only when every one held |
+| `speed.tsv` | One per timed class | `fw_ns_per_instr` over tier one and `sys_ns_per_instr` over the tier-two images the class runs, wall nanoseconds per retired instruction, geometric mean, best of five; `irq_entry_cycles` over the tier-two images that raise a line and never halt |
+| `size.tsv` | One per class | `processor_bytes`, `@sizeOf` the machine; `text_bytes` and `rodata_bytes` of its size probe; `decode_bytes`, the machine minus the same machine linked against `bench/nullisa` |
+| `build.tsv` | One | Wall time and memory of `zig build` for the library alone and for everything, at one and twelve jobs; the host contract entries the Arm processor answers; the bus size and the peak heap of a run |
+| `accuracy.tsv` | One per fitted core | Appended by the private cycle-fitting repo: kernels and programs against their board records |
+
+A class is timed when its machine runs with fitted timing and the class runs the corpus. Cores on
+unknown timing charge one cycle an instruction, which runs faster than a fitted model and would
+flatter the speed. The M0+ is fitted but not timed, since the corpus is built for Armv7-M.
+`class_checks` covers every class that runs the corpus: every image reproduced, and every tier-one
+image run, stepped, bursted and traced over its first two million instructions, agreeing.
 
 #### Classes
 
 A machine is built per equivalence class of code paths, not per family. What a core changes in
-the built processor is its architecture, which prunes the decode tree, and whether the Security
-Extension is fitted; everything else in a `core.zig` entry is a table read at run time. So the
-classes are the architectures:
+the built processor is mostly its architecture, which prunes the decode tree, and whether the
+Security Extension is fitted; the rest of a `core.zig` entry is a table read at run time. So the
+classes are the architectures, with the M7 apart:
 
 | Class | Architecture | Shares its paths with |
 |---|---|---|
 | M0+ | Armv6-M | M0, M1 |
 | M23 | Armv8-M Baseline | |
 | M3 | Armv7-M | |
-| M4 | Armv7E-M | M7 |
+| M4 | Armv7E-M | |
+| M7 | Armv7E-M, with caches and its fitted issue model | |
 | M33 | Armv8-M Mainline | |
 | M55 | Armv8.1-M Mainline | M85 |
 | ESP32-C3 | RV32IMC | |
 | ESP32-C6 | RV32IMAC with a static-priority PMP | |
 
 M0 and M1 differ from their representatives only in published cycle counts and MPU region
-counts, the M7 in those and its fitted timing, and M85 from M55 only by the pointer
-authentication flag. The oracle-gated columns stay on M3 and the ESP32-C3, the only cores a
-lockstep oracle exists for.
-
-#### Columns
-
-| Column | What it measures |
-|---|---|
-| `fw_ns_per_instr` | Geometric mean over tier one of wall nanoseconds per retired instruction, best of the runs |
-| `sys_ns_per_instr` | The same over tier two: the system layers under load |
-| `chip_ns_per_instr` | Tier two in bursts against a clock, as a chip model would drive it |
-| `debug_ns_per_instr`, `debug_chip_ns_per_instr` | The two above with a 65536-record trace ring attached |
-| `stubhost_ns` | The `isa` step loop alone over a flat memory, in `bench/*/stubhost.zig`: the floor the processor is measured against |
-| `access_ns`, `ppb_ns` | Nanoseconds per data read from memory and per system register read |
-| `irq_entry_cycles`, `latency_cycles_per_kinstr` | Exception entry cost and the share of the corpus spent in entry and return |
-| `fw_ns_m3`, `_m4`, `_m33`, `_m55`, `_c3`, `_c6` | `fw_ns_per_instr` for one class over the whole of tier one |
-| `sys_ns_m3` and the rest | The same over the tier-two images every class of the family runs |
-| `irq_entry_cycles_m3`, `_m4`, `_m33`, `_m55` | Exception entry cost on that class, over every tier-two image that raises a line and never halts, including the ones left out of the timing set. Arm only: no RISC-V system image both ESP32s run raises a line |
-| `class_checks`, `class_checks_pass` | Per class: every image reproduced, and every tier-one image run, stepped, bursted and traced over its first two million instructions, agreeing |
-| `processor_bytes`, `table_bytes`, `heap_peak_bytes` | `@sizeOf` the machine and the bus, and the peak heap of a run |
-| `processor_bytes_m0plus` and the rest, `obj_text_*`, `obj_rodata_*` | The same sizes for one class. They barely move: what a core selects is selected inside `isa` |
-| `link_delta_bytes_m0plus` and the rest | That class's machine minus the same machine linked against `bench/nullisa`: the decode tree its architecture keeps, the one size a class does change |
-| `build_s_*`, `rss_mb_*` | Wall time and memory of `zig build` for the library alone and for everything, at one and twelve jobs |
-| `isa_decls_required`, `isa_decls_optional` | The host contract entries the Arm processor answers |
-| `date`, `commit`, `variant`, `target`, `optimize`, `zig`, `cpu_mhz` | Which tree was measured and where |
-| `timing_*`, `programs_*` | Blank in the row `zig build metrics` writes |
-| `status`, `oracle_arm_*`, `oracle_rv_*`, `probe_arm_*`, `probe_rv_*`, `corpus_*`, `diag_*`, `burst_equiv_pass`, `invariant_violations` | The gates above, each as what agreed out of what was checked; `status` is `pass` only when every one did |
-| `harness_sha`, `corpus_sha`, `oracle_sha` | Digests of the bench sources, the corpus with its images, and `oracle/` |
+counts, and M85 from M55 only by the pointer authentication flag. The oracle gates stay on M3 and
+the ESP32-C3, the only cores a lockstep oracle exists for.
 
 `bench/nullisa` is an `isa` module with the same surface that executes nothing. Linking against
 it separates the processor from the instruction sets. Only rows from the same machine and Zig
@@ -301,6 +290,4 @@ compare.
 
 ## Sizes
 
-At the last release row the two processors together compile to about 100 KB of text, a one-core
-Arm machine is 1616 bytes, and the system layers cost 1.3 ns an instruction over the instruction
-set alone on the corpus.
+The sizes at each release are in [bench/metrics/size.tsv](bench/metrics/size.tsv).

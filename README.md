@@ -123,10 +123,9 @@ docker build -t core .
 docker run --rm core    # zig build harness && zig build metrics
 ```
 
-`zig build metrics` prints one row: every correctness gate, nanoseconds per instruction over the
-corpus with and without the system layers, the cost of a data access, the size of the processor
-and the build times. The rows measured at each
-release are in [bench/release-metrics.tsv](bench/release-metrics.tsv).
+`zig build metrics` writes five tables: the correctness gates, nanoseconds per instruction for
+each core with fitted timing, the sizes, the build times and the run's provenance. The tables
+measured at each release are in [bench/metrics/](bench/metrics/).
 
 ## Documentation
 
@@ -148,6 +147,6 @@ release are in [bench/release-metrics.tsv](bench/release-metrics.tsv).
 | `src/contract.zig` | The access kinds, the failure set and the two helpers a bus is reached through |
 | `test/` | The unit tests, mirroring `src/` |
 | `examples/` | The runnable examples and the firmware they run |
-| `bench/` | The measurement harness, the machines it drives, the stub host and the null ISA |
+| `bench/` | The measurement harness, the machines it drives and the null ISA |
 | `corpus/` | The system firmware sources, the diagnosis cases, the maps and the pinned manifest |
 | `oracle/` | Pinned reference outputs and the scripts that regenerate them |

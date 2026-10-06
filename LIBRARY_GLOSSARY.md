@@ -13,7 +13,7 @@ both halves is linked twice, as [arm](src/arm/system/processor.zig) and
 | [Memory and the bus](#memory-and-the-bus) | Bus, Regions, Found, Folded, Span, Access, Touch, Peek and poke, Width, Host contract, Device, Line and lines, Raise word, Map, Image |
 | [System blocks](#system-blocks) | PPB, NVIC and SCB, SysTick, MPU, SAU, Interrupt matrix, PMP, Semihosting |
 | [Tracing](#tracing) | Trace, Ring, Record |
-| [Measurement](#measurement) | Machine, Stub host, Null ISA, Row, Gate, Tier, Corpus, Oracle, Probe, Divergence register |
+| [Measurement](#measurement) | Machine, Null ISA, Row, Gate, Tier, Corpus, Oracle, Probe, Divergence register |
 
 ## The processor
 
@@ -577,16 +577,6 @@ runs, steps, bursts, snapshots, explains, and answers the size and interface con
 - A machine is not a [host](#host-contract): a host answers the instruction set, a machine the
   harness.
 
-### Stub host
-
-A bench machine answering the [host contract](#host-contract) with constants over a flat window
-and no system blocks, so a measurement of it is the instruction set and the loop alone. What a
-[row](#row)'s own numbers are read against.
-
-- `stubhost.Arm` and `stubhost.Riscv`, [bench/harness/stubhost.zig](bench/harness/stubhost.zig).
-- Its inner type is called `Bus`, after the [bus](#bus) parameter it stands in for, though it
-  answers the instruction set's host contract rather than core's bus surface.
-
 ### Null ISA
 
 A stand-in for the `isa` package with the same shape and no instruction semantics, so the
@@ -598,13 +588,13 @@ sizes the real ones are subtracted from.
 
 ### Row
 
-In `bench/`, one line of `bench/summary.tsv` or
-[bench/release-metrics.tsv](bench/release-metrics.tsv): provenance, every correctness
-[gate](#gate), nanoseconds per instruction at each [tier](#tier), the sizes, the build times and
-the interface counts. A row is written even when a gate fails, with `status` set to `fail`, so a
-regression stays in the history.
+In `bench/`, one line of a table in `bench/summary/` or [bench/metrics/](bench/metrics/):
+provenance in `run.tsv`, every correctness [gate](#gate) in `correctness.tsv`, nanoseconds per
+instruction at each [tier](#tier) in `speed.tsv`, the sizes in `size.tsv`, and the build times
+and interface counts in `build.tsv`. Rows are written even when a gate fails, with `status` set to
+`fail`, so a regression stays in the history.
 
-- `Row`, with the `header` and `line` renderers:
+- `Run`, `Correctness`, `Speed`, `Size` and `Build`, with the `header` and `line` renderers:
   [bench/harness/metrics.zig](bench/harness/metrics.zig).
 - `bench/detail.tsv` holds one line per image rather than per run; its header is in
   [bench/run.zig](bench/run.zig). A "row" of the `isa` instruction table is a different thing,
@@ -614,7 +604,7 @@ regression stays in the history.
 
 In `bench/`, a correctness column a [row](#row) must hold before its status may be `pass`: both
 [oracle](#oracle) comparisons, both [probe](#probe) comparisons, the [corpus](#corpus) and
-diagnosis counts, the burst equivalence, the per-class checks and the invariant violations.
+diagnosis counts, the burst equivalence, the per-class checks and the trace violations.
 
 - `metrics.gated`, [bench/harness/metrics.zig](bench/harness/metrics.zig).
 - The word means two other things elsewhere, both local. `Intc.best` takes a `gate`, the word of
@@ -626,8 +616,8 @@ diagnosis counts, the burst equivalence, the per-class checks and the invariant 
 
 How much of the library one measurement exercises. Tier one is the instruction set alone, the
 images of isa's corpus manifest; tier two is the same run with the system
-blocks, the devices and the interrupts in it. A [row](#row) reports nanoseconds per instruction
-for each.
+blocks, the devices and the interrupts in it. A `speed.tsv` [row](#row) reports nanoseconds per
+instruction for each.
 
 - `Image.tier`, set by `listing`, [bench/run.zig](bench/run.zig).
 - The columns are `fw_ns_per_instr` for tier one and `sys_ns_per_instr` for tier two,
