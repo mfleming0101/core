@@ -18,8 +18,8 @@ RUN case "$TARGETARCH" in \
     && ln -s "/opt/zig-$arch-linux-0.16.0/zig" /usr/local/bin/zig
 
 FROM zig AS tier1
-RUN git clone --depth 1 --branch v0.6.0 https://github.com/mfleming0101/isa.git /isa \
-    && test "$(git -C /isa rev-parse HEAD)" = 8c88504522f7ce095b353f6301afab4c57c55808 \
+RUN git clone --depth 1 --branch v0.6.1 https://github.com/mfleming0101/isa.git /isa \
+    && test "$(git -C /isa rev-parse HEAD)" = 0df60d27000c680de532f0d9bd5703d4ce509f1b \
     && sh /isa/corpus/build.sh
 
 FROM zig
@@ -33,7 +33,7 @@ COPY bench/nullisa/ bench/nullisa/
 COPY corpus/ corpus/
 COPY oracle/ oracle/
 COPY src/ src/
-COPY --from=tier1 /isa/corpus/manifest.zon /isa/corpus/
+COPY --from=tier1 /isa/corpus/manifest.zon /isa/corpus/manifest_armv6m.zon /isa/corpus/
 COPY --from=tier1 /isa/corpus/out/ /isa/corpus/out/
 COPY --from=tier1 /isa/oracle/trace_arm.txt /isa/oracle/trace_riscv.txt /isa/oracle/
 RUN sh corpus/build.sh
