@@ -47,8 +47,6 @@ pub fn build(b: *std.Build) void {
         b.getInstallStep().dependOn(&b.addInstallFile(probe.getEmittedBin(), b.fmt("sizeprobe-{s}.o", .{rep.name})).step);
         b.installArtifact(machine(b, target, optimize, b.fmt("machine-null-{s}", .{rep.name}), root, bare, bare_harness, chose));
         b.step(b.fmt("build-{s}", .{m.name}), b.fmt("Build {s} alone", .{m.name})).dependOn(&b.addInstallArtifact(m, .{}).step);
-        if (!rep.oracle) continue;
-        b.installArtifact(machine(b, target, optimize, b.fmt("machine-stubhost-{s}", .{rep.name}), b.fmt("bench/{s}/stubhost.zig", .{rep.arch}), core, harness, chose));
     }
 
     if (b.pkg_hash.len == 0) {
@@ -112,7 +110,7 @@ pub fn build(b: *std.Build) void {
     bench.setCwd(b.path("."));
     bench.has_side_effects = true;
     if (b.args) |args| bench.addArgs(args);
-    b.step("metrics", "Append one schema-valid row to bench/summary.tsv, or release-metrics.tsv with --release").dependOn(&bench.step);
+    b.step("metrics", "Append rows to the tables in bench/summary/, or bench/metrics/ with --release").dependOn(&bench.step);
 }
 
 const Rep = struct { name: []const u8, arch: []const u8, core: []const u8, oracle: bool = false };

@@ -29,7 +29,7 @@ pub fn assertMachine(comptime M: type) void {
         if (!@hasDecl(M, w[0])) @compileError(@typeName(M) ++ " is missing pub const " ++ w[0]);
         if (@TypeOf(@field(M, w[0])) != w[1]) @compileError(@typeName(M) ++ "." ++ w[0] ++ " must be " ++ @typeName(w[1]));
     }
-    inline for (.{ "init", "run", "step", "burst", "snapshot", "trap", "read32", "explain", "clock" }) |name| {
+    inline for (.{ "init", "run", "step", "burst", "snapshot", "trap", "timing", "explain", "clock" }) |name| {
         if (!@hasDecl(M, name)) @compileError(@typeName(M) ++ " is missing fn " ++ name);
     }
 }

@@ -40,11 +40,11 @@ const Digests = struct {
 const Ran = struct {
     retired: u64 = 0,
     cycles: u64 = 0,
-    latency: u64 = 0,
     stop: []const u8 = "",
     checksum: u32 = 0,
     ns: u64 = 0,
     heap: u64 = 0,
+    timing: []const u8 = "",
 };
 
 const Best = struct { ran: Ran = .{}, ns: u64 = 0, steady: bool = true };
@@ -64,21 +64,6 @@ const Geo = struct {
     }
 };
 
-fn across(arm: f64, riscv: f64) f64 {
-    return if (arm == 0 or riscv == 0) 0 else @sqrt(arm * riscv);
-}
-
-const Counted = struct { pass: u32 = 0, total: u32 = 0 };
-
-const Timing = struct {
-    arm: f64 = 0,
-    riscv: f64 = 0,
-    overall: f64 = 0,
-    corpus: Counted = .{},
-};
-
-const Measured = struct { timing: Timing = .{}, chip: Chip = .{}, heap: u64 = 0 };
-
 const About = struct {
     isa_required: u32 = 0,
     isa_optional: u32 = 0,
@@ -86,15 +71,9 @@ const About = struct {
     table_bytes: u32 = 0,
 };
 
-const Access = struct { accesses: u32 = 0, ns: u32 = 0 };
-
 const Entered = struct { entries: u32 = 0, entry_cycles: u32 = 0 };
 
-const Paths = struct { access: f64 = 0, ppb: f64 = 0 };
-
-const Debug = struct { ns: f64 = 0, chip: f64 = 0, violations: u32 = 0 };
-
-const Diagnosis = struct { pass: u32 = 0, total: u32 = 0 };
+const Gates = struct { corpus: metrics.Ratio = .{}, equivalent: bool = true, heap: u64 = 0 };
 
 const Judged = struct { agree: u32 = 0, fixed: u32 = 0, known: u32 = 0, total: u32 = 0 };
 
@@ -115,6 +94,7 @@ const Classed = struct {
     text: u64 = 0,
     rodata: u64 = 0,
     link_delta: i64 = 0,
+    timed: bool = false,
 };
 
 const Bound = struct { arch: []const u8, name: []const u8 };
@@ -152,15 +132,6 @@ const Compile = struct {
     full_12: Cold = .{},
 };
 
-const Chip = struct {
-    sys_arm: f64 = 0,
-    sys_riscv: f64 = 0,
-    chip: f64 = 0,
-    equivalent: bool = true,
-    latency: u64 = 0,
-    retired: u64 = 0,
-};
-
 const seed: u64 = 0xcbf2_9ce4_8422_2325;
 const prime: u64 = 0x100_0000_01b3;
 const window: u64 = 1 << 16;
@@ -171,8 +142,8 @@ const history_records = "65536";
 const event_records = "4096";
 const optimize = "ReleaseFast";
 const runs: usize = 5;
-const summary_path = "bench/summary.tsv";
-const release_path = "bench/release-metrics.tsv";
+const summary_dir = "bench/summary";
+const release_dir = "bench/metrics";
 const detail_path = "bench/detail.tsv";
 const detail_header = "tier\timage\tarch\tns_per_instr\tretired\tstop\tchecksum\tok\n";
 
@@ -219,12 +190,9 @@ const Runner = struct {
         const before = try self.binaries();
         const about = try self.interface();
         self.clock();
-        const measured = try self.corpus();
-        const stub = try self.stubhost();
-        const path = try self.pathCosts();
-        const irq = try self.entered();
-        const debug = try self.debugged();
-        var checks: Counted = .{};
+        const gates = try self.corpus();
+        const violations = try self.debugged();
+        var checks: metrics.Ratio = .{};
         const classed = try self.perClass(&checks);
         self.clock();
         const diagnosis = try self.diagnose();
@@ -237,50 +205,52 @@ const Runner = struct {
 
         try appendLog(self.io, self.gpa, detail_path, detail_header, self.detail.items);
 
-        var row: metrics.Row = .{
-            .date = try today(self.io, self.gpa),
-            .commit = try self.commit(),
+        const date = try today(self.io, self.gpa);
+        const head = try self.commit();
+        var correctness: metrics.Correctness = .{
+            .date = date,
+            .commit = head,
+            .oracle_arm = oracle[0],
+            .oracle_rv = oracle[1],
+            .probe_arm = probe[0],
+            .probe_rv = probe[1],
+            .corpus = gates.corpus,
+            .diag = diagnosis,
+            .class_checks = checks,
+            .burst_equivalent = gates.equivalent,
+            .trace_violations = violations,
+        };
+        if (metrics.gated(correctness)) correctness.status = .pass;
+
+        var speeds: std.ArrayList(metrics.Speed) = .empty;
+        var sizes: std.ArrayList(metrics.Size) = .empty;
+        for (metrics.classes, classed) |class, one| {
+            try sizes.append(self.gpa, .{ .date = date, .commit = head, .core = class.name, .processor_bytes = one.processor_bytes, .text_bytes = one.text, .rodata_bytes = one.rodata, .decode_bytes = one.link_delta });
+            if (one.timed) try speeds.append(self.gpa, .{ .date = date, .commit = head, .core = class.name, .fw_ns_per_instr = one.fw, .sys_ns_per_instr = one.sys, .irq_entry_cycles = one.irq });
+        }
+
+        const dir = if (self.options.release) release_dir else summary_dir;
+        try self.table(dir, "run", metrics.Run, &.{.{
+            .date = date,
+            .commit = head,
+            .target = @tagName(builtin.target.cpu.arch) ++ "-" ++ @tagName(builtin.target.os.tag),
+            .zig = builtin.zig_version_string,
+            .optimize = optimize,
             .variant = if (self.options.cpu) |cpu|
                 try std.fmt.allocPrint(self.gpa, "history=ring;taskset={d}", .{cpu})
             else
                 "history=ring;taskset=none",
-            .target = @tagName(builtin.target.cpu.arch) ++ "-" ++ @tagName(builtin.target.os.tag),
-            .optimize = optimize,
-            .zig = builtin.zig_version_string,
             .cpu_mhz = self.mhz,
-            .status = .fail,
-
-            .oracle_arm_match = oracle[0].pass,
-            .oracle_arm_total = oracle[0].total,
-            .oracle_rv_match = oracle[1].pass,
-            .oracle_rv_total = oracle[1].total,
-            .probe_arm_match = probe[0].pass,
-            .probe_arm_total = probe[0].total,
-            .probe_rv_match = probe[1].pass,
-            .probe_rv_total = probe[1].total,
-            .corpus_pass = measured.timing.corpus.pass,
-            .corpus_total = measured.timing.corpus.total,
-            .burst_equiv_pass = measured.chip.equivalent,
-            .invariant_violations = debug.violations,
-            .class_checks = checks.total,
-            .class_checks_pass = checks.pass,
-
-            .fw_ns_per_instr = measured.timing.overall,
-            .sys_ns_per_instr = across(measured.chip.sys_arm, measured.chip.sys_riscv),
-            .chip_ns_per_instr = measured.chip.chip,
-            .debug_ns_per_instr = debug.ns,
-            .debug_chip_ns_per_instr = debug.chip,
-
-            .stubhost_ns = stub,
-            .access_ns = path.access,
-            .ppb_ns = path.ppb,
-            .irq_entry_cycles = irq,
-            .latency_cycles_per_kinstr = if (measured.chip.retired == 0) 0 else 1000 * @as(f64, @floatFromInt(measured.chip.latency)) / @as(f64, @floatFromInt(measured.chip.retired)),
-
-            .processor_bytes = about.processor_bytes,
-            .heap_peak_bytes = measured.heap,
-            .table_bytes = about.table_bytes,
-
+            .harness_sha = digests.harness_sha,
+            .corpus_sha = digests.corpus_sha,
+            .oracle_sha = digests.oracle_sha,
+        }});
+        try self.table(dir, "correctness", metrics.Correctness, &.{correctness});
+        try self.table(dir, "speed", metrics.Speed, speeds.items);
+        try self.table(dir, "size", metrics.Size, sizes.items);
+        try self.table(dir, "build", metrics.Build, &.{.{
+            .date = date,
+            .commit = head,
             .build_s_core_1 = compiled.core_1.seconds,
             .build_s_core_12 = compiled.core_12.seconds,
             .build_s_full_1 = compiled.full_1.seconds,
@@ -289,33 +259,11 @@ const Runner = struct {
             .rss_mb_core_12 = compiled.core_12.rss_mb,
             .rss_mb_full_1 = compiled.full_1.rss_mb,
             .rss_mb_full_12 = compiled.full_12.rss_mb,
-
-            .isa_decls_required = about.isa_required,
-            .isa_decls_optional = about.isa_optional,
-
-            .diag_pass = diagnosis.pass,
-            .diag_total = diagnosis.total,
-
-            .harness_sha = digests.harness_sha,
-            .corpus_sha = digests.corpus_sha,
-            .oracle_sha = digests.oracle_sha,
-        };
-        inline for (metrics.classes, 0..) |class, i| {
-            @field(row, "processor_bytes_" ++ class.name) = classed[i].processor_bytes;
-            @field(row, "obj_text_" ++ class.name) = classed[i].text;
-            @field(row, "obj_rodata_" ++ class.name) = classed[i].rodata;
-            @field(row, "link_delta_bytes_" ++ class.name) = classed[i].link_delta;
-            if (class.timed) {
-                @field(row, "fw_ns_" ++ class.name) = classed[i].fw;
-                @field(row, "sys_ns_" ++ class.name) = classed[i].sys;
-            }
-            if (class.entry) @field(row, "irq_entry_cycles_" ++ class.name) = classed[i].irq;
-        }
-        if (metrics.gated(row)) row.status = .pass;
-
-        try self.append(row);
-        try self.out.writeAll(try metrics.header(try self.gpa.alloc(u8, 4096)));
-        try self.out.writeAll(try metrics.line(row, try self.gpa.alloc(u8, 4096)));
+            .isa_required = about.isa_required,
+            .isa_optional = about.isa_optional,
+            .table_bytes = about.table_bytes,
+            .heap_peak_bytes = gates.heap,
+        }});
     }
 
     fn say(self: *Runner, comptime fmt: []const u8, args: anytype) !void {
@@ -377,10 +325,6 @@ const Runner = struct {
 
     fn classNull(self: *Runner, class: metrics.Class) ![]const u8 {
         return std.fmt.allocPrint(self.gpa, "zig-out/bin/machine-null-{s}", .{class.build});
-    }
-
-    fn stubhostOf(self: *Runner, arch: []const u8) ![]const u8 {
-        return std.fmt.allocPrint(self.gpa, "zig-out/bin/machine-stubhost-{s}", .{arch});
     }
 
     fn mapOf(self: *Runner, given: ?[]const u8, arch: []const u8) ![]const u8 {
@@ -454,9 +398,6 @@ const Runner = struct {
             try paths.append(self.gpa, try self.classProbe(class));
             try paths.append(self.gpa, try self.classNull(class));
         }
-        for (arches) |arch| {
-            try paths.append(self.gpa, try self.stubhostOf(arch));
-        }
         return self.digestOf(paths.items);
     }
 
@@ -490,11 +431,11 @@ const Runner = struct {
             const value = field[split + 1 ..];
             if (std.mem.eql(u8, key, "retired")) out.retired = std.fmt.parseInt(u64, value, 10) catch 0;
             if (std.mem.eql(u8, key, "cycles")) out.cycles = std.fmt.parseInt(u64, value, 10) catch 0;
-            if (std.mem.eql(u8, key, "latency")) out.latency = std.fmt.parseInt(u64, value, 10) catch 0;
             if (std.mem.eql(u8, key, "ns")) out.ns = std.fmt.parseInt(u64, value, 10) catch 0;
             if (std.mem.eql(u8, key, "heap")) out.heap = std.fmt.parseInt(u64, value, 10) catch 0;
             if (std.mem.eql(u8, key, "checksum")) out.checksum = std.fmt.parseInt(u32, value, 16) catch 0;
             if (std.mem.eql(u8, key, "stop")) out.stop = try self.gpa.dupe(u8, value);
+            if (std.mem.eql(u8, key, "timing")) out.timing = try self.gpa.dupe(u8, value);
         }
         return out;
     }
@@ -541,77 +482,24 @@ const Runner = struct {
             (image.checksum == null or seen.ran.checksum == image.checksum.?);
     }
 
-    fn corpus(self: *Runner) !Measured {
-        var out: Measured = .{};
-        var firmware: [2]Geo = @splat(.{});
-        var system: [2]Geo = @splat(.{});
-        var driven: Geo = .{};
+    fn corpus(self: *Runner) !Gates {
+        var out: Gates = .{};
         for (self.images) |image| {
             const binary = try self.machine(image.arch);
             if (!self.present(binary)) return self.refuse("{s} is missing", .{binary});
-            const tier = image.tier;
-            const seen = try self.best(try self.argvOf(binary, "run", image, &.{}));
+            const seen: Best = .{ .ran = try self.once(try self.argvOf(binary, "run", image, &.{})) };
             const ok = reproduced(image, seen);
-            out.timing.corpus.total += 1;
-            out.timing.corpus.pass += @intFromBool(ok);
-            const cost = per(seen.ran, seen.ns);
+            out.corpus.total += 1;
+            out.corpus.pass += @intFromBool(ok);
             out.heap = @max(out.heap, seen.ran.heap);
-            const which = @intFromBool(!std.mem.eql(u8, image.arch, "arm"));
-            if (tier == 1) firmware[which].add(cost);
-            if (tier == 2) {
-                system[which].add(cost);
-                const chip = try self.best(try self.argvOf(binary, "burst", image, &.{ "--span", burst_span }));
+            if (image.tier == 2) {
+                const chip = try self.once(try self.argvOf(binary, "burst", image, &.{ "--span", burst_span }));
                 const steps = try self.once(try self.argvOf(binary, "steps", image, &.{}));
-                if (!agree(chip.ran, steps) or !agree(chip.ran, seen.ran)) out.chip.equivalent = false;
-                out.chip.latency += chip.ran.latency;
-                out.chip.retired += chip.ran.retired;
-                driven.add(per(chip.ran, chip.ns));
+                if (!agree(chip, steps) or !agree(chip, seen.ran)) out.equivalent = false;
             }
-            try self.record(tier, image, cost, seen, ok);
+            try self.record(image.tier, image, per(seen.ran, seen.ran.ns), seen, ok);
         }
-        out.timing.arm = firmware[0].mean();
-        out.timing.riscv = firmware[1].mean();
-        out.timing.overall = across(out.timing.arm, out.timing.riscv);
-        out.chip.sys_arm = system[0].mean();
-        out.chip.sys_riscv = system[1].mean();
-        out.chip.chip = driven.mean();
-        try self.say("corpus   fw={d:.3} sys={d:.3} chip={d:.3} ns/instr  reproduced={d}/{d} burst_equivalent={d} entry and return cycles {d} over {d} retired\n", .{
-            out.timing.overall,     across(out.chip.sys_arm, out.chip.sys_riscv), out.chip.chip,
-            out.timing.corpus.pass, out.timing.corpus.total,                      @intFromBool(out.chip.equivalent),
-            out.chip.latency,       out.chip.retired,
-        });
-        return out;
-    }
-
-    fn stubhost(self: *Runner) !f64 {
-        var geo: [2]Geo = @splat(.{});
-        for (self.images) |image| {
-            if (image.tier != 1) continue;
-            const binary = try self.stubhostOf(image.arch);
-            if (!self.present(binary)) return self.refuse("{s} is missing", .{binary});
-            const seen = try self.best(try self.argvOf(binary, "run", image, &.{}));
-            geo[@intFromBool(!std.mem.eql(u8, image.arch, "arm"))].add(per(seen.ran, seen.ns));
-        }
-        const out = across(geo[0].mean(), geo[1].mean());
-        try self.say("stubhost {d:.3} ns/instr arm={d:.3} riscv={d:.3}\n", .{ out, geo[0].mean(), geo[1].mean() });
-        return out;
-    }
-
-    fn pathCosts(self: *Runner) !Paths {
-        var geo: [2][2]Geo = @splat(@splat(.{}));
-        for (arches) |arch| {
-            const binary = try self.machine(arch);
-            const image = self.firstOf(arch) orelse continue;
-            const which = @intFromBool(!std.mem.eql(u8, arch, "arm"));
-            for ([_][]const u8{ "access", "ppb" }, 0..) |command, lane| {
-                geo[lane][which].add(try self.perAccess(binary, command, image));
-            }
-        }
-        const out: Paths = .{
-            .access = across(geo[0][0].mean(), geo[0][1].mean()),
-            .ppb = across(geo[1][0].mean(), geo[1][1].mean()),
-        };
-        try self.say("access   {d:.3} ns per data access, {d:.3} ns per system register\n", .{ out.access, out.ppb });
+        try self.say("corpus   reproduced={d}/{d} burst_equivalent={d}\n", .{ out.corpus.pass, out.corpus.total, @intFromBool(out.equivalent) });
         return out;
     }
 
@@ -622,71 +510,23 @@ const Runner = struct {
         return null;
     }
 
-    fn perAccess(self: *Runner, binary: []const u8, command: []const u8, image: Image) !f64 {
-        var out: f64 = 0;
-        for (0..runs) |run| {
-            const result = try std.process.run(self.gpa, self.io, .{ .argv = try self.onOneCore(&.{
-                binary,
-                command,
-                try self.mapOf(image.map, image.arch),
-                image.path,
-            }) });
-            const seen = tally(Access, result.stdout);
-            if (seen.accesses == 0) return 0;
-            const cost = @as(f64, @floatFromInt(seen.ns)) / @as(f64, @floatFromInt(seen.accesses));
-            out = if (run == 0) cost else @min(out, cost);
-        }
-        return out;
-    }
-
-    fn entered(self: *Runner) !f64 {
-        var entries: [2]u64 = @splat(0);
-        var cycles: [2]u64 = @splat(0);
+    fn debugged(self: *Runner) !u32 {
+        var out: u32 = 0;
         for (self.images) |image| {
-            if (image.tier != 2 or image.halts) continue;
             const binary = try self.machine(image.arch);
             if (!self.present(binary)) continue;
-            const result = try std.process.run(self.gpa, self.io, .{ .argv = try self.onOneCore(try self.argvOf(binary, "irq", image, &.{})) });
-            const seen = tally(Entered, result.stdout);
-            const which = @intFromBool(!std.mem.eql(u8, image.arch, "arm"));
-            entries[which] += seen.entries;
-            cycles[which] += seen.entry_cycles;
+            const tail: []const []const u8 = if (image.tier == 1)
+                &.{ "--history", history_records }
+            else
+                &.{ "--span", burst_span, "--history", history_records, "--events", event_records };
+            const seen: Best = .{ .ran = try self.once(try self.argvOf(binary, if (image.tier == 1) "run" else "burst", image, tail)) };
+            out += @intFromBool(!reproduced(image, seen));
         }
-        const total = entries[0] + entries[1];
-        const out = if (total == 0) 0 else @as(f64, @floatFromInt(cycles[0] + cycles[1])) / @as(f64, @floatFromInt(total));
-        try self.say("irq      {d:.3} cycles an entry: arm {d} over {d} entries, riscv {d} over {d}\n", .{
-            out, cycles[0], entries[0], cycles[1], entries[1],
-        });
+        try self.say("history  images that ran differently with the rings on={d}\n", .{out});
         return out;
     }
 
-    fn debugged(self: *Runner) !Debug {
-        var out: Debug = .{};
-        var geo: [2]Geo = @splat(.{});
-        var logged: Geo = .{};
-        for (self.images) |image| {
-            const tier = image.tier;
-            const binary = try self.machine(image.arch);
-            if (!self.present(binary)) continue;
-            if (tier == 1) {
-                const seen = try self.best(try self.argvOf(binary, "run", image, &.{ "--history", history_records }));
-                out.violations += @intFromBool(!reproduced(image, seen));
-                geo[@intFromBool(!std.mem.eql(u8, image.arch, "arm"))].add(per(seen.ran, seen.ns));
-                continue;
-            }
-            const seen = try self.best(try self.argvOf(binary, "burst", image, &.{ "--span", burst_span, "--history", history_records, "--events", event_records }));
-            out.violations += @intFromBool(!reproduced(image, seen));
-            logged.add(per(seen.ran, seen.ns));
-        }
-        out.ns = across(geo[0].mean(), geo[1].mean());
-        out.chip = logged.mean();
-        try self.say("history  {d:.3} ns/instr arm={d:.3} riscv={d:.3} chip with both rings {d:.3} images that ran differently with them on={d}\n", .{
-            out.ns, geo[0].mean(), geo[1].mean(), out.chip, out.violations,
-        });
-        return out;
-    }
-
-    fn perClass(self: *Runner, checks: *Counted) ![metrics.classes.len]Classed {
+    fn perClass(self: *Runner, checks: *metrics.Ratio) ![metrics.classes.len]Classed {
         var out: [metrics.classes.len]Classed = @splat(.{});
         for (metrics.classes, 0..) |class, i| {
             const binary = try self.classMachine(class);
@@ -697,15 +537,16 @@ const Runner = struct {
             out[i].processor_bytes = try self.machineBytes(binary);
             out[i].link_delta = @as(i64, @intCast((try self.read(binary)).len)) -
                 @as(i64, @intCast((try self.read(try self.classNull(class))).len));
-            if (class.timed) try self.timedClass(class, binary, &out[i], checks);
-            try self.say("class    {s:<6} fw={d:.3} sys={d:.3} ns/instr  entry={d:.3} cycles  {d} bytes  text={d} rodata={d} decode={d}\n", .{
-                class.name, out[i].fw, out[i].sys, out[i].irq, out[i].processor_bytes, out[i].text, out[i].rodata, out[i].link_delta,
+            if (class.corpus) try self.checkedClass(class, binary, &out[i], checks);
+            try self.say("class    {s:<6} timed={} fw={d:.3} sys={d:.3} ns/instr  entry={d:.3} cycles  {d} bytes  text={d} rodata={d} decode={d}\n", .{
+                class.name, out[i].timed, out[i].fw, out[i].sys, out[i].irq, out[i].processor_bytes, out[i].text, out[i].rodata, out[i].link_delta,
             });
         }
         return out;
     }
 
-    fn timedClass(self: *Runner, class: metrics.Class, binary: []const u8, into: *Classed, checks: *Counted) !void {
+    fn checkedClass(self: *Runner, class: metrics.Class, binary: []const u8, into: *Classed, checks: *metrics.Ratio) !void {
+        into.timed = try self.fitted(binary, class.arch);
         var firmware: Geo = .{};
         var system: Geo = .{};
         var entries: u64 = 0;
@@ -713,14 +554,15 @@ const Runner = struct {
         for (self.images) |image| {
             if (!std.mem.eql(u8, image.arch, class.arch)) continue;
             const tier = image.tier;
-            if (tier == 2 and class.entry and !image.halts) {
+            if (tier == 2 and into.timed and !image.halts) {
                 const result = try std.process.run(self.gpa, self.io, .{ .argv = try self.onOneCore(try self.argvOf(binary, "irq", image, &.{})) });
                 const entered_ = tally(Entered, result.stdout);
                 entries += entered_.entries;
                 cycles += entered_.entry_cycles;
             }
             if (tier == 2 and listed(&bound, image)) continue;
-            const seen = try self.best(try self.argvOf(binary, "run", image, &.{}));
+            const argv = try self.argvOf(binary, "run", image, &.{});
+            const seen: Best = if (into.timed) try self.best(argv) else .{ .ran = try self.once(argv) };
             checks.total += 1;
             checks.pass += @intFromBool(reproduced(image, seen));
             if (tier == 1) {
@@ -735,7 +577,13 @@ const Runner = struct {
         into.irq = if (entries == 0) 0 else @as(f64, @floatFromInt(cycles)) / @as(f64, @floatFromInt(entries));
     }
 
-    fn agreed(self: *Runner, binary: []const u8, image: Image, checks: *Counted) !void {
+    fn fitted(self: *Runner, binary: []const u8, arch: []const u8) !bool {
+        const image = self.firstOf(arch) orelse return false;
+        const ran = try self.once(try self.argvOf(binary, "run", image, &.{ "--budget", "1" }));
+        return std.mem.eql(u8, ran.timing, "fitted");
+    }
+
+    fn agreed(self: *Runner, binary: []const u8, image: Image, checks: *metrics.Ratio) !void {
         const capped = [_][]const u8{ "--budget", class_budget };
         const one = try self.once(try self.argvOf(binary, "run", image, &capped));
         const stepped = try self.once(try self.argvOf(binary, "steps", image, &capped));
@@ -761,8 +609,8 @@ const Runner = struct {
         });
     }
 
-    fn diagnose(self: *Runner) !Diagnosis {
-        var out: Diagnosis = .{};
+    fn diagnose(self: *Runner) !metrics.Ratio {
+        var out: metrics.Ratio = .{};
         const cases = self.zon([]const Case, "corpus/diag/manifest.zon") catch return out;
         for (cases) |case| {
             const binary = try self.machine(case.arch);
@@ -796,8 +644,8 @@ const Runner = struct {
         return out;
     }
 
-    fn lockstep(self: *Runner) ![2]Counted {
-        var out: [2]Counted = @splat(.{});
+    fn lockstep(self: *Runner) ![2]metrics.Ratio {
+        var out: [2]metrics.Ratio = @splat(.{});
         const buffer = try self.gpa.alloc(u8, 1 << 20);
         for (arches, 0..) |arch, which| {
             const binary = try self.machine(arch);
@@ -821,7 +669,7 @@ const Runner = struct {
         return out;
     }
 
-    fn traced(self: *Runner, binary: []const u8, image: Image, pin: Pin, tier: u8, buffer: []u8) !Counted {
+    fn traced(self: *Runner, binary: []const u8, image: Image, pin: Pin, tier: u8, buffer: []u8) !metrics.Ratio {
         var argv: std.ArrayList([]const u8) = .empty;
         try argv.appendSlice(self.gpa, &.{
             binary,
@@ -835,7 +683,7 @@ const Runner = struct {
         var child = try std.process.spawn(self.io, .{ .argv = argv.items, .stdout = .pipe });
         var reader = child.stdout.?.readerStreaming(self.io, buffer);
 
-        var out: Counted = .{};
+        var out: metrics.Ratio = .{};
         const riscv = std.mem.eql(u8, image.arch, "riscv");
         var digest = seed;
         var count: u64 = 0;
@@ -885,8 +733,8 @@ const Runner = struct {
         return out;
     }
 
-    fn probed(self: *Runner) ![2]Counted {
-        var out: [2]Counted = @splat(.{});
+    fn probed(self: *Runner) ![2]metrics.Ratio {
+        var out: [2]metrics.Ratio = @splat(.{});
         for (probings, 0..) |probing, which| {
             const binary = try self.machine(probing.arch);
             if (!self.present(binary)) return self.refuse("{s} is missing", .{binary});
@@ -980,20 +828,18 @@ const Runner = struct {
         return if (text.len == 0) "-" else text;
     }
 
-    fn append(self: *Runner, row: metrics.Row) !void {
-        const path = if (self.options.release) release_path else summary_path;
+    fn table(self: *Runner, dir: []const u8, name: []const u8, comptime T: type, rows: []const T) !void {
+        const path = try std.fmt.allocPrint(self.gpa, "{s}/{s}.tsv", .{ dir, name });
+        const head = try metrics.header(T, try self.gpa.alloc(u8, 4096));
         const existing = self.read(path) catch "";
-        const head = try metrics.header(try self.gpa.alloc(u8, 4096));
         if (existing.len != 0 and !std.mem.startsWith(u8, existing, head)) {
             return self.refuse("{s} was written under another header: migrate it before appending", .{path});
         }
-        var file = try std.Io.Dir.cwd().createFile(self.io, path, .{});
-        defer file.close(self.io);
-        var buffer: [1 << 16]u8 = undefined;
-        var writer = file.writer(self.io, &buffer);
-        try writer.interface.writeAll(if (existing.len == 0) head else existing);
-        try writer.interface.writeAll(try metrics.line(row, try self.gpa.alloc(u8, 4096)));
-        try writer.interface.flush();
+        var body: std.ArrayList(u8) = .empty;
+        for (rows) |row| try body.appendSlice(self.gpa, try metrics.line(row, try self.gpa.alloc(u8, 4096)));
+        try std.Io.Dir.cwd().createDirPath(self.io, dir);
+        try appendLog(self.io, self.gpa, path, head, body.items);
+        try self.out.print("{s}\n{s}{s}", .{ path, head, body.items });
     }
 };
 

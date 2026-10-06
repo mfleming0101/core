@@ -4,134 +4,82 @@ pub const Class = struct {
     name: []const u8,
     arch: []const u8,
     build: []const u8,
-    timed: bool,
-    entry: bool = false,
+    corpus: bool = true,
 };
 
 pub const classes = [_]Class{
-    .{ .name = "m0plus", .arch = "arm", .build = "m0plus", .timed = false },
-    .{ .name = "m23", .arch = "arm", .build = "m23", .timed = false },
-    .{ .name = "m3", .arch = "arm", .build = "arm", .timed = true, .entry = true },
-    .{ .name = "m4", .arch = "arm", .build = "m4", .timed = true, .entry = true },
-    .{ .name = "m33", .arch = "arm", .build = "m33", .timed = true, .entry = true },
-    .{ .name = "m55", .arch = "arm", .build = "m55", .timed = true, .entry = true },
-    .{ .name = "c3", .arch = "riscv", .build = "riscv", .timed = true },
-    .{ .name = "c6", .arch = "riscv", .build = "c6", .timed = true },
+    .{ .name = "m0plus", .arch = "arm", .build = "m0plus", .corpus = false },
+    .{ .name = "m23", .arch = "arm", .build = "m23", .corpus = false },
+    .{ .name = "m3", .arch = "arm", .build = "arm" },
+    .{ .name = "m4", .arch = "arm", .build = "m4" },
+    .{ .name = "m7", .arch = "arm", .build = "m7" },
+    .{ .name = "m33", .arch = "arm", .build = "m33" },
+    .{ .name = "m55", .arch = "arm", .build = "m55" },
+    .{ .name = "c3", .arch = "riscv", .build = "riscv" },
+    .{ .name = "c6", .arch = "riscv", .build = "c6" },
 };
 
-pub const Row = struct {
+pub const Ratio = struct {
+    pass: u32 = 0,
+    total: u32 = 0,
+
+    pub fn full(self: Ratio) bool {
+        return self.total > 0 and self.pass == self.total;
+    }
+};
+
+pub const Status = enum { pass, fail };
+
+pub const Run = struct {
     date: []const u8,
     commit: []const u8,
-    variant: []const u8,
     target: []const u8,
-    optimize: []const u8,
     zig: []const u8,
+    optimize: []const u8,
+    variant: []const u8,
     cpu_mhz: f64,
-    status: Status,
+    harness_sha: []const u8,
+    corpus_sha: []const u8,
+    oracle_sha: []const u8,
+};
 
-    oracle_arm_match: u32,
-    oracle_arm_total: u32,
-    oracle_rv_match: u32,
-    oracle_rv_total: u32,
-    probe_arm_match: u32,
-    probe_arm_total: u32,
-    probe_rv_match: u32,
-    probe_rv_total: u32,
-    timing_m7_match: ?u32 = null,
-    timing_m7_total: ?u32 = null,
-    timing_m7_error_pct: ?f64 = null,
-    timing_m4_match: ?u32 = null,
-    timing_m4_total: ?u32 = null,
-    timing_m4_error_pct: ?f64 = null,
-    timing_m0plus_match: ?u32 = null,
-    timing_m0plus_total: ?u32 = null,
-    timing_m0plus_error_pct: ?f64 = null,
-    programs_m7_functional_match: ?u32 = null,
-    programs_m7_functional_total: ?u32 = null,
-    programs_m7_within5: ?u32 = null,
-    programs_m7_error_pct: ?f64 = null,
-    programs_m0plus_functional_match: ?u32 = null,
-    programs_m0plus_functional_total: ?u32 = null,
-    programs_m0plus_within5: ?u32 = null,
-    programs_m0plus_error_pct: ?f64 = null,
-    corpus_pass: u32,
-    corpus_total: u32,
-    burst_equiv_pass: bool,
-    invariant_violations: u32,
-    class_checks: u32,
-    class_checks_pass: u32,
+pub const Correctness = struct {
+    date: []const u8,
+    commit: []const u8,
+    status: Status = .fail,
+    oracle_arm: Ratio,
+    oracle_rv: Ratio,
+    probe_arm: Ratio,
+    probe_rv: Ratio,
+    corpus: Ratio,
+    diag: Ratio,
+    class_checks: Ratio,
+    burst_equivalent: bool,
+    trace_violations: u32,
+};
 
+pub const Speed = struct {
+    date: []const u8,
+    commit: []const u8,
+    core: []const u8,
     fw_ns_per_instr: f64,
     sys_ns_per_instr: f64,
-    chip_ns_per_instr: f64,
-    debug_ns_per_instr: f64,
-    debug_chip_ns_per_instr: f64,
-
-    stubhost_ns: f64,
-    access_ns: f64,
-    ppb_ns: f64,
     irq_entry_cycles: f64,
-    latency_cycles_per_kinstr: f64,
+};
 
-    fw_ns_m3: f64 = 0,
-    fw_ns_m4: f64 = 0,
-    fw_ns_m33: f64 = 0,
-    fw_ns_m55: f64 = 0,
-    fw_ns_c3: f64 = 0,
-    fw_ns_c6: f64 = 0,
-
-    sys_ns_m3: f64 = 0,
-    sys_ns_m4: f64 = 0,
-    sys_ns_m33: f64 = 0,
-    sys_ns_m55: f64 = 0,
-    sys_ns_c3: f64 = 0,
-    sys_ns_c6: f64 = 0,
-
-    irq_entry_cycles_m3: f64 = 0,
-    irq_entry_cycles_m4: f64 = 0,
-    irq_entry_cycles_m33: f64 = 0,
-    irq_entry_cycles_m55: f64 = 0,
-
+pub const Size = struct {
+    date: []const u8,
+    commit: []const u8,
+    core: []const u8,
     processor_bytes: u64,
-    heap_peak_bytes: u64,
-    table_bytes: u64,
+    text_bytes: u64,
+    rodata_bytes: u64,
+    decode_bytes: i64,
+};
 
-    processor_bytes_m0plus: u64 = 0,
-    processor_bytes_m23: u64 = 0,
-    processor_bytes_m3: u64 = 0,
-    processor_bytes_m4: u64 = 0,
-    processor_bytes_m33: u64 = 0,
-    processor_bytes_m55: u64 = 0,
-    processor_bytes_c3: u64 = 0,
-    processor_bytes_c6: u64 = 0,
-
-    obj_text_m0plus: u64 = 0,
-    obj_text_m23: u64 = 0,
-    obj_text_m3: u64 = 0,
-    obj_text_m4: u64 = 0,
-    obj_text_m33: u64 = 0,
-    obj_text_m55: u64 = 0,
-    obj_text_c3: u64 = 0,
-    obj_text_c6: u64 = 0,
-
-    obj_rodata_m0plus: u64 = 0,
-    obj_rodata_m23: u64 = 0,
-    obj_rodata_m3: u64 = 0,
-    obj_rodata_m4: u64 = 0,
-    obj_rodata_m33: u64 = 0,
-    obj_rodata_m55: u64 = 0,
-    obj_rodata_c3: u64 = 0,
-    obj_rodata_c6: u64 = 0,
-
-    link_delta_bytes_m0plus: i64 = 0,
-    link_delta_bytes_m23: i64 = 0,
-    link_delta_bytes_m3: i64 = 0,
-    link_delta_bytes_m4: i64 = 0,
-    link_delta_bytes_m33: i64 = 0,
-    link_delta_bytes_m55: i64 = 0,
-    link_delta_bytes_c3: i64 = 0,
-    link_delta_bytes_c6: i64 = 0,
-
+pub const Build = struct {
+    date: []const u8,
+    commit: []const u8,
     build_s_core_1: f64,
     build_s_core_12: f64,
     build_s_full_1: f64,
@@ -140,44 +88,31 @@ pub const Row = struct {
     rss_mb_core_12: u64,
     rss_mb_full_1: u64,
     rss_mb_full_12: u64,
-
-    isa_decls_required: u32,
-    isa_decls_optional: u32,
-
-    diag_pass: u32,
-    diag_total: u32,
-
-    harness_sha: []const u8,
-    corpus_sha: []const u8,
-    oracle_sha: []const u8,
+    isa_required: u32,
+    isa_optional: u32,
+    table_bytes: u64,
+    heap_peak_bytes: u64,
 };
 
-pub const Status = enum { pass, fail };
-
-pub fn gated(row: Row) bool {
-    return row.oracle_arm_total > 0 and row.oracle_arm_match == row.oracle_arm_total and
-        row.oracle_rv_total > 0 and row.oracle_rv_match == row.oracle_rv_total and
-        row.probe_arm_total > 0 and row.probe_arm_match == row.probe_arm_total and
-        row.probe_rv_total > 0 and row.probe_rv_match == row.probe_rv_total and
-        row.corpus_total > 0 and row.corpus_pass == row.corpus_total and
-        row.diag_total > 0 and row.diag_pass == row.diag_total and
-        row.burst_equiv_pass and
-        row.invariant_violations == 0 and
-        row.class_checks > 0 and row.class_checks_pass == row.class_checks;
+pub fn gated(row: Correctness) bool {
+    return row.oracle_arm.full() and row.oracle_rv.full() and
+        row.probe_arm.full() and row.probe_rv.full() and
+        row.corpus.full() and row.diag.full() and row.class_checks.full() and
+        row.burst_equivalent and row.trace_violations == 0;
 }
 
-pub fn header(buffer: []u8) ![]u8 {
+pub fn header(comptime T: type, buffer: []u8) ![]u8 {
     var at: usize = 0;
-    inline for (@typeInfo(Row).@"struct".fields, 0..) |field, i| {
+    inline for (@typeInfo(T).@"struct".fields, 0..) |field, i| {
         at += (try std.fmt.bufPrint(buffer[at..], "{s}{s}", .{ if (i == 0) "" else "\t", field.name })).len;
     }
     at += (try std.fmt.bufPrint(buffer[at..], "\n", .{})).len;
     return buffer[0..at];
 }
 
-pub fn line(row: Row, buffer: []u8) ![]u8 {
+pub fn line(row: anytype, buffer: []u8) ![]u8 {
     var at: usize = 0;
-    inline for (@typeInfo(Row).@"struct".fields, 0..) |field, i| {
+    inline for (@typeInfo(@TypeOf(row)).@"struct".fields, 0..) |field, i| {
         if (i != 0) at += (try std.fmt.bufPrint(buffer[at..], "\t", .{})).len;
         at += (try cell(buffer[at..], @field(row, field.name))).len;
     }
@@ -187,11 +122,11 @@ pub fn line(row: Row, buffer: []u8) ![]u8 {
 
 fn cell(buffer: []u8, value: anytype) ![]u8 {
     return switch (@typeInfo(@TypeOf(value))) {
-        .optional => if (value) |given| cell(buffer, given) else buffer[0..0],
         .float => std.fmt.bufPrint(buffer, "{d:.3}", .{value}),
         .@"enum" => std.fmt.bufPrint(buffer, "{s}", .{@tagName(value)}),
         .bool => std.fmt.bufPrint(buffer, "{d}", .{@intFromBool(value)}),
         .pointer => std.fmt.bufPrint(buffer, "{s}", .{value}),
+        .@"struct" => std.fmt.bufPrint(buffer, "{d}/{d}", .{ value.pass, value.total }),
         else => std.fmt.bufPrint(buffer, "{d}", .{value}),
     };
 }

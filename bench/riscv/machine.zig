@@ -115,8 +115,8 @@ pub const Machine = struct {
         return &self.cpu.cycles;
     }
 
-    pub fn read32(self: *Machine, address: u32) ?u32 {
-        return self.cpu.peek(4, address);
+    pub fn timing(self: *const Machine) core.riscv.Timing {
+        return self.cpu.timing;
     }
 
     pub fn explain(self: *Machine, into: []u8) []const u8 {

@@ -11,8 +11,6 @@ pub const usage =
     \\machine burst     <map.zon> [<image.elf>] [--span N] [--budget N] [--semihosting] [--history N] [--events N]
     \\machine trace     <map.zon> [<image.elf>] [--budget N] [--semihosting]
     \\machine diag      <map.zon> [<image.elf>] [--semihosting]
-    \\machine access    <map.zon> [<image.elf>]
-    \\machine ppb       <map.zon> [<image.elf>]
     \\machine irq       <map.zon> [<image.elf>] [--budget N] [--semihosting]
     \\machine about
     \\
@@ -90,9 +88,6 @@ const Counting = struct {
     }
 };
 
-const accesses: usize = 1 << 22;
-const access_window: u32 = 4096;
-
 const span_instructions: u64 = 37;
 const chip_mhz: u64 = 64;
 
@@ -133,8 +128,6 @@ pub fn Consumer(comptime M: type) type {
             if (std.mem.eql(u8, command, "burst")) return burst(init, out, job);
             if (std.mem.eql(u8, command, "trace")) return trace(init, out, job);
             if (std.mem.eql(u8, command, "diag")) return diag(init, out, job);
-            if (std.mem.eql(u8, command, "access")) return access(init, out, job, .memory);
-            if (std.mem.eql(u8, command, "ppb")) return access(init, out, job, .ppb);
             if (std.mem.eql(u8, command, "irq")) return irq(init, out, job);
             return error.Usage;
         }
@@ -173,7 +166,7 @@ pub fn Consumer(comptime M: type) type {
             return std.fmt.parseInt(u64, args.next() orelse return error.Usage, 0) catch error.Usage;
         }
 
-        var opened: struct { heap: Counting = .{}, base: u32 = 0, span: u32 = 0 } = .{};
+        var opened: struct { heap: Counting = .{} } = .{};
 
         fn open(init: std.process.Init, out: *std.Io.Writer, job: Job, history: usize) !*M {
             const arena = init.arena.allocator();
@@ -190,13 +183,6 @@ pub fn Consumer(comptime M: type) type {
             const dir = if (job.elf != null) std.Io.Dir.cwd() else beside;
             const image = dir.readFileAlloc(init.io, name, arena, .limited(elf_limit)) catch
                 return reported(init, "cannot read {s}\n", .{name});
-
-            for (map.regions) |region| {
-                if (!region.writable) continue;
-                opened.base = region.base;
-                opened.span = @min(region.size, access_window);
-                break;
-            }
 
             opened.heap.child = arena;
             if (job.events != 0) try device.events.open(try arena.alloc(device.Event, job.events));
@@ -241,8 +227,8 @@ pub fn Consumer(comptime M: type) type {
             const started = std.Io.Timestamp.now(init.io, .awake);
             const ran = machine.run(job.budget);
             const ns = elapsedOf(started, init.io);
-            try out.print("retired={d} cycles={d} latency={d} stop={s} exceptions={d} irqs={d} ns={d} checksum={x:0>8} heap={d}\n", .{
-                ran.retired, ran.cycles, ran.latency, @tagName(ran.stop), ran.exceptions, ran.irqs, ns, checksum(machine), opened.heap.peak,
+            try out.print("retired={d} cycles={d} latency={d} stop={s} exceptions={d} irqs={d} ns={d} checksum={x:0>8} heap={d} timing={s}\n", .{
+                ran.retired, ran.cycles, ran.latency, @tagName(ran.stop), ran.exceptions, ran.irqs, ns, checksum(machine), opened.heap.peak, @tagName(machine.timing()),
             });
             return 0;
         }
@@ -332,39 +318,6 @@ pub fn Consumer(comptime M: type) type {
             _ = machine.run(job.budget);
             const into = try init.arena.allocator().alloc(u8, explain_limit);
             try out.writeAll(machine.explain(into));
-            return 0;
-        }
-
-        const ppb_register: u32 = switch (M.arch) {
-            .armv7m => 0xe000_ed00,
-            .rv32imc => 0x600c_2104,
-        };
-
-        fn access(init: std.process.Init, out: *std.Io.Writer, job: Job, over: enum { memory, ppb }) !u8 {
-            const machine = try open(init, out, job, 0);
-            const base = switch (over) {
-                .memory => opened.base,
-                .ppb => ppb_register,
-            };
-            const span: u32 = switch (over) {
-                .memory => opened.span,
-                .ppb => 4,
-            };
-            if (span == 0) return reported(init, "{s}: the map names no writable memory to walk\n", .{job.map});
-
-            var read: u32 = 0;
-            var at: u32 = 0;
-            const started = std.Io.Timestamp.now(init.io, .awake);
-            for (0..accesses) |_| {
-                read +%= machine.read32(base + at) orelse 0;
-                at += 4;
-                if (at >= span) at = 0;
-            }
-            const ns = elapsedOf(started, init.io);
-            std.mem.doNotOptimizeAway(read);
-            try out.print("accesses={d} ns={d} ns_per_access={d:.4}\n", .{
-                accesses, ns, @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(accesses)),
-            });
             return 0;
         }
 
