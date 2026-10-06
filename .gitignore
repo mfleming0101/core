@@ -5,4 +5,4 @@ zig-pkg/
 *.DS_Store
 corpus/out/
 bench/*.tsv
-!bench/release-metrics.tsv
+bench/summary/

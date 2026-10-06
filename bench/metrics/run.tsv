@@ -1,0 +1,10 @@
+date	commit	target	zig	optimize	variant	cpu_mhz	harness_sha	corpus_sha	oracle_sha
+2026-09-24	5fb32c4	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	4037.889	a5156f4ca76dad3c	c36b2a68359ad8d6	435f66b34344ebfa
+2026-09-24	50bec1a	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	3676.907	a5156f4ca76dad3c	c36b2a68359ad8d6	435f66b34344ebfa
+2026-09-25	48ef9d9	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	3598.632	87d0380da97f437c	c36b2a68359ad8d6	435f66b34344ebfa
+2026-09-25	16b5099	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	3683.849	87d0380da97f437c	c36b2a68359ad8d6	435f66b34344ebfa
+2026-09-26	f2e77cb	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	4039.792	72cfb3ca0c80e7fd	c36b2a68359ad8d6	435f66b34344ebfa
+2026-09-26	12e03ed	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	4037.549	72cfb3ca0c80e7fd	c36b2a68359ad8d6	435f66b34344ebfa
+2026-09-28	f547c4f	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	4039.792	d3875d8fcf2e355a	c36b2a68359ad8d6	ba45389856d3cc7e
+2026-09-28	4d09d49	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	4038.501	d576efc9872cc915	c36b2a68359ad8d6	39e740a2c1d71510
+2026-10-01	37a31fb	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	4039.265	1e8c55b0eb1d07f9	797fb1beb897d435	699aae7f11e4b4cd
