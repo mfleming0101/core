@@ -8,3 +8,4 @@ date	commit	target	zig	optimize	variant	cpu_mhz	harness_sha	corpus_sha	oracle_sh
 2026-09-28	f547c4f	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	4039.792	d3875d8fcf2e355a	c36b2a68359ad8d6	ba45389856d3cc7e
 2026-09-28	4d09d49	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	4038.501	d576efc9872cc915	c36b2a68359ad8d6	39e740a2c1d71510
 2026-10-01	37a31fb	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	4039.265	1e8c55b0eb1d07f9	797fb1beb897d435	699aae7f11e4b4cd
+2026-10-06	3047372	aarch64-linux	0.16.0	ReleaseFast	history=ring;taskset=0	4053.883	fd9e76aebc0ba95a	3e746338ee4c8980	fe70ac51edf92711
