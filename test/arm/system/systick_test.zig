@@ -39,40 +39,79 @@ test "with no reference clock NOREF reads as one and CLKSOURCE reads as one and 
 
 test "a disabled timer does not count" {
     var timer: SysTick = .{ .rvr = 10, .cvr = 5 };
-    try std.testing.expect(!timer.advance(100));
+    try std.testing.expect(!timer.advance(0, 100));
     try std.testing.expectEqual(@as(u32, 5), timer.cvr);
 }
 
 test "an enabled timer with a zero counter loads the reload value on the next cycle and then counts down" {
     var timer: SysTick = .{ .csr = SysTick.enable, .rvr = 10 };
-    try std.testing.expect(!timer.advance(1));
+    try std.testing.expect(!timer.advance(0, 1));
     try std.testing.expectEqual(@as(u32, 10), timer.cvr);
-    try std.testing.expect(!timer.advance(3));
+    try std.testing.expect(!timer.advance(0, 3));
     try std.testing.expectEqual(@as(u32, 7), timer.cvr);
 }
 
 test "the count from 1 to 0 sets COUNTFLAG and pends only with TICKINT set, B3.3.1" {
     var quiet: SysTick = .{ .csr = SysTick.enable, .rvr = 10, .cvr = 3 };
-    try std.testing.expect(!quiet.advance(3));
+    try std.testing.expect(!quiet.advance(0, 3));
     try std.testing.expectEqual(@as(u32, 0), quiet.cvr);
     try std.testing.expectEqual(SysTick.enable | SysTick.countflag, quiet.csr);
     var loud: SysTick = .{ .csr = SysTick.enable | SysTick.tickint, .rvr = 10, .cvr = 3 };
-    try std.testing.expect(loud.advance(3));
+    try std.testing.expect(loud.advance(0, 3));
 }
 
 test "many cycles at once wrap the counter as many times as the period fits" {
     var timer: SysTick = .{ .csr = SysTick.enable | SysTick.tickint, .rvr = 9, .cvr = 4 };
-    try std.testing.expect(timer.advance(4 + 10 + 10 + 3));
+    try std.testing.expect(timer.advance(0, 4 + 10 + 10 + 3));
     try std.testing.expectEqual(@as(u32, 9 - 2), timer.cvr);
     var exact: SysTick = .{ .csr = SysTick.enable, .rvr = 9, .cvr = 4 };
-    try std.testing.expect(!exact.advance(4 + 10));
+    try std.testing.expect(!exact.advance(0, 4 + 10));
     try std.testing.expectEqual(@as(u32, 0), exact.cvr);
 }
 
 test "a zero reload value stops the counter at zero after it wraps, B3.3.4" {
     var timer: SysTick = .{ .csr = SysTick.enable | SysTick.tickint, .rvr = 0, .cvr = 2 };
-    try std.testing.expect(timer.advance(50));
+    try std.testing.expect(timer.advance(0, 50));
     try std.testing.expectEqual(@as(u32, 0), timer.cvr);
-    try std.testing.expect(!timer.advance(50));
+    try std.testing.expect(!timer.advance(0, 50));
     try std.testing.expectEqual(@as(u32, 0), timer.cvr);
+}
+
+test "with a reference clock NOREF reads zero, CLKSOURCE takes writes, and it resets to the part's choice, B3.3.3 and B3.3.6" {
+    var timer: SysTick = .of(0x4000_0010, 8, false);
+    try std.testing.expectEqual(@as(u32, 0x4000_0010), timer.readRegister(0xc).?);
+    try std.testing.expectEqual(@as(u32, 0), timer.readRegister(0x0).?);
+    try std.testing.expect(timer.writeRegister(0x0, SysTick.clksource | SysTick.enable));
+    try std.testing.expectEqual(SysTick.clksource | SysTick.enable, timer.readRegister(0x0).?);
+    timer.reset();
+    try std.testing.expectEqual(@as(u32, 0), timer.readRegister(0x0).?);
+    var processor: SysTick = .of(0, 8, true);
+    try std.testing.expectEqual(SysTick.clksource, processor.readRegister(0x0).?);
+    try std.testing.expect(processor.writeRegister(0x0, 0));
+    try std.testing.expectEqual(@as(u32, 0), processor.readRegister(0x0).?);
+}
+
+test "on the reference clock the counter moves once per reference edge, and the deadline is the cycles to the wrapping edge" {
+    var timer: SysTick = .of(0, 8, false);
+    _ = timer.writeRegister(0x4, 99);
+    _ = timer.writeRegister(0x0, SysTick.enable | SysTick.tickint);
+    try std.testing.expectEqual(@as(u64, 800), timer.deadline(0));
+    try std.testing.expect(!timer.advance(0, 799));
+    try std.testing.expect(timer.advance(799, 1));
+    var late: SysTick = .of(0, 8, false);
+    _ = late.writeRegister(0x4, 99);
+    _ = late.writeRegister(0x0, SysTick.enable);
+    try std.testing.expectEqual(@as(u64, 795), late.deadline(5));
+    try std.testing.expect(!late.advance(5, 2));
+    try std.testing.expectEqual(@as(u32, 0), late.cvr);
+    try std.testing.expect(!late.advance(7, 1));
+    try std.testing.expectEqual(@as(u32, 99), late.cvr);
+}
+
+test "on the processor clock a timer with a reference clock counts cycles" {
+    var timer: SysTick = .of(0, 8, true);
+    _ = timer.writeRegister(0x4, 9);
+    _ = timer.writeRegister(0x0, SysTick.clksource | SysTick.enable | SysTick.tickint);
+    try std.testing.expectEqual(@as(u64, 10), timer.deadline(3));
+    try std.testing.expect(timer.advance(3, 10));
 }

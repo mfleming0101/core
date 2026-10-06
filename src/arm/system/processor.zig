@@ -498,8 +498,8 @@ pub fn Processor(comptime options: Options) type {
                 .pipeline = if (Issuing == void) {} else .{},
                 .state = .{ .secure = spec.security, .fpscr = fp.fixedFields(spec.architecture, 0) },
                 .memory = memory,
-                .systick = .{ .calibration = SysTick.noref | (part.calibration & SysTick.calibrated) },
-                .systick_ns = if (SysTickNs == void) {} else if (spec.security and (spec.architecture.main() or part.systick_ns)) .{ .calibration = SysTick.noref | (part.calibration_ns & SysTick.calibrated) } else null,
+                .systick = .of(part.calibration, part.systick_reference, part.systick_processor_clock),
+                .systick_ns = if (SysTickNs == void) {} else if (spec.security and (spec.architecture.main() or part.systick_ns)) .of(part.calibration_ns, part.systick_reference, part.systick_processor_clock) else null,
                 .scb = .init(&profiles[at], part, part.vtor),
                 .scb_ns = .init(&profiles[at], part, part.vtor_ns),
                 .icb = .{},
@@ -638,6 +638,8 @@ pub fn Processor(comptime options: Options) type {
                 .vtor = self.scb.table,
                 .vtor_ns = self.scb_ns.table,
                 .calibration = self.systick.calibration & SysTick.calibrated,
+                .systick_reference = self.systick.reference,
+                .systick_processor_clock = self.systick.reference != 0 and self.systick.start & SysTick.clksource != 0,
             };
             if (M7 != void) self.m7.wiring(&out);
             if (Impdef != void) {
@@ -1361,10 +1363,11 @@ pub fn Processor(comptime options: Options) type {
 
         noinline fn service(self: *Self) void {
             const elapsed: u32 = @intCast(@min(self.cycles - self.serviced, std.math.maxInt(u32)));
+            const before = self.serviced;
             self.serviced = self.cycles;
-            if (self.systick.advance(elapsed)) self.raise(if (self.spec.security and self.flags.sttns) systick + ns_base else systick);
+            if (self.systick.advance(before, elapsed)) self.raise(if (self.spec.security and self.flags.sttns) systick + ns_base else systick);
             if (self.timerNs()) |timer| {
-                if (timer.advance(elapsed)) self.raise(systick + ns_base);
+                if (timer.advance(before, elapsed)) self.raise(systick + ns_base);
             }
             if (self.memory.interrupts()) |raised| self.pendAll(raised);
             self.schedule();
@@ -1373,8 +1376,8 @@ pub fn Processor(comptime options: Options) type {
 
         fn schedule(self: *Self) void {
             self.memory.follow(&self.cycles, &self.attention);
-            const other = if (self.timerNs()) |timer| timer.deadline() else std.math.maxInt(u64);
-            const next = self.serviced +| @min(self.systick.deadline(), other, self.memory.untilDue());
+            const other = if (self.timerNs()) |timer| timer.deadline(self.serviced) else std.math.maxInt(u64);
+            const next = self.serviced +| @min(self.systick.deadline(self.serviced), other, self.memory.untilDue());
             self.attention = if (self.cycles < self.deadline) @min(next, self.deadline) else next;
         }
 

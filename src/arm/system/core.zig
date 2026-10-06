@@ -104,9 +104,12 @@ pub const Part = struct {
     /// Whether an M23 fits the Non-secure SysTick, M23 TRM Table 2-1; the M33, M55 and M85 always
     /// do, v8-M D1.2.240.
     systick_ns: bool = false,
-    /// SYST_CALIB_NS from CFGNSSTCALIB, M55 and M85 TRM C.3; NOREF reads one in both, as no
-    /// reference clock is fitted.
+    /// SYST_CALIB_NS from CFGNSSTCALIB, M55 and M85 TRM C.3.
     calibration_ns: u32 = 0,
+    /// Processor cycles per SysTick reference clock tick, zero where none is fitted, v7-M B3.3.3.
+    systick_reference: u8 = 0,
+    /// Whether SYST_CSR.CLKSOURCE resets to the processor clock where a reference clock is fitted.
+    systick_processor_clock: bool = false,
     /// EWIC events an M55 or M85 supports: zero for none, else 4 to 483, M55 and M85 TRM A.1.
     ewic: u16 = 0,
 };

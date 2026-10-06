@@ -3880,6 +3880,30 @@ test "SYST_CALIB reads the SKEW and TENMS the part gives through a reset, droppi
     try std.testing.expectEqual(@as(?u32, 0x8000_0000), zero.peek(4, 0xe000_e01c));
 }
 
+test "a part's SysTick reference clock divides the processor clock, and a reset keeps it and the reset clock source, v7-M B3.3.3" {
+    var m = loaded();
+    var plain = fast(.m3, &m);
+    _ = plain.poke(4, 0xe000_e014, 9);
+    _ = plain.poke(4, 0xe000_e010, 0x3);
+    plain.charge(10);
+    try std.testing.expect(plain.pending & (1 << 15) != 0);
+    var divided = Cpu.init(&m, .m3, .{ .systick_reference = 8 }, .{});
+    try std.testing.expectEqual(@as(?u32, 0), divided.peek(4, 0xe000_e010));
+    try std.testing.expectEqual(@as(?u32, 0), divided.peek(4, 0xe000_e01c));
+    _ = divided.poke(4, 0xe000_e014, 9);
+    _ = divided.poke(4, 0xe000_e010, 0x3);
+    divided.charge(79);
+    try std.testing.expect(divided.pending & (1 << 15) == 0);
+    divided.charge(1);
+    try std.testing.expect(divided.pending & (1 << 15) != 0);
+    divided.reset();
+    try std.testing.expectEqual(@as(?u32, 0), divided.peek(4, 0xe000_e010));
+    var h7 = Cpu.init(&m, .m7, .{ .systick_reference = 8, .systick_processor_clock = true }, .{});
+    _ = h7.poke(4, 0xe000_e010, 0);
+    h7.reset();
+    try std.testing.expectEqual(@as(?u32, 0x4), h7.peek(4, 0xe000_e010));
+}
+
 test "ACTLR keeps the bits each TRM lists, M3 and M4 TRM 4.2, M7 TRM 3.3.1, M23 TRM 5.2.1, M33 TRM 3.4, M55 and M85 TRM 5.9" {
     var m = loaded();
     inline for (.{ .m0, .m0plus, .m1, .m3, .m4, .m7, .m23, .m33, .m55, .m85 }, .{ 0, 0, 0, 0x207, 0x207, 0x1fff_ec04, 0x2000_0000, 0x2000_3605, 0x0803_fcfc, 0x0800_fc00 }) |core, kept| {
