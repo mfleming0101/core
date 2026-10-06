@@ -13,7 +13,7 @@ syst_calib qemu=0000270f core=80000000 verdict=B3.3.4: core, NOREF says whether 
 syst_calib.w qemu=0000270f core=80000000 verdict=B3.3.4: core, for the reason syst_calib gives; the register is read-only on both.
 syst_csr qemu=00000000 core=00000004 verdict=B3.3.3: core, CLKSOURCE reads as one wherever NOREF is set.
 # Debug, C1.6.
-demcr.w qemu=00000000 core=01000000 verdict=C1.6.5: core on TRCENA, the bit DWT_CTRL needs; neither implements the MON_ or VC_ fields and QEMU reads the whole register as zero.
+demcr.w qemu=00000000 core=010007f1 verdict=C1.6.5: core on TRCENA, the bit DWT_CTRL needs, and the VC_ fields vector catch uses; neither implements the MON_ fields and QEMU reads the whole register as zero.
 # The System Control Block, B3.2.
 scr.w qemu=fffffff3 core=00000016 verdict=B3.2.7: core, SCR holds SEVONPEND, SLEEPDEEP and SLEEPONEXIT and nothing else; QEMU keeps every reserved bit and drops SLEEPDEEP.
 shpr3.w qemu=ffff00ff core=f0f00000 fixed=f0f000f0 verdict=B3.2.10: QEMU on the low lane, PRI_12 is DebugMonitor and Armv7-M implements it; the width differs as shpr1.w does, so a core that holds PRI_12 in four bits reads back the fixed value.
