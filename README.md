@@ -13,7 +13,7 @@ Instructions execute through the [`isa`](https://github.com/mfleming0101/isa) li
 | RISC-V | Espressif ESP32-C3 (RV32IMC), ESP32-C6 (RV32IMAC) | Machine-mode traps, the interrupt matrix and controller, PMP, semihosting |
 
 The library is checked against QEMU, the Sail RISC-V model, Espressif's QEMU fork and a corpus
-of 65 firmware images in a [container](Dockerfile) pinned by digest.
+of 96 firmware images in a [container](Dockerfile) pinned by digest.
 
 ## Key features
 

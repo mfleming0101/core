@@ -216,14 +216,14 @@ revisions move the numbers and the name still finds the section.
 
 | Tier | Images | Built by | Map | Measures |
 |---|---|---|---|---|
-| One | 48: five C programs, CoreMark and eighteen Embench benchmarks per architecture | `isa` | Flat, no devices | The instruction path |
-| Two | 17 system images: interrupt storm, context switch, sleep and wake, fault recovery, semihosting I/O, device polling and tickless timer on both architectures; PMP, traps and the interrupt matrix on RISC-V | `corpus/build.sh` from `corpus/src` | With the bench's timer device | The system path |
+| One | 72: five programs, CoreMark and eighteen Embench benchmarks for Armv7-M, Armv6-M and RISC-V | `isa` | Flat, no devices | The instruction path |
+| Two | 24 system images: interrupt storm, context switch, sleep and wake, fault recovery, semihosting I/O, device polling and tickless timer for Armv7-M, Armv6-M and RISC-V; PMP, traps and the interrupt matrix on RISC-V | `corpus/build.sh` from `corpus/src` | With the bench's timer device | The system path |
 
 Not every image runs on every core:
 
-- Tier one is compiled `-mcpu=cortex_m3`, so M0+ and M23, whose decode tree is a T32 subset,
-  stop on an undefined instruction within a few thousand instructions and are measured by size
-  alone.
+- The Arm images are compiled twice, `-mcpu=cortex_m3` and `-mcpu=cortex_m0plus`, pinned in
+  `manifest.zon` and `manifest_armv6m.zon`. M0+ and M23, whose decode tree is a T32 subset, run
+  the Armv6-M builds; the other Arm classes run the Armv7-M builds. The oracle machine runs both.
 - `ctxswitch` programs the Armv7-M MPU through MPU_RASR, which is MPU_RLAR on Armv8-M.
 - `irq_storm`, `devpoll` and `sleep` count interrupts and device ticks against the clock, and
   the cores charge differently: one cycle an instruction with no cycle table, and twelve cycles
@@ -255,11 +255,11 @@ with `status` set to `fail`, so a regression stays visible. Every table starts w
 | `build.tsv` | One | Wall time and memory of `zig build` for the library alone and for everything, at one and twelve jobs; the host contract entries the Arm processor answers; the bus size and the peak heap of a run |
 | `accuracy.tsv` | One per fitted core | Appended by the private cycle-fitting repo: kernels and programs against their board records |
 
-A class is timed when its machine runs with fitted timing and the class runs the corpus. Cores on
-unknown timing charge one cycle an instruction, which runs faster than a fitted model and would
-flatter the speed. The M0+ is fitted but not timed, since the corpus is built for Armv7-M.
-`class_checks` covers every class that runs the corpus: every image reproduced, and every tier-one
-image run, stepped, bursted and traced over its first two million instructions, agreeing.
+A class is timed when its machine runs with fitted timing. Cores on unknown timing charge one
+cycle an instruction, which runs faster than a fitted model and would flatter the speed. The M0+
+row times the Armv6-M builds of the same programs the M4 and M7 rows time. `class_checks` covers
+every class: every image reproduced, and every tier-one image run, stepped, bursted and traced over
+its first two million instructions, agreeing.
 
 #### Classes
 
