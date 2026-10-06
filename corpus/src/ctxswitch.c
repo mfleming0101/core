@@ -44,6 +44,34 @@ unsigned *ctx_switch(unsigned *sp) {
     return saved[current];
 }
 
+#if __ARM_ARCH_6M__
+__attribute__((naked)) void pendsv_handler(void) {
+    __asm__ volatile("mrs r0, psp\n\t"
+                     "subs r0, #32\n\t"
+                     "stmia r0!, {r4-r7}\n\t"
+                     "mov r4, r8\n\t"
+                     "mov r5, r9\n\t"
+                     "mov r6, r10\n\t"
+                     "mov r7, r11\n\t"
+                     "stmia r0!, {r4-r7}\n\t"
+                     "subs r0, #32\n\t"
+                     "push {lr}\n\t"
+                     "bl ctx_switch\n\t"
+                     "pop {r1}\n\t"
+                     "mov lr, r1\n\t"
+                     "adds r0, #16\n\t"
+                     "ldmia r0!, {r4-r7}\n\t"
+                     "mov r8, r4\n\t"
+                     "mov r9, r5\n\t"
+                     "mov r10, r6\n\t"
+                     "mov r11, r7\n\t"
+                     "subs r0, #32\n\t"
+                     "ldmia r0!, {r4-r7}\n\t"
+                     "adds r0, #16\n\t"
+                     "msr psp, r0\n\t"
+                     "bx lr");
+}
+#else
 __attribute__((naked)) void pendsv_handler(void) {
     __asm__ volatile("mrs r0, psp\n\t"
                      "stmdb r0!, {r4-r11}\n\t"
@@ -54,6 +82,7 @@ __attribute__((naked)) void pendsv_handler(void) {
                      "msr psp, r0\n\t"
                      "bx lr");
 }
+#endif
 
 void systick_handler(void) { SCB_ICSR = ICSR_PENDSVSET; }
 

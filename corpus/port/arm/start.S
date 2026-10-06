@@ -33,15 +33,27 @@ _start:
     ldr r2, =_data_end
 1:  cmp r1, r2
     beq 2f
+#if __ARM_ARCH_6M__
+    ldr r3, [r0]
+    str r3, [r1]
+    adds r0, #4
+    adds r1, #4
+#else
     ldr r3, [r0], #4
     str r3, [r1], #4
+#endif
     b 1b
 2:  ldr r0, =_bss_start
     ldr r1, =_bss_end
     movs r2, #0
 3:  cmp r0, r1
     beq 4f
+#if __ARM_ARCH_6M__
+    str r2, [r0]
+    adds r0, #4
+#else
     str r2, [r0], #4
+#endif
     b 3b
 4:  bl main
     bl console_crc

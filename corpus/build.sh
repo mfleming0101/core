@@ -4,23 +4,26 @@ set -eu
 cd "$(dirname "$0")"
 zig=${ZIG:-zig}
 out=out
-mkdir -p "$out/arm" "$out/riscv" "$out/diag/arm" "$out/diag/riscv"
+mkdir -p "$out/arm" "$out/armv6m" "$out/riscv" "$out/diag/arm" "$out/diag/riscv"
 
 arm_flags="--target=thumb-freestanding-eabi -mcpu=cortex_m3"
+armv6m_flags="--target=thumb-freestanding-eabi -mcpu=cortex_m0plus"
 riscv_flags="--target=riscv32-freestanding-none -mcpu=generic_rv32+m+c"
 common="-Os -g0 -ffreestanding -nostdlib -fno-builtin -fno-unwind-tables -fno-asynchronous-unwind-tables -Wall -Iport"
 
 build() {
     arch=$1; into=$2; name=$3; shift 3
+    runtime=
     case $arch in
         arm)   flags="$arm_flags";   port=port/arm ;;
+        armv6m) flags="$armv6m_flags"; port=port/arm; runtime=-rtlib=compiler-rt ;;
         riscv) flags="$riscv_flags"; port=port/riscv ;;
     esac
 
-    $zig cc $flags $common -T "$port/link.ld" -o "$into/$name.elf" "$port/start.S" port/port.c "$@"
+    $zig cc $flags $common $runtime -T "$port/link.ld" -o "$into/$name.elf" "$port/start.S" port/port.c "$@"
 }
 
-for arch in arm riscv; do
+for arch in arm armv6m riscv; do
     build "$arch" "$out/$arch" irq_storm   -DROUNDS=3200000 src/irq_storm.c
     build "$arch" "$out/$arch" ctxswitch   -DROUNDS=310000  src/ctxswitch.c
     build "$arch" "$out/$arch" sleep       -DROUNDS=310000  src/sleep.c
@@ -41,4 +44,4 @@ for case in readonly mtvec_loop intc_unrouted pmp_refused; do
     build riscv "$out/diag/riscv" "$case" "diag/$case.c"
 done
 
-ls -l "$out/arm" "$out/riscv" "$out/diag/arm" "$out/diag/riscv"
+ls -l "$out/arm" "$out/armv6m" "$out/riscv" "$out/diag/arm" "$out/diag/riscv"

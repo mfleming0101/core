@@ -1,0 +1,9 @@
+.{
+    .{ .name = "irq_storm", .arch = "arm", .path = "out/armv6m/irq_storm.elf", .retired = 23536805, .stop = "breakpoint", .checksum = 0xe3b54fe7, .map = "maps/irq_storm-arm.zon" },
+    .{ .name = "ctxswitch", .arch = "arm", .path = "out/armv6m/ctxswitch.elf", .retired = 23297114, .stop = "breakpoint", .checksum = 0x3267967b, .map = "maps/arm-flat.zon" },
+    .{ .name = "sleep", .arch = "arm", .path = "out/armv6m/sleep.elf", .retired = 20466566, .stop = "breakpoint", .checksum = 0x5c2f3cf4, .map = "maps/timer-arm.zon", .halts = true },
+    .{ .name = "recover", .arch = "arm", .path = "out/armv6m/recover.elf", .retired = 21256541, .stop = "breakpoint", .checksum = 0x9b7ecca0, .map = "maps/arm-flat.zon" },
+    .{ .name = "semihost_io", .arch = "arm", .path = "out/armv6m/semihost_io.elf", .retired = 27185873, .stop = "breakpoint", .checksum = 0xc0088d03, .map = "maps/arm-flat.zon", .semihosting = true },
+    .{ .name = "devpoll", .arch = "arm", .path = "out/armv6m/devpoll.elf", .retired = 35206558, .stop = "breakpoint", .checksum = 0x6720ba50, .map = "maps/timer-arm.zon" },
+    .{ .name = "tickless", .arch = "arm", .path = "out/armv6m/tickless.elf", .retired = 21006566, .stop = "breakpoint", .checksum = 0xc05fd78b, .map = "maps/timer-arm.zon", .halts = true },
+}
