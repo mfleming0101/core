@@ -6,7 +6,7 @@ fn parcel(comptime Host: type, host: *Host, at: u32) ?u16 {
     return @truncate(host.access(at, .{ .kind = .fetch, .bytes = 2 }, 0) catch return null);
 }
 
-const ArmStop = enum(u5) { breakpoint, undefined_instruction, unimplemented, not_t32_state, fetch_fault, data_fault, unaligned_access, divide_by_zero, no_coprocessor, authentication_failure, not_branch_target, exception_return, unrecoverable_exception, secure_fault, fetch_violation, data_violation, tail_predication };
+const ArmStop = enum(u5) { breakpoint, undefined_instruction, unimplemented, not_t32_state, fetch_fault, data_fault, unaligned_access, divide_by_zero, no_coprocessor, authentication_failure, not_branch_target, exception_return, unrecoverable_exception, secure_fault, fetch_violation, data_violation, tail_predication, vector_catch };
 
 const RiscvStop = enum(u4) { breakpoint, unimplemented, unrecoverable_trap };
 

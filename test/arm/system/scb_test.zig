@@ -400,16 +400,19 @@ test "the System Control Block owns none of the MPU words, which have a block of
     }
 }
 
-test "the debug registers read zero and DEMCR keeps TRCENA, C1.6.2 to C1.6.5" {
+test "the debug registers read zero and DEMCR keeps TRCENA and the vector catch bits of its profile, v6-M C1.6.6, v7-M C1.6.5, v8-M DEMCR" {
     var block = of(.m4);
     for ([_]u32{ scb.dhcsr, 0xf4, 0xf8 }) |offset| {
         try std.testing.expectEqual(@as(u32, 0), block.readRegister(offset).?);
         try std.testing.expect(block.writeRegister(offset, 0xffff_ffff));
         try std.testing.expectEqual(@as(u32, 0), block.readRegister(offset).?);
     }
-    try std.testing.expectEqual(@as(u32, 0), block.readRegister(scb.demcr).?);
-    try std.testing.expect(block.writeRegister(scb.demcr, 0xffff_ffff));
-    try std.testing.expectEqual(scb.trcena, block.readRegister(scb.demcr).?);
+    inline for (.{ .{ .m0plus, 0x401 }, .{ .m23, 0x401 }, .{ .m4, 0x7f1 }, .{ .m33, 0xff1 } }) |row| {
+        var each = of(row[0]);
+        try std.testing.expectEqual(@as(u32, 0), each.readRegister(scb.demcr).?);
+        try std.testing.expect(each.writeRegister(scb.demcr, 0xffff_ffff));
+        try std.testing.expectEqual(scb.trcena | row[1], each.readRegister(scb.demcr).?);
+    }
 }
 
 fn expectFeatures(block: *scb.Scb, words: [14]?u32) !void {

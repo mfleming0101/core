@@ -77,6 +77,7 @@ pub fn explain(w: *std.Io.Writer, stop: Stop, ring: *const Ring, recap: u64, gro
         .tail_predication => try w.print("The code {x:0>4} at pc={x:0>8} ends a loop without tail predication while FPSCR.LTPSIZE says a tail-predicated one is running. The core locked up.\n", .{ code, r.pc }),
         .fetch_violation => try w.print("The instruction fetch from pc={x:0>8} reached memory the Memory Protection Unit does not let this code execute. The core locked up.\n", .{r.pc}),
         .data_violation => try w.print("The code {x:0>4} at pc={x:0>8} accessed {x:0>8}, which the Memory Protection Unit does not let it. The core locked up.\n", .{ code, r.pc, r.access orelse 0 }),
+        .vector_catch => try w.print("A DEMCR vector catch halted the core at pc={x:0>8}, before the first instruction of the handler.\n", .{r.pc}),
     }
     try family.recap(w, ring, recap, groups);
 }

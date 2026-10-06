@@ -215,6 +215,38 @@ pub const secureflt_ena: u32 = 1 << 19;
 
 /// The DEMCR bit that runs the DWT.
 pub const trcena: u32 = 1 << 24;
+/// The DEMCR bit that halts a core coming out of reset, Armv7-M C1.6.5.
+pub const vc_corereset: u32 = 1 << 0;
+/// The DEMCR bit that halts on a HardFault entry.
+pub const vc_harderr: u32 = 1 << 10;
+/// The DEMCR bit that halts on a SecureFault entry, v8-M DEMCR.
+pub const vc_sferr: u32 = 1 << 11;
+const vc_mmerr: u32 = 1 << 4;
+const vc_nocperr: u32 = 1 << 5;
+const vc_chkerr: u32 = 1 << 6;
+const vc_staterr: u32 = 1 << 7;
+const vc_buserr: u32 = 1 << 8;
+const vc_interr: u32 = 1 << 9;
+/// The DFSR bit recording a vector catch.
+pub const vcatch: u32 = 1 << 3;
+
+const catches = [_]struct { vc: u32, hfsr: u32 = 0, cfsr: u32 = 0 }{
+    .{ .vc = vc_harderr, .hfsr = forced },
+    .{ .vc = vc_interr, .hfsr = vecttbl, .cfsr = 0x0010_3838 },
+    .{ .vc = vc_mmerr, .cfsr = iaccviol | daccviol },
+    .{ .vc = vc_buserr, .cfsr = 0x0000_0700 },
+    .{ .vc = vc_nocperr, .cfsr = nocp },
+    .{ .vc = vc_staterr, .cfsr = undefinstr | invstate | invpc },
+    .{ .vc = vc_chkerr, .cfsr = unaligned | divbyzero },
+};
+
+/// Whether a set status bit has its DEMCR vector catch bit set, Armv7-M B1.5.
+pub fn caught(vc: u32, hard: u32, configurable: u32) bool {
+    for (catches) |c| {
+        if (vc & c.vc != 0 and (hard & c.hfsr != 0 or configurable & c.cfsr != 0)) return true;
+    }
+    return false;
+}
 
 const Slot = struct { name: []const u8, offset: u32, group: enum { shared, main, floating, cache, cache_id, armv8, sleep } };
 
@@ -300,7 +332,7 @@ fn valuesOf(comptime spec: core.Spec, comptime slot: Slot) struct { reset: u32, 
         shpr2 => .{ .reset = 0, .write_mask = lane << 24 },
         shpr3 => .{ .reset = 0, .write_mask = lane << 24 | lane << 16 | (if (main) lane else 0) },
         shcsr => .{ .reset = 0, .write_mask = if (!main) 0 else monitoract | memfaultena | busfaultena | usgfaultena | (if (spec.security) secureflt_ena else 0) },
-        demcr => .{ .reset = 0, .write_mask = trcena },
+        demcr => .{ .reset = 0, .write_mask = trcena | vc_corereset | vc_harderr | (if (main) vc_mmerr | vc_nocperr | vc_chkerr | vc_staterr | vc_buserr | vc_interr else 0) | (if (main and spec.security) vc_sferr else 0) },
         scr => .{ .reset = 0, .write_mask = 0x0000_0016 | (if (spec.security) sleepdeeps else 0) },
         mmfar, bfar => .{ .reset = 0, .write_mask = 0xffff_ffff },
         cpacr => .{ .reset = 0, .write_mask = if (spec.floating_point) 0x00f0_0000 else 0 },

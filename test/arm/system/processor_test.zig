@@ -2047,6 +2047,73 @@ test "SHCSR.BUSFAULTENA sends a BusFault to its own handler and reports it activ
     }
 }
 
+fn caughtBus(core: arm.Core, m: *Memory, enable: u32, debugging: bool, demcr: u32) Cpu {
+    var cpu = fast(core, m);
+    cpu.reset();
+    cpu.debug(debugging);
+    _ = cpu.poke(4, 0xe000_ed24, enable);
+    _ = cpu.poke(4, 0xe000_edfc, demcr);
+    return cpu;
+}
+
+test "with C_DEBUGEN and VC_BUSERR set, a BusFault halts the core before the first instruction of its handler and sets DFSR.VCATCH, B1.5 C1.6.1" {
+    var m = placed(&fault_vectors, &.{ 0x40, 0xa0, 0xc0 }, &.{ &.{ 0x21ff, 0x0609, 0x6008, 0xbe00 }, &.{0xbe00}, &.{0xbe00} });
+    var cpu = caughtBus(.m4, &m, scb_block.busfaultena, true, 1 << 8);
+    const ran = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(?arm.Stop, .vector_catch), ran.stop);
+    try std.testing.expectEqual(arm.Ended.stopped, ran.ended);
+    try std.testing.expectEqual(@as(u32, 0xc0), cpu.state.pc);
+    try std.testing.expectEqual(@as(u32, 5), cpu.state.xpsr & 0x1ff);
+    try std.testing.expectEqual(@as(?u32, 1 << 3), cpu.peek(4, 0xe000_ed30));
+    try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe000_edf0));
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 100 }).stop);
+    try std.testing.expectEqual(@as(u32, 0xc0), cpu.state.pc);
+}
+
+test "without C_DEBUGEN, or without the matching VC bit, a BusFault runs into its handler, and software cannot set C_DEBUGEN, C1.6.2" {
+    for ([_]struct { bool, u32 }{ .{ false, 1 << 8 }, .{ true, 1 << 10 } }) |row| {
+        var m = placed(&fault_vectors, &.{ 0x40, 0xa0, 0xc0 }, &.{ &.{ 0x21ff, 0x0609, 0x6008, 0xbe00 }, &.{0xbe00}, &.{0xbe00} });
+        var cpu = caughtBus(.m4, &m, scb_block.busfaultena, row[0], row[1]);
+        _ = cpu.poke(4, 0xe000_edf0, 0xa05f_0001);
+        try std.testing.expectEqual(@as(?u32, @intFromBool(row[0])), cpu.peek(4, 0xe000_edf0));
+        try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 100 }).stop);
+        try std.testing.expectEqual(@as(?u32, 0), cpu.peek(4, 0xe000_ed30));
+    }
+}
+
+test "a BusFault forced to HardFault is caught by VC_HARDERR through HFSR.FORCED, and not by VC_BUSERR, B1.5" {
+    for ([_]struct { u32, ?arm.Stop }{ .{ 1 << 10, .vector_catch }, .{ 1 << 8, .breakpoint } }) |row| {
+        var m = placed(&fault_vectors, &.{ 0x40, 0xa0, 0xc0 }, &.{ &.{ 0x21ff, 0x0609, 0x6008, 0xbe00 }, &.{0xbe00}, &.{0xbe00} });
+        var cpu = caughtBus(.m4, &m, 0, true, row[0]);
+        try std.testing.expectEqual(row[1], cpu.run(.{ .instructions = 100 }).stop);
+        try std.testing.expectEqual(@as(u32, 3), cpu.state.xpsr & 0x1ff);
+    }
+}
+
+test "on the M0+, VC_HARDERR catches any HardFault, as Armv6-M keeps no HFSR, C1.6.6" {
+    var m = placed(&fault_vectors, &.{ 0x40, 0xa0 }, &.{ &.{ 0x21ff, 0x0609, 0x6008, 0xbe00 }, &.{0xbe00} });
+    var cpu = caughtBus(.m0plus, &m, 0, true, 1 << 10);
+    try std.testing.expectEqual(@as(?arm.Stop, .vector_catch), cpu.run(.{ .instructions = 100 }).stop);
+    try std.testing.expectEqual(@as(u32, 0xa0), cpu.state.pc);
+}
+
+test "with C_DEBUGEN and VC_CORERESET set, SYSRESETREQ halts the core at its reset entry, and the reset keeps DEMCR, C1.6.5" {
+    var m = loaded();
+    var cpu = fast(.m4, &m);
+    cpu.reset();
+    const entry = cpu.state.pc;
+    cpu.debug(true);
+    _ = cpu.poke(4, 0xe000_edfc, 1);
+    _ = cpu.run(.{ .instructions = 1 });
+    _ = cpu.poke(4, 0xe000_ed0c, 0x05fa_0004);
+    const ran = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(?arm.Stop, .vector_catch), ran.stop);
+    try std.testing.expectEqual(@as(u64, 0), ran.instructions);
+    try std.testing.expectEqual(entry, cpu.state.pc);
+    try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe000_edfc));
+    try std.testing.expectEqual(@as(?u32, 1), cpu.peek(4, 0xe000_edf0));
+}
+
 test "an enabled UsageFault that cannot preempt the current execution priority is forced to HardFault, B1.5.4 B3.2.10" {
     for ([_]u32{ 0x00, 0x20 }) |handler| {
         var m = placed(&fault_vectors, &.{ 0x40, 0xa0, 0xe0 }, &.{ &.{ 0x2010, 0xf380, 0x8811, 0x2007, 0x2100, 0x2299, 0xfbb0, 0xf2f1, 0xbe00 }, &.{0xbe00}, &.{0xbe00} });

@@ -390,7 +390,8 @@ pub fn Processor(comptime options: Options) type {
             event: bool = false,
             for_event: bool = false,
             nocp_secure: bool = false,
-            _: u3 = 0,
+            debugging: bool = false,
+            _: u2 = 0,
         };
 
         const stopped: Set = 1 << 0;
@@ -613,6 +614,8 @@ pub fn Processor(comptime options: Options) type {
 
         /// Returns a running core to its reset state, which is also what SYSRESETREQ does.
         pub fn reset(self: *Self) void {
+            const debugging = self.flags.debugging;
+            const catching = self.scb.get(scb_block.demcr) & ~scb_block.trcena;
             const before = self.impdef;
             const address = self.ras_address;
             const model, const timing, const pipeline = .{ self.model, self.timing, self.pipeline };
@@ -623,6 +626,33 @@ pub fn Processor(comptime options: Options) type {
             self.ras_address = address;
             self.model, self.timing = .{ model, timing };
             if (Issuing != void) self.pipeline.issuing = pipeline.issuing;
+            self.flags.debugging = debugging;
+            self.scb.put(scb_block.demcr, catching);
+            if (debugging and catching & scb_block.vc_corereset != 0) self.catchVector();
+        }
+
+        /// The DAP's write to DHCSR.C_DEBUGEN, which software writes cannot reach, Armv7-M C1.6.2.
+        pub fn debug(self: *Self, on: bool) void {
+            self.flags.debugging = on;
+        }
+
+        fn caught(self: *Self, i: Index) bool {
+            const demcr = self.scb.get(scb_block.demcr);
+            const hfsr = self.scbOf(true).get(scb_block.hfsr) | self.scbOf(false).get(scb_block.hfsr);
+            const cfsr = self.scbOf(true).get(scb_block.cfsr) | self.scbOf(false).get(scb_block.cfsr);
+            return switch (numberOf(i)) {
+                hard_fault => if (self.architecture().main()) scb_block.caught(demcr, hfsr, 0) else demcr & scb_block.vc_harderr != 0,
+                mem_manage => scb_block.caught(demcr, 0, cfsr & 0xff),
+                bus_fault => scb_block.caught(demcr, 0, cfsr & 0xff00),
+                usage_fault => scb_block.caught(demcr, 0, cfsr & 0xffff_0000),
+                secure_fault => demcr & scb_block.vc_sferr != 0 and self.sau.status != 0,
+                else => false,
+            };
+        }
+
+        fn catchVector(self: *Self) void {
+            self.scb.put(scb_block.dfsr, self.scb.get(scb_block.dfsr) | scb_block.vcatch);
+            self.stop = .vector_catch;
         }
 
         fn built(self: *const Self) core.Part {
@@ -1452,6 +1482,7 @@ pub fn Processor(comptime options: Options) type {
             const ends = bound_due | if (limit.asleep) asleep_due else 0;
             if (self.due & bound_due != 0) return .{ .instructions = 0, .cycles = 0, .latency = 0, .stop = null, .ended = .deadline };
             self.leaveBreakpoint();
+            if (self.stop == .vector_catch) self.stop = null;
             outer: while (self.instructions - instructions < limit.instructions) {
                 if (builtin.mode == .Debug) self.agrees();
                 if (self.due != 0) {
@@ -2068,6 +2099,7 @@ pub fn Processor(comptime options: Options) type {
                     else => null,
                 }),
                 .scb => switch (address - ppb.scb_base) {
+                    scb_block.dhcsr => return answered(into, @intFromBool(self.flags.debugging)),
                     scb_block.icsr => return answered(into, self.readIcsr(self.spec.security and !self.state.secure)),
                     ras_block.rfsr => return answered(into, self.readRfsr()),
                     scb_block.shcsr => return answered(into, self.readShcsr(self.spec.security and !self.state.secure)),
@@ -2702,6 +2734,7 @@ pub fn Processor(comptime options: Options) type {
                 .number = if (numberOf(i) >= first_interrupt) numberOf(i) - first_interrupt else numberOf(i),
                 .latency = self.spec.entry,
             });
+            if (self.flags.debugging and self.caught(i)) self.catchVector();
             return null;
         }
 
