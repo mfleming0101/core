@@ -307,6 +307,7 @@ fn csrr(number: csr.Protection, destination: u5) u32 {
 fn started(memory: *Memory) Cpu {
     var cpu = Cpu.init(memory, .esp32c3, .{});
     cpu.reset();
+    cpu.state.pc = flash_base;
     std.mem.writeInt(u32, memory.ram[0..4], ebreak, .little);
     cpu.state.csr.mtvec = ram_base | 1;
     return cpu;

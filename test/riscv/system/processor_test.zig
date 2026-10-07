@@ -107,13 +107,15 @@ fn grantFlash(cpu: *Cpu) void {
 fn started(memory: *Memory, records: []riscv.trace.Record) Cpu {
     var cpu = Cpu.init(memory, .esp32c3, riscv.trace.Ring.init(records) catch unreachable);
     cpu.reset();
+    cpu.state.pc = flash_base;
     return cpu;
 }
 
-test "reset leaves the program counter in the flash window a raw image runs from, C3 TRM 3.3" {
+test "reset leaves the program counter on the first word of internal ROM 0, where an ESP32-C3 halted at reset stands, C3 TRM Table 3.3-1" {
     var memory: Memory = .{};
-    const cpu = started(&memory, &.{});
-    try std.testing.expectEqual(flash_base, cpu.state.pc);
+    var cpu = Cpu.init(&memory, .esp32c3, .{});
+    cpu.reset();
+    try std.testing.expectEqual(@as(u32, 0x4000_0000), cpu.state.pc);
     try std.testing.expectEqual(@as(u64, 0), cpu.instructions);
     try std.testing.expectEqual(@as(?riscv.Stop, null), cpu.stop);
 }
@@ -653,6 +655,7 @@ fn at(cpu: *const Board, offset: u32) u32 {
 fn armed(memory: *Regions, records: []riscv.trace.Record) Board {
     var cpu = Board.init(memory, .esp32c3, riscv.trace.Ring.init(records) catch unreachable);
     cpu.reset();
+    cpu.state.pc = flash_base;
     cpu.state.csr.mtvec = vectors | 1;
     return cpu;
 }
@@ -1036,6 +1039,7 @@ const csrw_mie_t0: u32 = 0x3042_9073;
 fn startedAs(memory: *Memory, c: riscv.Core, records: []riscv.trace.Record) Cpu {
     var cpu = Cpu.init(memory, c, riscv.trace.Ring.init(records) catch unreachable);
     cpu.reset();
+    cpu.state.pc = flash_base;
     return cpu;
 }
 
@@ -1197,6 +1201,7 @@ test "mie and mip are CSRs of the C6 and numbers the C3 has no register for, C6 
 fn armedAs(c: riscv.Core, memory: *Regions, records: []riscv.trace.Record) Board {
     var cpu = Board.init(memory, c, riscv.trace.Ring.init(records) catch unreachable);
     cpu.reset();
+    cpu.state.pc = flash_base;
     cpu.state.csr.mtvec = vectors | 1;
     return cpu;
 }

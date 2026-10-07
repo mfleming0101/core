@@ -71,7 +71,7 @@ pub fn spec(comptime core: Core) Spec {
         .esp32c3 => .{
             .core = .esp32c3,
             .groups = decode.only(&.{ .rv32i, .m, .c, .zicsr }),
-            .reset_pc = 0x4200_0000,
+            .reset_pc = 0x4000_0000,
             .flat = .{ .flash_base = 0x4200_0000, .ram_base = 0x3FC8_0000 },
             .model = esp32c3_csr,
             .intc = intc.esp32c3,
@@ -79,6 +79,7 @@ pub fn spec(comptime core: Core) Spec {
         },
         .esp32c6 => like(.esp32c3, .{
             .groups = decode.only(&.{ .rv32i, .m, .a, .c, .zicsr }),
+            .reset_pc = 0x4200_0000,
             .flat = Flat{ .flash_base = 0x4200_0000, .ram_base = 0x4080_0000 },
             .model = esp32c6_csr,
             .intc = intc.esp32c6,
