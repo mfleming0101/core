@@ -180,6 +180,12 @@ const sp_bit: u16 = 1 << 13;
 const store_lists: std.EnumSet(Class) = .initMany(&.{ .store_multiple, .push });
 const load_lists: std.EnumSet(Class) = .initMany(&.{ .load_multiple, .pop, .pop_pc });
 
+const Multiple = struct { valid: bool = false, start: u64 = 0, pc: u32 = 0, sp: u32 = 0, low: [8]u32 = @splat(0) };
+
+fn multiple(code: u32) bool {
+    return code >> 12 == 0xc or code & 0xf600 == 0xb400;
+}
+
 fn shifts(code: u32) bool {
     return code >> 25 == 0x75 and code & 0x70f0 != 0;
 }
@@ -326,6 +332,10 @@ pub fn Processor(comptime options: Options) type {
         break :blk most;
     };
     const Nvic = nvic_block.Nvic(lines);
+    const abandoning = for (options.cores) |c| {
+        if (c == .m0 or c == .m0plus) break true;
+    } else false;
+    const Kept = if (abandoning) Multiple else void;
     const Waits = if (options.Waits == void) void else struct { hook: options.Waits, word: u32 = 1, next: u32 = 1, spec: bool = false, l1: if (M7 == void) void else l1_block.L1, pfu: if (M7 == void) void else pfu_block.Stream = if (M7 == void) {} else .{} };
     return struct {
         const Self = @This();
@@ -413,6 +423,8 @@ pub fn Processor(comptime options: Options) type {
 
         const Vector = struct { n: Index = 0, at: u32 = 0, target: u32 = 0, from: u32 = 0 };
 
+        const Arrival = if (abandoning) struct { at: u64, set: Set } else void;
+
         spec: core.Spec,
         model: arch_step.Model,
         timing: core.Timing,
@@ -462,6 +474,8 @@ pub fn Processor(comptime options: Options) type {
         taken: ?Taken,
         vector: Vector,
         waits: Waits,
+        kept: Kept,
+        arrival: Arrival,
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -542,6 +556,8 @@ pub fn Processor(comptime options: Options) type {
                 .taken = null,
                 .vector = .{},
                 .waits = if (Waits == void) {} else .{ .hook = undefined, .l1 = if (M7 == void) {} else .init(part) },
+                .kept = if (abandoning) .{} else {},
+                .arrival = if (abandoning) .{ .at = 0, .set = 0 } else {},
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -798,6 +814,7 @@ pub fn Processor(comptime options: Options) type {
             self.restand();
             if (tracing) self.forget();
             const pc = self.state.pc;
+            if (abandoning) self.keep(pc);
             const conditional = self.state.inIt();
             if (Waits != void) {
                 self.cycles += self.fetchWord(pc & ~@as(u32, 3));
@@ -815,8 +832,25 @@ pub fn Processor(comptime options: Options) type {
                 if (Waits != void) self.cycles += self.fetchedAfter(pc, r, cost);
                 self.charge(cost);
             }
+            if (abandoning) self.kept.valid = r.executed and multiple(r.code) and self.due & returned_due == 0;
             self.stop = if (r.halted) self.settle(r.stop) else null;
             return r;
+        }
+
+        inline fn keep(self: *Self, pc: u32) void {
+            self.kept = .{ .start = self.cycles, .pc = pc, .sp = self.state.sp(), .low = self.state.r[0..8].* };
+        }
+
+        fn abandon(self: *Self, n: Index) u64 {
+            const kept = self.kept;
+            self.kept.valid = false;
+            const at = self.arrival.at;
+            if (!kept.valid or (self.spec.core != .m0 and self.spec.core != .m0plus)) return 0;
+            if (self.arrival.set & one(n) == 0 or at <= kept.start or at >= self.cycles) return 0;
+            self.state.r[0..8].* = kept.low;
+            (if (self.state.control & State.control_spsel != 0) &self.state.psp else &self.state.msp).* = kept.sp;
+            self.state.branchTo(kept.pc | 1);
+            return self.cycles - at;
         }
 
         fn fetchWord(self: *Self, word: u32) u32 {
@@ -1394,12 +1428,14 @@ pub fn Processor(comptime options: Options) type {
         noinline fn service(self: *Self) void {
             const elapsed: u32 = @intCast(@min(self.cycles - self.serviced, std.math.maxInt(u32)));
             const before = self.serviced;
+            const was = self.pending;
             self.serviced = self.cycles;
             if (self.systick.advance(before, elapsed)) self.raise(if (self.spec.security and self.flags.sttns) systick + ns_base else systick);
             if (self.timerNs()) |timer| {
                 if (timer.advance(before, elapsed)) self.raise(systick + ns_base);
             }
             if (self.memory.interrupts()) |raised| self.pendAll(raised);
+            if (abandoning) self.arrival = .{ .at = @min(self.attention, self.cycles), .set = self.pending & ~was };
             self.schedule();
             if (self.cycles >= self.deadline) self.due |= bound_due;
         }
@@ -1431,6 +1467,12 @@ pub fn Processor(comptime options: Options) type {
             self.pended();
             self.due = (self.due & kept_due) | summary(self.pending);
             if (self.due & asleep_due != 0 and self.woken()) self.due &= ~asleep_due;
+        }
+
+        /// Raises lines that arrived at cycle at, so an M0 or M0+ abandons a load or store multiple they interrupt.
+        pub fn pendAllAt(self: *Self, raised: Lines, at: u64) void {
+            if (abandoning) self.arrival = .{ .at = at, .set = @as(Set, raised) << first_interrupt };
+            self.pendAll(raised);
         }
 
         /// Takes a WFI or WFE, unless an exception is already asking or an event is standing.
@@ -2580,8 +2622,9 @@ pub fn Processor(comptime options: Options) type {
             if (next.priority < self.executionPriority()) {
                 self.pending &= ~one(next.n);
                 self.flags.escalated = false;
+                const early = if (abandoning) self.abandon(next.n) else 0;
                 _ = self.enter(next.n);
-                self.delay(self.spec.entry);
+                self.delay(@intCast(@as(u64, self.spec.entry) -| early));
                 return true;
             }
             if (self.flags.escalated and numberOf(next.n) == hard_fault) {

@@ -1137,6 +1137,113 @@ test "the step that enters an exception retires no instruction and reports the e
     try std.testing.expectEqual(@as(u32, 0x60), cpu.state.pc);
 }
 
+const multiple_vectors = [_]u32{ 0xff8, 0x101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x141, 0x141 };
+
+fn multipleAt(code: u16) Memory {
+    var m = placed(&multiple_vectors, &.{ 0x100, 0x120, 0x140 }, &.{ &.{ code, 0xbe00 }, &.{0xbe00}, &.{0x4770} });
+    for (0..8) |i| std.mem.writeInt(u32, m.bytes[0x200 + 4 * i ..][0..4], 0x10 + @as(u32, @intCast(i)), .little);
+    std.mem.writeInt(u32, m.bytes[0xff8..][0..4], 0x1234, .little);
+    std.mem.writeInt(u32, m.bytes[0xffc..][0..4], 0x121, .little);
+    return m;
+}
+
+const Interrupted = struct { cpu: Cpu, arrival: u64, end: u64 };
+
+fn interruptAt(core: arm.Core, m: *Memory, phase: u64) Interrupted {
+    var cpu = fast(core, m);
+    cpu.reset();
+    _ = cpu.poke(4, 0xe000_e100, 1);
+    cpu.state.r[0] = 0x200;
+    for (1..4) |i| cpu.state.r[i] = 0xa0 + @as(u32, @intCast(i));
+    const start = cpu.cycles;
+    const end = start + cpu.step().charged;
+    cpu.pendAllAt(1, start + phase);
+    _ = cpu.step();
+    return .{ .cpu = cpu, .arrival = start + phase, .end = end };
+}
+
+fn expectRestarted(cpu: *Cpu, arrival: u64) !void {
+    try std.testing.expectEqual(arrival + 15, cpu.cycles);
+    try std.testing.expectEqual(@as(u32, 0x140), cpu.state.pc);
+    try std.testing.expectEqual(@as(u32, 0xfd8), cpu.state.msp);
+    try std.testing.expectEqual(@as(?u32, 0x200), cpu.peek(4, 0xfd8));
+    try std.testing.expectEqual(@as(?u32, 0x100), cpu.peek(4, 0xfd8 + 24));
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+}
+
+test "the M0+ abandons an LDM for an interrupt arriving inside it, enters 15 cycles after the arrival at every phase, and reloads from the restored base on return, M0+ TRM 3.6.1, v6-M B1.5.10" {
+    for (1..9) |phase| {
+        var m = multipleAt(0xc8ff);
+        var t = interruptAt(.m0plus, &m, phase);
+        try std.testing.expectEqual(t.arrival - phase + 9, t.end);
+        try expectRestarted(&t.cpu, t.arrival);
+        try std.testing.expectEqual([_]u32{ 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17 }, t.cpu.state.r[0..8].*);
+        try std.testing.expectEqual(@as(u32, 0xff8), t.cpu.state.msp);
+        try std.testing.expectEqual(@as(u32, 0x102), t.cpu.state.pc);
+    }
+}
+
+test "the M0+ abandons an STM, a PUSH and a POP that loads PC for an interrupt arriving inside them, returns to the instruction and repeats every access, v6-M B1.5.10" {
+    for ([_]u16{ 0xc00e, 0xb40e, 0xbd02 }) |code| {
+        var m = multipleAt(code);
+        const end = interruptAt(.m0plus, &m, 0).end;
+        for (1..end) |phase| {
+            m = multipleAt(code);
+            var t = interruptAt(.m0plus, &m, phase);
+            try expectRestarted(&t.cpu, t.arrival);
+            switch (code) {
+                0xc00e => {
+                    try std.testing.expectEqual(@as(u32, 0x20c), t.cpu.state.r[0]);
+                    try std.testing.expectEqual([_]?u32{ 0xa1, 0xa2, 0xa3 }, [_]?u32{ t.cpu.peek(4, 0x200), t.cpu.peek(4, 0x204), t.cpu.peek(4, 0x208) });
+                },
+                0xb40e => {
+                    try std.testing.expectEqual(@as(u32, 0xfec), t.cpu.state.msp);
+                    try std.testing.expectEqual([_]?u32{ 0xa1, 0xa2, 0xa3 }, [_]?u32{ t.cpu.peek(4, 0xfec), t.cpu.peek(4, 0xff0), t.cpu.peek(4, 0xff4) });
+                },
+                else => {
+                    try std.testing.expectEqual(@as(u32, 0x1234), t.cpu.state.r[1]);
+                    try std.testing.expectEqual(@as(u32, 0x1000), t.cpu.state.msp);
+                    try std.testing.expectEqual(@as(u32, 0x120), t.cpu.state.pc);
+                },
+            }
+        }
+    }
+}
+
+test "an interrupt arriving as an M0+ LDM starts or ends, or inside a two-cycle LDR, waits for the instruction and enters 15 cycles after it, v6-M B1.5.10" {
+    for ([_]struct { code: u16, phase: u64 }{ .{ .code = 0xc8ff, .phase = 0 }, .{ .code = 0xc8ff, .phase = 9 }, .{ .code = 0x6801, .phase = 1 } }) |c| {
+        var m = multipleAt(c.code);
+        var t = interruptAt(.m0plus, &m, c.phase);
+        try std.testing.expectEqual(t.end + 15, t.cpu.cycles);
+        try std.testing.expectEqual(@as(u32, 0x140), t.cpu.state.pc);
+        try std.testing.expectEqual(@as(?u32, 0x102), t.cpu.peek(4, t.cpu.state.msp + 24));
+    }
+}
+
+test "the M1, M23 and M4 finish an LDM an interrupt arrives inside and enter after it" {
+    for ([_]arm.Core{ .m1, .m23, .m4 }) |core| {
+        var m = multipleAt(0xc8ff);
+        var t = interruptAt(core, &m, 4);
+        try std.testing.expectEqual(t.end + t.cpu.spec.entry, t.cpu.cycles);
+        try std.testing.expectEqual(@as(u32, 0x140), t.cpu.state.pc);
+        try std.testing.expectEqual(@as(?u32, 0x102), t.cpu.peek(4, t.cpu.state.msp + 24));
+    }
+}
+
+test "a SysTick wrap inside an M0+ LDM abandons it, the handler starting 15 cycles after the wrap, v6-M B1.5.10 B3.3" {
+    var m = multipleAt(0xc8ff);
+    var cpu = fast(.m0plus, &m);
+    cpu.reset();
+    cpu.state.r[0] = 0x200;
+    _ = cpu.poke(4, 0xe000_e014, 3);
+    _ = cpu.poke(4, 0xe000_e010, cortex_systick.enable | cortex_systick.tickint);
+    try std.testing.expectEqual(@as(u64, 9), cpu.run(.{ .instructions = 1 }).cycles);
+    _ = cpu.poke(4, 0xe000_e010, 0);
+    _ = cpu.step();
+    try expectRestarted(&cpu, 4);
+    try std.testing.expectEqual(@as(u32, 0x10), cpu.state.r[0]);
+}
+
 test "the trace shows an exception entry and return as lines without a code that carry the registers they changed" {
     var m = placed(&svc_vectors, &.{ 0x40, 0x60 }, &.{
         &.{ 0xdf00, 0xbe00 },
