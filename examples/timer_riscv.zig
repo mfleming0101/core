@@ -21,6 +21,7 @@ test "the same timer on interrupt matrix source 5 interrupts an ESP32-C3 five ti
     var memory = try core.memory.Regions.adopt(&entries);
     try core.memory.elf.load(firmware, &memory);
     var cpu = Cpu.init(&memory, .esp32c3, .{});
+    cpu.state.pc = flat.flash_base;
 
     const ran = cpu.run(.{ .instructions = 100_000 });
 

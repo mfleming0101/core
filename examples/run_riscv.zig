@@ -28,6 +28,7 @@ var board: Board = .{};
 test "an ESP32-C3 runs the same CRC-32 firmware to its EBREAK and leaves the checksum of \"123456789\" in a0" {
     try board.load();
     var cpu = Cpu.init(&board.memory, .esp32c3, .{});
+    cpu.state.pc = flat.flash_base;
 
     const ran = cpu.run(.{ .instructions = 10_000 });
 
