@@ -526,7 +526,7 @@ pub fn Processor(comptime options: Options) type {
                 const source: regions.Line = @intCast(@ctz(held));
                 if (self.intc.routed(source) != null) continue;
                 try w.print("The interrupt matrix source {d} is asserted and its MAP_REG at {x:0>8} holds zero, so it is routed nowhere and CPU_INT_ENABLE={x:0>8} cannot let it through.\n", .{
-                    source, self.intc.layout.matrix_base +% 4 * @as(u32, source), self.intc.enabled,
+                    source, self.intc.layout.matrix_base +% 4 * @as(u32, source), self.intc.active().enabled,
                 });
             }
         }
@@ -594,6 +594,10 @@ pub fn Processor(comptime options: Options) type {
             for ([_]u32{ self.intc.layout.matrix_base, self.intc.layout.control_base }) |base| {
                 regions.narrow(address, &low, &high, base);
                 regions.narrow(address, &low, &high, @as(u64, base) + intc_block.size);
+            }
+            if (self.intc.layout.local) |local| {
+                regions.narrow(address, &low, &high, local.base);
+                regions.narrow(address, &low, &high, @as(u64, local.base) + intc_block.local_size);
             }
             if (self.intc.region(address) != .memory) backed = false;
             if (backed and !self.unguarded) backed = self.guarded(address, &low, &high, kind);

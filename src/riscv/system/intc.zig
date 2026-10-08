@@ -3,7 +3,8 @@
 //! registers beside it, and on the C6 the software registers a program raises its own source
 //! through. It keeps an edge latch and a level word and ranks the unmasked ids by priority, so
 //! the processor asks it once for whichever interrupt to take. The Layout is the part's
-//! addresses; the registers themselves are the same on both.
+//! addresses. The C6 adds PLIC_MX, a core-local copy of the controller registers, and a word
+//! choosing which copy drives the hart.
 const regions = @import("../../memory/regions.zig");
 
 /// The most peripheral interrupt sources either part has, which is the C6's, C6 TRM 10.3.
@@ -14,6 +15,23 @@ pub const ids = 32;
 
 /// How wide each of the two register windows is.
 pub const size: u32 = 0x1000;
+
+/// How many bytes the C6's core-local copy answers over.
+pub const local_size: u32 = 0x400;
+
+/// Where a copy of the controller registers sits and where each falls in it.
+pub const Window = struct {
+    base: u32,
+    enable: u32,
+    kinds: u32,
+    clear: u32,
+    status: u32,
+    priority: u32,
+    priority_first: u8,
+    threshold: u32,
+    threshold_mask: u32,
+    select: ?u32,
+};
 
 /// Where one part puts its matrix and controller registers, and which ids it can raise.
 pub const Layout = struct {
@@ -34,6 +52,8 @@ pub const Layout = struct {
     software_source: u8,
 
     zero_masks: bool,
+
+    local: ?Window = null,
 };
 
 /// The C3: 62 sources, one window holding both register groups, priority zero masks, C3 TRM 8.4.
@@ -56,7 +76,7 @@ pub const esp32c3: Layout = .{
     .zero_masks = true,
 };
 
-/// The C6: 77 sources, matrix and priority windows apart, ids 1, 2, 5, 6 and 8 up, C6 TRM 10.3.3.
+/// The C6: 77 sources, ids 1, 2, 5, 6 and 8 up, C6 TRM 10.3.3, and PLIC_MX, per ESP-IDF plic_reg.h.
 pub const esp32c6: Layout = .{
     .sources = 77,
     .matrix_base = 0x6001_0000,
@@ -74,10 +94,20 @@ pub const esp32c6: Layout = .{
     .software_count = 4,
     .software_source = 22,
     .zero_masks = false,
+    .local = .{ .base = 0x2000_1000, .enable = 0x0000, .kinds = 0x0004, .clear = 0x0008, .status = 0x000c, .priority = 0x0010, .priority_first = 0, .threshold = 0x0090, .threshold_mask = 0xf, .select = 0x03fc },
 };
 
 /// Whether an address falls in one of the two register windows or in ordinary memory.
 pub const Region = enum { memory, interrupt };
+
+/// One copy of the controller registers.
+pub const Bank = struct {
+    enabled: u32 = 0,
+    kinds: u32 = 0,
+    cleared: u32 = 0,
+    priorities: [ids]u4 = @splat(0),
+    threshold: u8 = 0,
+};
 
 /// The interrupt matrix and controller: the routing table, the registers and the two latches.
 pub const Intc = struct {
@@ -87,11 +117,8 @@ pub const Intc = struct {
 
     map: [sources]u5 = @splat(0),
 
-    enabled: u32 = 0,
-    kinds: u32 = 0,
-    cleared: u32 = 0,
-    priorities: [ids]u4 = @splat(0),
-    threshold: u8 = 0,
+    banks: [2]Bank = @splat(.{}),
+    selected: u1 = 0,
 
     software: u4 = 0,
 
@@ -107,7 +134,20 @@ pub const Intc = struct {
     pub fn region(self: *const Self, address: u32) Region {
         if (address -% self.layout.matrix_base < size) return .interrupt;
         if (address -% self.layout.control_base < size) return .interrupt;
+        if (self.layout.local) |local| if (address -% local.base < local_size) return .interrupt;
         return .memory;
+    }
+
+    /// The copy of the registers driving the hart: PLIC_MX once its select word holds one.
+    pub fn active(self: *const Self) *const Bank {
+        return &self.banks[self.selected];
+    }
+
+    fn windowOf(self: *const Self, address: u32) ?struct { Window, u1 } {
+        const l = self.layout;
+        if (l.local) |local| if (address -% local.base < local_size) return .{ local, 1 };
+        if (address -% l.control_base >= size) return null;
+        return .{ .{ .base = l.control_base, .enable = l.enable, .kinds = l.kinds, .clear = l.clear, .status = l.status, .priority = l.priority, .priority_first = l.priority_first, .threshold = l.threshold, .threshold_mask = l.threshold_mask, .select = null }, 0 };
     }
 
     fn mapped(self: *const Self, address: u32) ?usize {
@@ -116,10 +156,10 @@ pub const Intc = struct {
         return offset / 4;
     }
 
-    fn prioritised(self: *const Self, address: u32) ?usize {
-        const offset = address -% self.layout.control_base -% self.layout.priority;
-        if (offset >= 4 * (ids - @as(u32, self.layout.priority_first))) return null;
-        return offset / 4 + self.layout.priority_first;
+    fn prioritised(window: Window, offset: u32) ?usize {
+        const at = offset -% window.priority;
+        if (at >= 4 * (ids - @as(u32, window.priority_first))) return null;
+        return at / 4 + window.priority_first;
     }
 
     fn softwareAt(self: *const Self, address: u32) ?u2 {
@@ -179,7 +219,8 @@ pub const Intc = struct {
     /// The ids asking for attention: the latch where an id is edge-typed, the level where it is not.
     pub fn pending(self: *const Self) u32 {
         const level = self.levels | self.route(self.asserting());
-        return (self.latched & self.kinds) | (level & ~self.kinds);
+        const kinds = self.active().kinds;
+        return (self.latched & kinds) | (level & ~kinds);
     }
 
     /// The pending ids that are also unmasked, which is what the status register reads as.
@@ -196,9 +237,10 @@ pub const Intc = struct {
 
     /// Whether an id is enabled, is an external one, and has priority at or above the threshold.
     pub fn unmasked(self: *const Self, id: u5) bool {
-        if ((self.enabled & self.layout.external) >> id & 1 == 0) return false;
-        const priority = self.priorities[id];
-        return (priority != 0 or !self.layout.zero_masks) and @as(u8, priority) >= self.threshold;
+        const bank = self.active();
+        if ((bank.enabled & self.layout.external) >> id & 1 == 0) return false;
+        const priority = bank.priorities[id];
+        return (priority != 0 or !self.layout.zero_masks) and @as(u8, priority) >= bank.threshold;
     }
 
     /// The highest-priority id asking within the gate, or null if none is.
@@ -209,8 +251,8 @@ pub const Intc = struct {
         while (rest != 0) {
             const id: u5 = @intCast(@ctz(rest));
             rest &= rest - 1;
-            if (chosen == null or self.priorities[id] > top) {
-                top = self.priorities[id];
+            if (chosen == null or self.active().priorities[id] > top) {
+                top = self.active().priorities[id];
                 chosen = id;
             }
         }
@@ -220,14 +262,17 @@ pub const Intc = struct {
     /// The word a register read in either window answers; an address with no register reads zero.
     pub fn readRegister(self: *const Self, address: u32) u32 {
         if (self.mapped(address)) |source| return self.map[source];
-        if (self.prioritised(address)) |id| return self.priorities[id];
         if (self.softwareAt(address)) |i| return @intFromBool(self.software & bitOf(i) != 0);
-        const offset = address -% self.layout.control_base;
-        if (offset == self.layout.enable) return self.enabled;
-        if (offset == self.layout.kinds) return self.kinds;
-        if (offset == self.layout.clear) return self.cleared;
-        if (offset == self.layout.status) return self.status();
-        if (offset == self.layout.threshold) return self.threshold;
+        const window, const which = self.windowOf(address) orelse return 0;
+        const bank = &self.banks[which];
+        const offset = address -% window.base;
+        if (prioritised(window, offset)) |id| return bank.priorities[id];
+        if (offset == window.enable) return bank.enabled;
+        if (offset == window.kinds) return bank.kinds;
+        if (offset == window.clear) return bank.cleared;
+        if (offset == window.status) return self.status();
+        if (offset == window.threshold) return bank.threshold;
+        if (offset == window.select) return self.selected;
         return 0;
     }
 
@@ -235,10 +280,6 @@ pub const Intc = struct {
     pub fn writeRegister(self: *Self, address: u32, value: u32) void {
         if (self.mapped(address)) |source| {
             self.map[source] = @truncate(value);
-            return;
-        }
-        if (self.prioritised(address)) |id| {
-            self.priorities[id] = @truncate(value);
             return;
         }
         if (self.softwareAt(address)) |i| {
@@ -251,16 +292,22 @@ pub const Intc = struct {
             self.latched |= self.route(line(self.layout.software_source + @as(usize, i)));
             return;
         }
-        const offset = address -% self.layout.control_base;
-        if (offset == self.layout.enable) {
-            self.enabled = value;
-        } else if (offset == self.layout.kinds) {
-            self.kinds = value;
-        } else if (offset == self.layout.clear) {
-            self.cleared = value;
+        const window, const which = self.windowOf(address) orelse return;
+        const bank = &self.banks[which];
+        const offset = address -% window.base;
+        if (prioritised(window, offset)) |id| {
+            bank.priorities[id] = @truncate(value);
+        } else if (offset == window.enable) {
+            bank.enabled = value;
+        } else if (offset == window.kinds) {
+            bank.kinds = value;
+        } else if (offset == window.clear) {
+            bank.cleared = value;
             self.latched &= ~value;
-        } else if (offset == self.layout.threshold) {
-            self.threshold = @truncate(value & self.layout.threshold_mask);
+        } else if (offset == window.threshold) {
+            bank.threshold = @truncate(value & window.threshold_mask);
+        } else if (offset == window.select) {
+            self.selected = @truncate(value);
         }
     }
 };
