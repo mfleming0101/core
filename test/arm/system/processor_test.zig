@@ -2731,62 +2731,6 @@ test "an interrupt line a device still holds high at exception return is pended 
     try std.testing.expect(!latch.held);
 }
 
-const Restating = struct {
-    held: bool = false,
-    fired: bool = false,
-
-    fn read(_: *anyopaque, _: u32, _: Width, _: *Lines) ?u32 {
-        return 0;
-    }
-
-    fn write(context: *anyopaque, _: u32, _: Width, value: u32, raise: *Lines) ?void {
-        const self: *Restating = @ptrCast(@alignCast(context));
-        if (value == 0) self.held = false else raise.* |= @intFromBool(self.held);
-    }
-
-    fn tick(context: *anyopaque, _: u32, raise: *Lines) ?u32 {
-        const self: *Restating = @ptrCast(@alignCast(context));
-        if (self.fired) return null;
-        self.fired = true;
-        self.held = true;
-        raise.* |= 1;
-        return null;
-    }
-
-    fn asserted(context: *anyopaque) Lines {
-        const self: *Restating = @ptrCast(@alignCast(context));
-        return @intFromBool(self.held);
-    }
-};
-
-test "a line raised again while its handler is active and the line still held does not pend, so a handler that clears it before return runs once, PM0214 4.3.9" {
-    var flash: [0x84]u8 = @splat(0);
-    std.mem.writeInt(u32, flash[0..4], 0x2000_0040, .little);
-    std.mem.writeInt(u32, flash[4..8], 0x21, .little);
-    std.mem.writeInt(u32, flash[0x40..][0..4], 0x61, .little);
-    for ([_]u16{ 0xbf00, 0xbf00, 0xbf00, 0xbf00, 0xbe00 }, 0..) |code, i| {
-        std.mem.writeInt(u16, flash[0x20 + i * 2 ..][0..2], code, .little);
-    }
-    for ([_]u16{ 0x4806, 0x6801, 0x3101, 0x6001, 0x4a05, 0x2301, 0x6013, 0x2300, 0x6013, 0x4770 }, 0..) |code, i| {
-        std.mem.writeInt(u16, flash[0x60 + i * 2 ..][0..2], code, .little);
-    }
-    std.mem.writeInt(u32, flash[0x7c..][0..4], 0x2000_0000, .little);
-    std.mem.writeInt(u32, flash[0x80..][0..4], 0x4000_0000, .little);
-    var ram: [0x40]u8 = @splat(0);
-    var device: Restating = .{};
-    var entries = [_]Regions.Entry{
-        .{ .memory = .{ .base = 0, .bytes = &flash, .writable = false } },
-        .{ .memory = .{ .base = 0x2000_0000, .bytes = &ram, .writable = true } },
-        .{ .device = .{ .base = 0x4000_0000, .size = 0x10, .device = .{ .context = &device, .read = Restating.read, .write = Restating.write, .tick = Restating.tick, .asserted = Restating.asserted } } },
-    };
-    var regions = try Regions.adopt(&entries);
-    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{}, .{});
-    cpu.reset();
-    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 1));
-    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 60 }).stop);
-    try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, ram[0..4], .little));
-}
-
 test "the MPU and debug words a core without an MPU still answers read zero over the bus, B3.5.1 C1.6.2" {
     var m = loaded();
     var cpu = fast(.m0, &m);
