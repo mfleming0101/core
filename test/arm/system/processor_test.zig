@@ -1914,6 +1914,19 @@ test "a keyed write of AIRCR.SYSRESETREQ resets the core out of the vector table
     try std.testing.expectEqual(ran, cpu.instructions);
 }
 
+test "a run that meets SYSRESETREQ ends as reset with the core already at its reset entry, so the system can reset the rest, B3.2.6" {
+    var m = loaded();
+    var cpu = fast(.m4, &m);
+    cpu.reset();
+    const entry = cpu.state.pc;
+    _ = cpu.run(.{ .instructions = 2 });
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed0c, 0x05fa_0004));
+    const ran = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(arm.Ended.reset, ran.ended);
+    try std.testing.expectEqual(entry, cpu.state.pc);
+    try std.testing.expectEqual(arm.Ended.budget, cpu.run(.{ .instructions = 1 }).ended);
+}
+
 test "a write of AIRCR without VECTKEY requests no reset, B3.2.6" {
     var m = loaded();
     var cpu = fast(.m4, &m);

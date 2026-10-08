@@ -65,8 +65,9 @@ pub const Step = struct {
 /// nothing wakes.
 pub const Limit = struct { instructions: u64, cycles: u64 = std.math.maxInt(u64), asleep: bool = false };
 
-/// Which bound stopped a run, which is the one answer that always distinguishes them.
-pub const Ended = enum { budget, deadline, stopped, asleep };
+/// Which bound stopped a run, which is the one answer that always distinguishes them; `reset`
+/// is SYSRESETREQ, the signal B3.2.6 asserts to the system once the core has reset itself.
+pub const Ended = enum { budget, deadline, stopped, asleep, reset };
 
 /// What one run produced, latency being the cycles of it spent in exception entry and return.
 pub const Run = struct { instructions: u64, cycles: u64, latency: u64, stop: ?Stop, ended: Ended };
@@ -1521,6 +1522,7 @@ pub fn Processor(comptime options: Options) type {
             const cycles = self.cycles;
             const latency = self.latency;
             var stop: ?Stop = null;
+            var requested = false;
             const ends = bound_due | if (limit.asleep) asleep_due else 0;
             if (self.due & bound_due != 0) return .{ .instructions = 0, .cycles = 0, .latency = 0, .stop = null, .ended = .deadline };
             self.leaveBreakpoint();
@@ -1529,9 +1531,10 @@ pub fn Processor(comptime options: Options) type {
                 if (builtin.mode == .Debug) self.agrees();
                 if (self.due != 0) {
                     if (self.due & ends != 0) break;
+                    requested = self.due & reset_due != 0;
                     if (self.attend()) {
                         stop = self.stop;
-                        if (stop != null) break;
+                        if (stop != null or requested) break;
                         continue;
                     }
                 }
@@ -1554,7 +1557,7 @@ pub fn Processor(comptime options: Options) type {
                 .cycles = self.cycles - cycles,
                 .latency = self.latency - latency,
                 .stop = stop,
-                .ended = if (stop != null) .stopped else if (self.due & ends & asleep_due != 0) .asleep else if (self.cycles >= self.deadline) .deadline else .budget,
+                .ended = if (stop != null) .stopped else if (requested) .reset else if (self.due & ends & asleep_due != 0) .asleep else if (self.cycles >= self.deadline) .deadline else .budget,
             };
         }
 
