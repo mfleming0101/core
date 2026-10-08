@@ -1459,8 +1459,18 @@ pub fn Processor(comptime options: Options) type {
             return self.due & asleep_due != 0;
         }
 
-        /// Raises a whole set of lines, waking a sleeping core if one of them can be taken.
+        /// Raises lines, except active ones still held high, which exception return samples instead; wakes a sleeping core.
         pub fn pendAll(self: *Self, raised: Lines) void {
+            self.latch(self.unheld(raised));
+        }
+
+        fn unheld(self: *Self, raised: Lines) Lines {
+            const active: Lines = @truncate(self.active >> first_interrupt);
+            if (raised & active == 0) return raised;
+            return raised & ~(active & self.memory.asserted());
+        }
+
+        fn latch(self: *Self, raised: Lines) void {
             self.pending |= @as(Set, raised & self.nvic.present()) << first_interrupt;
             if (Ewic != void and self.ewic.enabled) {
                 for (0..ewic_block.banks) |n| self.ewic.latch(@intCast(n), nvic_block.wordOf(raised & self.nvic.present(), @intCast(n)));
@@ -1472,8 +1482,9 @@ pub fn Processor(comptime options: Options) type {
 
         /// Raises lines that arrived at cycle at, so an M0 or M0+ abandons a load or store multiple they interrupt.
         pub fn pendAllAt(self: *Self, raised: Lines, at: u64) void {
-            if (abandoning) self.arrival = .{ .at = at, .set = @as(Set, raised) << first_interrupt };
-            self.pendAll(raised);
+            const fresh = self.unheld(raised);
+            if (abandoning) self.arrival = .{ .at = at, .set = @as(Set, fresh) << first_interrupt };
+            self.latch(fresh);
         }
 
         /// Takes a WFI or WFE, unless an exception is already asking or an event is standing.
