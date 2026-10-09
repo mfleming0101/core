@@ -46,6 +46,7 @@ pub const Options = struct {
     Bus: type,
     /// Prices fetches, reads and issued loads and stores: a type with wait(Wait, address, cycles) u32, or void.
     Waits: type = void,
+    Idle: type = void,
 };
 
 /// A priced access: fetch, read, issued load, table read, store or multiple's rest, branch target, speculation, fetch-ahead, flush, linefill.
@@ -341,6 +342,7 @@ pub fn Processor(comptime options: Options) type {
         if (c == .m0 or c == .m0plus) break true;
     } else false;
     const Kept = if (abandoning) Multiple else void;
+    const Idle = options.Idle;
     const Waits = if (options.Waits == void) void else struct { hook: options.Waits, word: u32 = 1, next: u32 = 1, spec: bool = false, l1: if (M7 == void) void else l1_block.L1, pfu: if (M7 == void) void else pfu_block.Stream = if (M7 == void) {} else .{} };
     return struct {
         const Self = @This();
@@ -1441,6 +1443,10 @@ pub fn Processor(comptime options: Options) type {
                 if (timer.advance(before, elapsed)) self.raise(systick + ns_base);
             }
             if (self.memory.interrupts()) |raised| self.pendAll(raised);
+            if (Idle != void and self.cycles >= Idle.alarm) {
+                Idle.alarm = std.math.maxInt(u64);
+                self.due &= ~asleep_due;
+            }
             if (abandoning) self.arrival = .{ .at = @min(self.attention, self.cycles), .set = self.pending & ~was };
             self.schedule();
             if (self.cycles >= self.deadline) self.due |= bound_due;
@@ -1449,7 +1455,8 @@ pub fn Processor(comptime options: Options) type {
         fn schedule(self: *Self) void {
             self.memory.follow(&self.cycles, &self.attention);
             const other = if (self.timerNs()) |timer| timer.deadline(self.serviced) else std.math.maxInt(u64);
-            const next = self.serviced +| @min(self.systick.deadline(self.serviced), other, self.memory.untilDue());
+            const soon = self.serviced +| @min(self.systick.deadline(self.serviced), other, self.memory.untilDue());
+            const next = if (Idle == void) soon else @min(soon, Idle.alarm);
             self.attention = if (self.cycles < self.deadline) @min(next, self.deadline) else next;
         }
 
@@ -1489,7 +1496,16 @@ pub fn Processor(comptime options: Options) type {
             }
             if (self.best() != null) return;
             self.flags.for_event = wait == .event;
+            if (Idle != void) Idle.alarm = std.math.maxInt(u64);
             self.due |= asleep_due;
+        }
+
+        pub fn doze(self: *Self, until: u64) void {
+            if (self.best() != null or until <= self.cycles) return;
+            self.flags.for_event = false;
+            Idle.alarm = until;
+            self.due |= asleep_due;
+            self.schedule();
         }
 
         /// Sets the event register, which is what SEV does.
@@ -2136,7 +2152,10 @@ pub fn Processor(comptime options: Options) type {
             if (!self.addressable(address, false)) return false;
             switch (ppb.region(address)) {
                 .memory => unreachable,
-                .systick => return answered(into, if (self.sysTickOf(self.spec.security and !self.state.secure)) |timer| timer.readRegister(address - ppb.systick_base) else 0),
+                .systick => {
+                    if (Idle != void) Idle.poll(self);
+                    return answered(into, if (self.sysTickOf(self.spec.security and !self.state.secure)) |timer| timer.readRegister(address - ppb.systick_base) else 0);
+                },
                 .systick_ns => return self.spec.security and answered(into, if (self.aliasedTimer()) |timer| timer.readRegister(address - ppb.systick_base - ppb.alias) else 0),
                 .control_ns => return self.spec.security and answered(into, if (!self.state.secure) 0 else switch (address - ppb.control_base - ppb.alias) {
                     ppb.ictr => (@as(u32, self.nvic.count) + 31) / 32 - 1,
