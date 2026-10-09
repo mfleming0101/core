@@ -15,7 +15,7 @@ pub const Step = @import("system/processor.zig").Step;
 pub const Run = @import("system/processor.zig").Run;
 /// What a run is bounded by: an instruction budget, a relative cycle deadline, and whether a sleep ends it.
 pub const Limit = @import("system/processor.zig").Limit;
-/// Which bound ended a run: its budget, its deadline, the core stopping, or the core sleeping.
+/// Which bound ended a run: its budget, its deadline, the core stopping or sleeping, or SYSRESETREQ.
 pub const Ended = @import("system/processor.zig").Ended;
 /// The NMI exception number.
 pub const nmi = @import("system/processor.zig").nmi;

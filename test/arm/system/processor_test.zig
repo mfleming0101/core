@@ -1914,6 +1914,19 @@ test "a keyed write of AIRCR.SYSRESETREQ resets the core out of the vector table
     try std.testing.expectEqual(ran, cpu.instructions);
 }
 
+test "a run that meets SYSRESETREQ ends as reset with the core already at its reset entry, so the system can reset the rest, B3.2.6" {
+    var m = loaded();
+    var cpu = fast(.m4, &m);
+    cpu.reset();
+    const entry = cpu.state.pc;
+    _ = cpu.run(.{ .instructions = 2 });
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed0c, 0x05fa_0004));
+    const ran = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(arm.Ended.reset, ran.ended);
+    try std.testing.expectEqual(entry, cpu.state.pc);
+    try std.testing.expectEqual(arm.Ended.budget, cpu.run(.{ .instructions = 1 }).ended);
+}
+
 test "a write of AIRCR without VECTKEY requests no reset, B3.2.6" {
     var m = loaded();
     var cpu = fast(.m4, &m);
@@ -2716,6 +2729,54 @@ test "an interrupt line a device still holds high at exception return is pended 
     try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 60 }).stop);
     try std.testing.expectEqual(@as(u32, 3), std.mem.readInt(u32, ram[0..4], .little));
     try std.testing.expect(!latch.held);
+}
+
+const Pulser = struct {
+    fired: bool = false,
+
+    fn read(_: *anyopaque, _: u32, _: Width, _: *Lines) ?u32 {
+        return 0;
+    }
+
+    fn write(_: *anyopaque, _: u32, _: Width, value: u32, raise: *Lines) ?void {
+        if (value != 0) raise.* |= 1;
+    }
+
+    fn tick(context: *anyopaque, _: u32, raise: *Lines) ?u32 {
+        const self: *Pulser = @ptrCast(@alignCast(context));
+        if (self.fired) return null;
+        self.fired = true;
+        raise.* |= 1;
+        return null;
+    }
+};
+
+test "a pulse on a line whose handler is active pends it, so the handler runs again after return, PM0214 4.3.9" {
+    var flash: [0x84]u8 = @splat(0);
+    std.mem.writeInt(u32, flash[0..4], 0x2000_0040, .little);
+    std.mem.writeInt(u32, flash[4..8], 0x21, .little);
+    std.mem.writeInt(u32, flash[0x40..][0..4], 0x61, .little);
+    for ([_]u16{ 0xbf00, 0xbf00, 0xbf00, 0xbf00, 0xbe00 }, 0..) |code, i| {
+        std.mem.writeInt(u16, flash[0x20 + i * 2 ..][0..2], code, .little);
+    }
+    for ([_]u16{ 0x4806, 0x6801, 0x3101, 0x6001, 0x2901, 0xd102, 0x4a04, 0x6011, 0xbf00, 0x4770 }, 0..) |code, i| {
+        std.mem.writeInt(u16, flash[0x60 + i * 2 ..][0..2], code, .little);
+    }
+    std.mem.writeInt(u32, flash[0x7c..][0..4], 0x2000_0000, .little);
+    std.mem.writeInt(u32, flash[0x80..][0..4], 0x4000_0000, .little);
+    var ram: [0x40]u8 = @splat(0);
+    var pulser: Pulser = .{};
+    var entries = [_]Regions.Entry{
+        .{ .memory = .{ .base = 0, .bytes = &flash, .writable = false } },
+        .{ .memory = .{ .base = 0x2000_0000, .bytes = &ram, .writable = true } },
+        .{ .device = .{ .base = 0x4000_0000, .size = 0x10, .device = .{ .context = &pulser, .read = Pulser.read, .write = Pulser.write, .tick = Pulser.tick } } },
+    };
+    var regions = try Regions.adopt(&entries);
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{}, .{});
+    cpu.reset();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 1));
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 60 }).stop);
+    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, ram[0..4], .little));
 }
 
 test "the MPU and debug words a core without an MPU still answers read zero over the bus, B3.5.1 C1.6.2" {
