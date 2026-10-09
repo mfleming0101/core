@@ -1907,7 +1907,7 @@ pub fn Processor(comptime options: Options) type {
             if (Waits != void and a.kind == .read and self.waits.next != 1 and (M7 == void or self.spec.core != .m7)) self.waitRead(at);
             const kind = comptime folding(a.kind);
             const bytes = self.memory.folded.reach(at, a.bytes, kind, self, describe);
-            if (profile.enabled and bytes.len != 0) profile.folded[@intFromEnum(kind)] += 1;
+            if (profile.sampling(self.instructions) and bytes.len != 0) profile.folded[@intFromEnum(kind)] += 1;
             if (Waits != void and a.kind == .fetch and bytes.len >= 2 and bytes[1] == 0xbd) self.waits.next = 1;
             if (builtin.mode == .Debug and bytes.len != 0) self.verify(at, kind);
             return bytes;

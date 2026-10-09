@@ -78,6 +78,10 @@ pub var pc_samples: u64 = 0;
 pub var pc_outside: u64 = 0;
 pub var folded: [3]u64 = @splat(0);
 
+pub inline fn sampling(instructions: u64) bool {
+    return enabled and instructions % sample_every == sample_every - 1;
+}
+
 pub inline fn sample(pc: u32) void {
     if (!enabled) return;
     pc_samples += 1;
