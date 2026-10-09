@@ -6,6 +6,7 @@
 //! chaining, escalation to HardFault and then to lockup, and the run loop over a due word.
 const std = @import("std");
 const builtin = @import("builtin");
+const profile = @import("../../profile.zig");
 const State = @import("isa").arm.State;
 const arch_step = @import("isa").arm.step;
 const core = @import("core.zig");
@@ -49,6 +50,9 @@ pub const Options = struct {
 
 /// A priced access: fetch, read, issued load, table read, store or multiple's rest, branch target, speculation, fetch-ahead, flush, linefill.
 pub const Wait = enum { fetch, ahead, call, read, load, table, store, burst, branch, taken, jump, speculate, flush, line };
+
+pub const Zone = enum { loop };
+pub const zones = profile.Zones(Zone);
 
 /// What one step produced: where it ran, what it was, what it cost and what it charged.
 pub const Step = struct {
@@ -829,6 +833,7 @@ pub fn Processor(comptime options: Options) type {
             }
             if (r.executed) {
                 self.instructions += 1;
+                if (profile.enabled and self.instructions % profile.sample_every == 0) profile.sample(pc);
                 const cost = if (Issuing != void and self.pipeline.issuing) self.issued(pc, r, conditional) else r.cycles;
                 if (Waits != void) self.cycles += self.fetchedAfter(pc, r, cost);
                 self.charge(cost);
@@ -1511,6 +1516,8 @@ pub fn Processor(comptime options: Options) type {
             self.due &= ~bound_due;
             self.schedule();
             if (self.cycles >= self.deadline) self.due |= bound_due;
+            const timed = zones.begin(.loop);
+            defer zones.end(timed);
             if (self.trace.recording()) return @call(.never_inline, loop, .{ self, limit, true });
             return loop(self, limit, false);
         }
@@ -1900,6 +1907,7 @@ pub fn Processor(comptime options: Options) type {
             if (Waits != void and a.kind == .read and self.waits.next != 1 and (M7 == void or self.spec.core != .m7)) self.waitRead(at);
             const kind = comptime folding(a.kind);
             const bytes = self.memory.folded.reach(at, a.bytes, kind, self, describe);
+            if (profile.enabled and bytes.len != 0) profile.folded[@intFromEnum(kind)] += 1;
             if (Waits != void and a.kind == .fetch and bytes.len >= 2 and bytes[1] == 0xbd) self.waits.next = 1;
             if (builtin.mode == .Debug and bytes.len != 0) self.verify(at, kind);
             return bytes;

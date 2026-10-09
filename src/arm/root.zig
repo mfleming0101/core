@@ -41,3 +41,4 @@ pub const Class = @import("isa").arm.instruction.Class;
 pub const decode = @import("isa").arm.decode;
 /// The record, the ring, the line renderer and explain for this family.
 pub const trace = @import("trace.zig");
+pub const zones = @import("system/processor.zig").zones;

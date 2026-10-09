@@ -43,7 +43,7 @@ pub fn Zones(comptime Zone: type) type {
             var accounted: u64 = 0;
             inline for (fields, 0..) |field, i| {
                 accounted += own[i];
-                try w.print("{s:<16} {d:>10} {d:>10.1} {d:>6.1} {d:>9.1} {d:>8.0}\n", .{ field.name, calls[i], ns(own[i]) / 1e6, 100 * ns(own[i]) / wall, ns(inclusive[i]) / 1e6, if (calls[i] == 0) 0 else ns(inclusive[i]) / @as(f64, @floatFromInt(calls[i])) });
+                if (calls[i] != 0) try w.print("{s:<16} {d:>10} {d:>10.1} {d:>6.1} {d:>9.1} {d:>8.0}\n", .{ field.name, calls[i], ns(own[i]) / 1e6, 100 * ns(own[i]) / wall, ns(inclusive[i]) / 1e6, if (calls[i] == 0) 0 else ns(inclusive[i]) / @as(f64, @floatFromInt(calls[i])) });
             }
             return accounted;
         }
@@ -68,6 +68,28 @@ pub fn Counts(comptime Count: type) type {
             inline for (fields, 0..) |field, i| try w.print("{s} {d}\n", .{ field.name, tallies[i] });
         }
     };
+}
+
+pub const sample_every = 64;
+pub var pc_bins: [4096]u32 = @splat(0);
+pub var pc_base: u32 = 0;
+pub var pc_shift: u5 = 7;
+pub var pc_samples: u64 = 0;
+pub var pc_outside: u64 = 0;
+pub var folded: [3]u64 = @splat(0);
+
+pub inline fn sample(pc: u32) void {
+    if (!enabled) return;
+    pc_samples += 1;
+    const bin = (pc -% pc_base) >> pc_shift;
+    if (bin < pc_bins.len) pc_bins[bin] += 1 else pc_outside += 1;
+}
+
+pub fn resetSamples() void {
+    folded = @splat(0);
+    pc_bins = @splat(0);
+    pc_samples = 0;
+    pc_outside = 0;
 }
 
 pub fn header(w: *std.Io.Writer) !void {
