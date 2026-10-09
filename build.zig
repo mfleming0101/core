@@ -7,11 +7,14 @@ pub fn build(b: *std.Build) void {
     const nulled = std.mem.eql(u8, b.option([]const u8, "isa", "The instruction set this build links: real (default) or null") orelse "real", "null");
     const nullisa = b.createModule(.{ .root_source_file = b.path("bench/nullisa/root.zig"), .target = target, .optimize = optimize });
     const isa = if (nulled) nullisa else b.dependency("isa", .{ .target = target, .optimize = optimize }).module("isa");
+    const options = b.addOptions();
+    options.addOption(bool, "profile", b.option(bool, "profile", "Time the profile zones and count the counters; off compiles them away") orelse false);
+    const profile = options.createModule();
     const core = b.addModule("core", .{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "isa", .module = isa }},
+        .imports = &.{ .{ .name = "isa", .module = isa }, .{ .name = "options", .module = profile } },
     });
 
     const harness = b.createModule(.{
@@ -25,7 +28,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/core.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "isa", .module = nullisa }},
+        .imports = &.{ .{ .name = "isa", .module = nullisa }, .{ .name = "options", .module = profile } },
     });
     const bare_harness = if (nulled) harness else b.createModule(.{
         .root_source_file = b.path("bench/harness/root.zig"),
@@ -52,7 +55,7 @@ pub fn build(b: *std.Build) void {
     if (b.pkg_hash.len == 0) {
         writeTestRoot(b);
         const test_step = b.step("test", "Run every test");
-        test_step.dependOn(&b.addRunArtifact(tests(b, isa, target, optimize)).step);
+        test_step.dependOn(&b.addRunArtifact(tests(b, isa, profile, target, optimize)).step);
         const examples_step = b.step("examples", "Run the examples under examples/");
         for ([_]Example{
             .{ .name = "run_arm", .query = cortex_m0plus, .script = "examples/arm.ld", .firmware = "crc" },
@@ -99,13 +102,13 @@ pub fn build(b: *std.Build) void {
     const harness_step = b.step("harness", "Run the measurement harness tests");
     harness_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = harness })).step);
 
-    const options = b.addOptions();
-    options.addOption([]const u8, "isa", b.option([]const u8, "isa-dir", "The isa checkout whose tier-one corpus and trace pins metrics runs: ../isa by default") orelse "../isa");
+    const metrics = b.addOptions();
+    metrics.addOption([]const u8, "isa", b.option([]const u8, "isa-dir", "The isa checkout whose tier-one corpus and trace pins metrics runs: ../isa by default") orelse "../isa");
     const bench = b.addRunArtifact(b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
         .root_source_file = b.path("bench/run.zig"),
         .target = target,
         .optimize = .ReleaseSafe,
-        .imports = &.{ .{ .name = "harness", .module = harness }, .{ .name = "options", .module = options.createModule() } },
+        .imports = &.{ .{ .name = "harness", .module = harness }, .{ .name = "options", .module = metrics.createModule() } },
     }) }));
     bench.setCwd(b.path("."));
     bench.has_side_effects = true;
@@ -156,7 +159,7 @@ fn machine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
     return b.addExecutable(.{ .name = name, .root_module = machineModule(b, target, optimize, root, core, harness, rep) });
 }
 
-fn tests(b: *std.Build, isa: *std.Build.Module, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
+fn tests(b: *std.Build, isa: *std.Build.Module, profile: *std.Build.Module, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
     return b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests.zig"),
@@ -164,6 +167,7 @@ fn tests(b: *std.Build, isa: *std.Build.Module, target: std.Build.ResolvedTarget
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "isa", .module = isa },
+                .{ .name = "options", .module = profile },
             },
         }),
     });

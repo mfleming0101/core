@@ -22,3 +22,4 @@ pub const contract = @import("contract.zig");
 pub const memory = @import("memory/root.zig");
 /// The record ring both families instantiate.
 pub const trace = @import("trace/root.zig");
+pub const profile = @import("profile.zig");

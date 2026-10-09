@@ -14,6 +14,7 @@ comptime {
     _ = @import("test/memory/elf_test.zig");
     _ = @import("test/memory/map_test.zig");
     _ = @import("test/memory/regions_test.zig");
+    _ = @import("test/profile_test.zig");
     _ = @import("test/riscv/semihosting_test.zig");
     _ = @import("test/riscv/system/intc_test.zig");
     _ = @import("test/riscv/system/pmp_test.zig");
