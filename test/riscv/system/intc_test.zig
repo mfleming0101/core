@@ -339,3 +339,27 @@ test "the C3's registers are nowhere in the C6's blocks, so a build carrying bot
     try std.testing.expectEqual(@as(u32, 0), unit.readRegister(c6.control_base + c6.enable));
     try std.testing.expectEqual(@as(u32, 0), unit.readRegister(c6.control_base + c6.threshold));
 }
+
+test "once PLIC_MXINT_CONF at 0x2000_13fc holds one, the C6's core-local copy drives the hart: INTPRI keeps its values but passes nothing, both status registers read the copy in charge, and the copy's threshold keeps four bits, as a rev v0.2 chip showed" {
+    var unit = started(c6);
+    const local = c6.local.?;
+    try std.testing.expectEqual(intc.Region.interrupt, unit.region(local.base + intc.local_size - 4));
+    try std.testing.expectEqual(intc.Region.memory, unit.region(local.base + intc.local_size));
+    arm(&unit, 40, 6, 1, false);
+    unit.raise(line(40));
+    try std.testing.expectEqual(@as(u32, 1) << 6, unit.readRegister(c6.control_base + c6.status));
+    unit.writeRegister(local.base + local.select.?, 1);
+    try std.testing.expectEqual(@as(u32, 1), unit.readRegister(local.base + local.select.?));
+    try std.testing.expectEqual(@as(u32, 0), unit.readRegister(c6.control_base + c6.status));
+    try std.testing.expectEqual(@as(?u5, null), unit.best(ungated));
+    try std.testing.expectEqual(@as(u32, 1) << 6, unit.readRegister(c6.control_base + c6.enable));
+    unit.writeRegister(local.base + local.priority + 4 * 6, 1);
+    unit.writeRegister(local.base + local.enable, 1 << 6);
+    unit.writeRegister(local.base + local.threshold, 0x1ff);
+    try std.testing.expectEqual(@as(u32, 0xf), unit.readRegister(local.base + local.threshold));
+    try std.testing.expectEqual(@as(u32, 0), unit.readRegister(local.base + local.status));
+    unit.writeRegister(local.base + local.threshold, 1);
+    try std.testing.expectEqual(@as(u32, 1) << 6, unit.readRegister(local.base + local.status));
+    try std.testing.expectEqual(@as(u32, 1) << 6, unit.readRegister(c6.control_base + c6.status));
+    try std.testing.expectEqual(@as(?u5, 6), unit.best(ungated));
+}

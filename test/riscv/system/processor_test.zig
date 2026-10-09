@@ -111,13 +111,15 @@ fn started(memory: *Memory, records: []riscv.trace.Record) Cpu {
     return cpu;
 }
 
-test "reset leaves the program counter on the first word of internal ROM 0, where an ESP32-C3 halted at reset stands, C3 TRM Table 3.3-1" {
-    var memory: Memory = .{};
-    var cpu = Cpu.init(&memory, .esp32c3, .{});
-    cpu.reset();
-    try std.testing.expectEqual(@as(u32, 0x4000_0000), cpu.state.pc);
-    try std.testing.expectEqual(@as(u64, 0), cpu.instructions);
-    try std.testing.expectEqual(@as(?riscv.Stop, null), cpu.stop);
+test "reset leaves the program counter on the first word of internal ROM 0, where an ESP32-C3 and an ESP32-C6 halted at reset stand, C3 TRM Table 3.3-1 and C6 TRM Table 5.3-1" {
+    for ([_]riscv.Core{ .esp32c3, .esp32c6 }) |c| {
+        var memory: Memory = .{};
+        var cpu = Cpu.init(&memory, c, .{});
+        cpu.reset();
+        try std.testing.expectEqual(@as(u32, 0x4000_0000), cpu.state.pc);
+        try std.testing.expectEqual(@as(u64, 0), cpu.instructions);
+        try std.testing.expectEqual(@as(?riscv.Stop, null), cpu.stop);
+    }
 }
 
 test "the run loop counts what it executed and stops at EBREAK, Unprivileged 2.8" {
