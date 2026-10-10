@@ -1416,6 +1416,7 @@ pub fn Processor(comptime options: Options) type {
             if (held != 0) self.pending |= @as(Set, held) << first_interrupt;
             self.rearm();
             if (self.stop == null and self.sleepsOnExit()) self.sleep(.interrupt);
+            if (Idle != void and self.stop == null and !self.state.handler()) Idle.poll(self);
         }
 
         fn sleepsOnExit(self: *Self) bool {
