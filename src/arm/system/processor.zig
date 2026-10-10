@@ -47,6 +47,7 @@ pub const Options = struct {
     /// Prices fetches, reads and issued loads and stores: a type with wait(Wait, address, cycles) u32, or void.
     Waits: type = void,
     Idle: type = void,
+    facts_bits: comptime_int = 8,
 };
 
 /// A priced access: fetch, read, issued load, table read, store or multiple's rest, branch target, speculation, fetch-ahead, flush, linefill.
@@ -174,11 +175,9 @@ fn factsOf(code: u32, row: u11) Facts {
     return .{ .code = code, .written = operands.written, .sources = operands.sources, .addressed = operands.addressed, .shifted = shiftedOf(code), .class = entry.class, .loaded = @intCast(@ctz(loadedOf(code))), .words = @intCast(instruction.words(entry.class, code)), .sets = setsFlags(code, false), .sets_it = setsFlags(code, true), .carries = carries(code), .extends = extends(code), .shifts = shifts(code), .quick = swift(code), .narrow = narrowLoad(code), .isb = isb(code), .table = code & 0xfff0_ffe0 == 0xe8d0_f000, .indexed = indexedStore(code) };
 }
 
-const facts_bits = 12;
-
 const Side = enum { instruction, data };
 
-fn Pipeline(comptime entries: u8) type {
+fn Pipeline(comptime entries: u8, comptime facts_bits: comptime_int) type {
     return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0 };
 }
 
@@ -303,7 +302,7 @@ pub fn Processor(comptime options: Options) type {
         break :blk n;
     };
     const Issuing = for (fits) |fit| {
-        if (fit != null and fit.?.issue != null) break Pipeline(entries);
+        if (fit != null and fit.?.issue != null) break Pipeline(entries, options.facts_bits);
     } else void;
     const specs = blk: {
         var out: [options.cores.len]core.Spec = undefined;
@@ -919,7 +918,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         inline fn issued(self: *Self, pc: u32, r: arch_step.Result, conditional: bool) u8 {
-            const set = self.pipeline.facts[(r.code *% 0x9e37_79b1 >> 32 - facts_bits) & ~@as(u32, 1) ..][0..2];
+            const set = self.pipeline.facts[(r.code *% 0x9e37_79b1 >> 32 - options.facts_bits) & ~@as(u32, 1) ..][0..2];
             const f = if (set[0].code == r.code) set[0] else if (set[1].code == r.code) set[1] else blk: {
                 set[1] = set[0];
                 set[0] = factsOf(r.code, r.row);
