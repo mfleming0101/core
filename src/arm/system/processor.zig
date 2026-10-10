@@ -2163,7 +2163,10 @@ pub fn Processor(comptime options: Options) type {
                     else => null,
                 }),
                 .itm => return answered(into, 0),
-                .dwt => return answered(into, self.dwt.readRegister(address - ppb.dwt_base, self.cycles)),
+                .dwt => {
+                    if (Idle != void and @hasDecl(Idle, "counted") and address - ppb.dwt_base == dwt_block.cyccnt) Idle.counted(self);
+                    return answered(into, self.dwt.readRegister(address - ppb.dwt_base, self.cycles));
+                },
                 .control => return answered(into, switch (address - ppb.control_base) {
                     ppb.ictr => if (self.architecture() != .armv6m) (@as(u32, self.nvic.count) + 31) / 32 - 1 else 0,
                     icb_block.actlr => self.icb.readRegister(self.spec.core, icb_block.actlr, self.spec.security and !self.state.secure),
