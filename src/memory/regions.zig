@@ -44,6 +44,8 @@ pub const Found = struct { base: u32, len: u64, host: ?[*]u8 = null, writable: b
 pub const Folded = struct {
     blocks: [3]Block = @splat(.{}),
     refused: [3]Block = @splat(.{}),
+    kept: [3][4]Block = @splat(@splat(.{})),
+    next: [3]u2 = @splat(0),
 
     fn lane(kind: contract.Kind) usize {
         return switch (kind) {
@@ -75,7 +77,15 @@ pub const Folded = struct {
 
     noinline fn refold(self: *Folded, address: u32, kind: contract.Kind, host: anytype, comptime describe: anytype) void {
         if (self.holds(address, kind)) return;
+        const at = lane(kind);
+        for (self.kept[at]) |block| if (@as(u64, address -% block.base) < block.len) return self.place(kind, block);
         const block = describe(host, address, kind);
+        self.kept[at][self.next[at]] = block;
+        self.next[at] +%= 1;
+        self.place(kind, block);
+    }
+
+    fn place(self: *Folded, kind: contract.Kind, block: Block) void {
         if (block.host == null) self.refuse(kind, block) else self.publish(kind, block);
     }
 
@@ -101,6 +111,7 @@ pub const Folded = struct {
     pub noinline fn unfold(self: *Folded) void {
         self.blocks = @splat(.{});
         self.refused = @splat(.{});
+        self.kept = @splat(@splat(.{}));
     }
 };
 
