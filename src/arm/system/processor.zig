@@ -174,7 +174,7 @@ fn factsOf(code: u32, row: u11) Facts {
     return .{ .code = code, .written = operands.written, .sources = operands.sources, .addressed = operands.addressed, .shifted = shiftedOf(code), .class = entry.class, .loaded = @intCast(@ctz(loadedOf(code))), .words = @intCast(instruction.words(entry.class, code)), .sets = setsFlags(code, false), .sets_it = setsFlags(code, true), .carries = carries(code), .extends = extends(code), .shifts = shifts(code), .quick = swift(code), .narrow = narrowLoad(code), .isb = isb(code), .table = code & 0xfff0_ffe0 == 0xe8d0_f000, .indexed = indexedStore(code) };
 }
 
-const facts_bits = 8;
+const facts_bits = 12;
 
 const Side = enum { instruction, data };
 
