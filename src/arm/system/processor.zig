@@ -177,6 +177,13 @@ fn factsOf(code: u32, row: u11) Facts {
 
 const Side = enum { instruction, data };
 
+const regarding = blk: {
+    @setEvalBranchQuota(10_000);
+    var set: std.StaticBitSet(1 << 11) = .initEmpty();
+    for (meta.entries, 0..) |entry, row| if (entry.class == .system or entry.class == .special_register) set.set(row);
+    break :blk set;
+};
+
 fn Pipeline(comptime entries: u8, comptime facts_bits: comptime_int) type {
     return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0 };
 }
@@ -817,7 +824,6 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn perform(self: *Self, model: arch_step.Model, comptime tracing: bool) arch_step.Result {
-            self.restand();
             if (tracing) self.forget();
             const pc = self.state.pc;
             if (abandoning) self.keep(pc);
@@ -827,6 +833,7 @@ pub fn Processor(comptime options: Options) type {
                 self.waits.next = pc +% 2 & ~@as(u32, 3);
             }
             const r = @call(.always_inline, arch_step.step, .{ Self, gate, &self.state, self, model });
+            if (regarding.isSet(r.row)) self.restand();
             if (Waits != void) self.waits.next = 1;
             if (tracing) {
                 if (r.halt() == .data_fault or r.halt() == .data_violation or r.halt() == .unaligned_access) self.touched = self.last_access;
@@ -1352,7 +1359,6 @@ pub fn Processor(comptime options: Options) type {
         }
 
         noinline fn attend(self: *Self) bool {
-            self.restand();
             if (self.due & stopped_due != 0) return true;
             if (self.due & reset_due != 0) {
                 self.restart();
@@ -1384,6 +1390,7 @@ pub fn Processor(comptime options: Options) type {
 
         noinline fn finishCall(self: *Self) void {
             if (!self.spec.security) return;
+            defer self.restand();
             const s = &self.state;
             s.secure = true;
             self.bank();
@@ -1527,6 +1534,7 @@ pub fn Processor(comptime options: Options) type {
         /// Runs to a budget, deadline, stop or sleep; an attached ring takes a second copy of the
         /// loop.
         pub fn run(self: *Self, limit: Limit) Run {
+            self.restand();
             self.redirected = true;
             self.deadline = self.cycles +| limit.cycles;
             self.due &= ~bound_due;
@@ -2785,6 +2793,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn take(self: *Self, i: Index, lr: u32) ?Stop {
+            defer self.restand();
             const s = &self.state;
             s.exclusive = null;
             s.lr = lr;
@@ -2816,6 +2825,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         noinline fn leave(self: *Self, exc_return: u32) ?Stop {
+            defer self.restand();
             const s = &self.state;
             const number = s.xpsr & State.ipsr_mask;
             const nested = @popCount(self.active) != 1;
