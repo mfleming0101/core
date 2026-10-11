@@ -72,6 +72,8 @@ pub fn Counts(comptime Count: type) type {
 
 pub const sample_every = 64;
 pub var pc_bins: [4096]u32 = @splat(0);
+pub var pc_ticks: [4096]u64 = @splat(0);
+var sampled: u64 = 0;
 pub var pc_base: u32 = 0;
 pub var pc_shift: u5 = 7;
 pub var pc_samples: u64 = 0;
@@ -82,16 +84,27 @@ pub inline fn sampling(instructions: u64) bool {
     return enabled and instructions % sample_every == sample_every - 1;
 }
 
+pub inline fn sampleFrom() void {
+    if (!enabled) return;
+    sampled = ticks();
+}
+
 pub inline fn sample(pc: u32) void {
     if (!enabled) return;
     pc_samples += 1;
+    const now = ticks();
     const bin = (pc -% pc_base) >> pc_shift;
-    if (bin < pc_bins.len) pc_bins[bin] += 1 else pc_outside += 1;
+    if (bin < pc_bins.len) {
+        pc_bins[bin] += 1;
+        pc_ticks[bin] += now - sampled;
+    } else pc_outside += 1;
+    sampled = now;
 }
 
 pub fn resetSamples() void {
     folded = @splat(0);
     pc_bins = @splat(0);
+    pc_ticks = @splat(0);
     pc_samples = 0;
     pc_outside = 0;
 }

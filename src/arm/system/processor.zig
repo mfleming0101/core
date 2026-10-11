@@ -1534,6 +1534,7 @@ pub fn Processor(comptime options: Options) type {
             if (self.cycles >= self.deadline) self.due |= bound_due;
             const timed = zones.begin(.loop);
             defer zones.end(timed);
+            profile.sampleFrom();
             if (self.trace.recording()) return @call(.never_inline, loop, .{ self, limit, true });
             return loop(self, limit, false);
         }
