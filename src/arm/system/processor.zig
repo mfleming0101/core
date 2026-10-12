@@ -1559,7 +1559,7 @@ pub fn Processor(comptime options: Options) type {
             if (self.due & bound_due != 0) return .{ .instructions = 0, .cycles = 0, .latency = 0, .stop = null, .ended = .deadline };
             self.leaveBreakpoint();
             if (self.stop == .vector_catch) self.stop = null;
-            outer: while (self.instructions - instructions < limit.instructions) {
+            while (self.instructions - instructions < limit.instructions) {
                 if (builtin.mode == .Debug) self.agrees();
                 if (self.due != 0) {
                     if (self.due & ends != 0) break;
@@ -1572,13 +1572,6 @@ pub fn Processor(comptime options: Options) type {
                 }
                 stop = @call(.always_inline, advance, .{ self, model, tracing, timing == .fitted });
                 if (stop != null) break;
-                if (tracing) continue;
-                while (self.instructions - instructions < limit.instructions) {
-                    if (builtin.mode == .Debug) self.agrees();
-                    if (self.due != 0) continue :outer;
-                    stop = @call(.always_inline, advance, .{ self, model, tracing, timing == .fitted });
-                    if (stop != null) break :outer;
-                }
             }
             if (self.due & returned_due != 0) {
                 self.finishReturn();
