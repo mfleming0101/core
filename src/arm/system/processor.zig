@@ -177,12 +177,9 @@ fn factsOf(code: u32, row: u11) Facts {
 
 const Side = enum { instruction, data };
 
-const regarding = blk: {
-    @setEvalBranchQuota(10_000);
-    var set: std.StaticBitSet(1 << 11) = .initEmpty();
-    for (meta.entries, 0..) |entry, row| if (entry.class == .system or entry.class == .special_register) set.set(row);
-    break :blk set;
-};
+fn regarding(code: u32) bool {
+    return code & 0xffe0 == 0xb660 or code & 0xffe0_d000 == 0xf380_8000;
+}
 
 fn Pipeline(comptime entries: u8, comptime facts_bits: comptime_int) type {
     return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0 };
@@ -833,7 +830,7 @@ pub fn Processor(comptime options: Options) type {
                 self.waits.next = pc +% 2 & ~@as(u32, 3);
             }
             const r = @call(.always_inline, arch_step.step, .{ Self, gate, &self.state, self, model });
-            if (regarding.isSet(r.row)) self.restand();
+            if (regarding(r.code)) self.restand();
             if (Waits != void) self.waits.next = 1;
             if (tracing) {
                 if (r.halt() == .data_fault or r.halt() == .data_violation or r.halt() == .unaligned_access) self.touched = self.last_access;

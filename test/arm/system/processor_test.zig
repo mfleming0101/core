@@ -3736,6 +3736,18 @@ test "an unprivileged store needs a region that opens itself to unprivileged cod
     try std.testing.expectEqual(@as(?arm.Stop, .fetch_violation), cpu.run(.{ .instructions = 20 }).stop);
 }
 
+test "an MSR that sets CONTROL.nPRIV makes the next fetch unprivileged, so a privileged-only region refuses it" {
+    var m = storeAndLoad(0x800);
+    for ([_]u16{ 0x2001, 0xf380, 0x8814, 0xbe00 }, 0..) |code, i| std.mem.writeInt(u16, m.bytes[8 + 2 * i ..][0..2], code, .little);
+    var cpu = fast(.m4, &m);
+    cpu.reset();
+    _ = cpu.poke(4, 0xe000_ed98, 0);
+    _ = cpu.poke(4, 0xe000_ed9c, 0);
+    _ = cpu.poke(4, 0xe000_eda0, (1 << mpu_block.ap_shift) | (10 << mpu_block.size_shift) | 1);
+    _ = cpu.poke(4, 0xe000_ed94, 1);
+    try std.testing.expectEqual(@as(?arm.Stop, .fetch_violation), cpu.run(.{ .instructions = 20 }).stop);
+}
+
 test "TT reports the access the MPU gives the address, and TTT the access it gives unprivileged code, D1.2.269" {
     for ([_]struct { attributes: u32, privileged: u32, unprivileged: u32 }{
         .{ .attributes = 0, .privileged = 0x004c_0000, .unprivileged = 0x0040_0000 },
