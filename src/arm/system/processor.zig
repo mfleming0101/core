@@ -796,7 +796,7 @@ pub fn Processor(comptime options: Options) type {
                 if (self.due != 0 and self.attend()) {
                     self.redirected = true;
                 } else {
-                    r = if (self.trace.recording()) self.perform(self.model, true) else self.perform(self.model, false);
+                    r = if (self.trace.recording()) self.perform(self.model, true, true) else self.perform(self.model, false, true);
                     self.redirected = r.branched;
                 }
             }
@@ -823,7 +823,7 @@ pub fn Processor(comptime options: Options) type {
             }
         }
 
-        fn perform(self: *Self, model: arch_step.Model, comptime tracing: bool) arch_step.Result {
+        fn perform(self: *Self, model: arch_step.Model, comptime tracing: bool, comptime issuing: bool) arch_step.Result {
             if (tracing) self.forget();
             const pc = self.state.pc;
             if (abandoning) self.keep(pc);
@@ -842,7 +842,7 @@ pub fn Processor(comptime options: Options) type {
             if (r.executed) {
                 self.instructions += 1;
                 if (profile.enabled and self.instructions % profile.sample_every == 0) profile.sample(pc);
-                const cost = if (Issuing != void and self.pipeline.issuing) self.issued(pc, r, conditional) else r.cycles;
+                const cost = if (Issuing != void and issuing and self.pipeline.issuing) self.issued(pc, r, conditional) else r.cycles;
                 if (Waits != void) self.cycles += self.fetchedAfter(pc, r, cost);
                 self.charge(cost);
             }
@@ -1106,8 +1106,8 @@ pub fn Processor(comptime options: Options) type {
             port.* = @max(port.*, self.cycles) + issue.rmw;
         }
 
-        fn advance(self: *Self, model: arch_step.Model, comptime tracing: bool) ?Stop {
-            _ = @call(.always_inline, perform, .{ self, model, tracing });
+        fn advance(self: *Self, model: arch_step.Model, comptime tracing: bool, comptime issuing: bool) ?Stop {
+            _ = @call(.always_inline, perform, .{ self, model, tracing, issuing });
             return self.stop;
         }
 
@@ -1543,13 +1543,13 @@ pub fn Processor(comptime options: Options) type {
             const timed = zones.begin(.loop);
             defer zones.end(timed);
             profile.sampleFrom();
-            if (self.trace.recording()) return @call(.never_inline, loop, .{ self, limit, true });
-            return loop(self, limit, false);
+            if (self.trace.recording()) return if (self.timing == .unknown) @call(.never_inline, loop, .{ self, limit, true, .unknown }) else @call(.never_inline, loop, .{ self, limit, true, .fitted });
+            return if (self.timing == .unknown) loop(self, limit, false, .unknown) else loop(self, limit, false, .fitted);
         }
 
-        fn loop(self: *Self, limit: Limit, comptime tracing: bool) align(64) Run {
+        fn loop(self: *Self, limit: Limit, comptime tracing: bool, comptime timing: core.Timing) align(64) Run {
             if (limit.instructions == 0) return .{ .instructions = 0, .cycles = 0, .latency = 0, .stop = null, .ended = .budget };
-            const model = self.model;
+            const model: arch_step.Model = if (timing == .fitted) self.model else if (gate != null) comptime .{ .decoding = decode.selectionOf(specs[0].architecture), .costs = one_each } else .{ .decoding = self.model.decoding, .costs = one_each };
             const instructions = self.instructions;
             const cycles = self.cycles;
             const latency = self.latency;
@@ -1570,13 +1570,13 @@ pub fn Processor(comptime options: Options) type {
                         continue;
                     }
                 }
-                stop = @call(.always_inline, advance, .{ self, model, tracing });
+                stop = @call(.always_inline, advance, .{ self, model, tracing, timing == .fitted });
                 if (stop != null) break;
                 if (tracing) continue;
                 while (self.instructions - instructions < limit.instructions) {
                     if (builtin.mode == .Debug) self.agrees();
                     if (self.due != 0) continue :outer;
-                    stop = @call(.always_inline, advance, .{ self, model, tracing });
+                    stop = @call(.always_inline, advance, .{ self, model, tracing, timing == .fitted });
                     if (stop != null) break :outer;
                 }
             }
