@@ -1416,3 +1416,9 @@ test "the C3 instruction after a load that reads its register waits one cycle, b
     try std.testing.expectEqual(@as(u64, 6), try c3Cycles(&.{ lui_a1_ram, lw_a2_a1, beq_a2_zero_skip, ebreak, ebreak }));
     try std.testing.expectEqual(@as(u64, 4), try c3CyclesOf(&.{ 0x05b7, 0x3fc8, 0x4190, 0x9632, c_ebreak }));
 }
+
+test "a C3 jump or taken branch onto a 32-bit instruction that starts mid-word costs one more cycle, onto a 16-bit one none, board kernels jal_mis, beq_mis and beq_mis16" {
+    try std.testing.expectEqual(@as(u64, 4), try c3CyclesOf(&.{ 0x006f, 0x0060, 0x0001, 0x0513, 0x0050, c_ebreak }));
+    try std.testing.expectEqual(@as(u64, 3), try c3CyclesOf(&.{ 0x006f, 0x0060, 0x0001, c_li_a0_5, c_ebreak }));
+    try std.testing.expectEqual(@as(u64, 2), try c3CyclesOf(&.{ 0x0001, 0x0513, 0x0050, c_ebreak }));
+}

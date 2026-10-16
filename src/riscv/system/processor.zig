@@ -155,6 +155,7 @@ pub fn Processor(comptime options: Options) type {
         returns: u64,
         counter: Counter,
         loaded: u32,
+        landed: bool,
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -197,6 +198,7 @@ pub fn Processor(comptime options: Options) type {
                 .returns = 0,
                 .counter = .{},
                 .loaded = 0,
+                .landed = false,
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -314,8 +316,10 @@ pub fn Processor(comptime options: Options) type {
             const shadow = if (r.class == .branch and r.branched) self.shadowOf(pc +% if (r.code & 3 == 3) @as(u32, 4) else 2) else 0;
             const registers = c3_timing.registersOf(r.code);
             const waited: u32 = @intFromBool(registers.reads & self.loaded != 0);
+            const landed: u32 = @intFromBool(self.landed and pc & 2 != 0 and r.code & 3 == 3);
             self.loaded = if (r.class == .load) registers.writes else 0;
-            return r.cycles + c3_timing.extraOf(r.code, &self.state.x) + shadow + waited;
+            self.landed = r.branched;
+            return r.cycles + c3_timing.extraOf(r.code, &self.state.x) + shadow + waited + landed;
         }
 
         fn shadowOf(self: *Self, next: u32) u32 {
