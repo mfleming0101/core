@@ -1383,3 +1383,14 @@ test "a C3 divide takes three cycles and one more per leading zero of the diviso
     try std.testing.expectEqual(@as(u64, 7), try c3Cycles(&.{ li_a2_7, li_a3_3, mulh_a1_a2_a3, ebreak }));
     try std.testing.expectEqual(@as(u64, 3), try c3Cycles(&.{ li_a2_7, li_a3_3, mul_a1_a2_a3, ebreak }));
 }
+
+const beq_zero_skip: u32 = 0x0000_0463;
+const bne_zero_skip: u32 = 0x0000_1463;
+const jal_skip: u32 = 0x0080_006f;
+
+test "a taken C3 branch over a divide waits out that divide less one cycle, a jump over it does not, board kernels beq_divu, beq_divu_ff, loop_divu_exit and jal_divu" {
+    try std.testing.expectEqual(@as(u64, 37), try c3Cycles(&.{ li_a2_7, li_a3_3, beq_zero_skip, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 7), try c3Cycles(&.{ li_a2_7, li_a3_minus_1, beq_zero_skip, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 36), try c3Cycles(&.{ li_a2_7, li_a3_3, bne_zero_skip, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ li_a2_7, li_a3_3, jal_skip, divu_a1_a2_a3, ebreak }));
+}

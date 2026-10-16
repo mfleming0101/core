@@ -302,10 +302,21 @@ pub fn Processor(comptime options: Options) type {
             }
             if (r.executed) {
                 self.instructions += 1;
-                self.charge(if (fitted and self.timing == .fitted) r.cycles + c3_timing.extraOf(r.code, &self.state.x) else r.cycles);
+                self.charge(if (fitted and self.timing == .fitted) self.priced(pc, r) else r.cycles);
             }
             self.stop = if (r.halted) self.settle(r) else null;
             return r;
+        }
+
+        fn priced(self: *Self, pc: u32, r: arch_step.Result) u32 {
+            const shadow = if (r.class == .branch and r.branched) self.shadowOf(pc +% if (r.code & 3 == 3) @as(u32, 4) else 2) else 0;
+            return r.cycles + c3_timing.extraOf(r.code, &self.state.x) + shadow;
+        }
+
+        fn shadowOf(self: *Self, next: u32) u32 {
+            const low = self.memory.parcel(next) orelse return 0;
+            const high = self.memory.parcel(next +% 2) orelse return 0;
+            return c3_timing.shadowOf(@as(u32, high) << 16 | low, &self.state.x);
         }
 
         fn advance(self: *Self, model: arch_step.Model, comptime tracing: bool) ?Stop {

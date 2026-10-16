@@ -1,10 +1,18 @@
 pub fn extraOf(code: u32, x: *const [32]u32) u32 {
-    if (code & 0xfe00_007f != 0x0200_0033) return 0;
+    if (!multiplies(code)) return 0;
     return switch (code >> 12 & 7) {
         0 => 0,
         1, 2, 3 => 4,
         else => latencyOf(code, x) - 1,
     };
+}
+
+pub fn shadowOf(code: u32, x: *const [32]u32) u32 {
+    return if (multiplies(code) and code >> 14 & 1 == 1) latencyOf(code, x) - 1 else 0;
+}
+
+fn multiplies(code: u32) bool {
+    return code & 0xfe00_007f == 0x0200_0033;
 }
 
 fn latencyOf(code: u32, x: *const [32]u32) u32 {
