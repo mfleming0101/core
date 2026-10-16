@@ -1394,3 +1394,25 @@ test "a taken C3 branch over a divide waits out that divide less one cycle, a ju
     try std.testing.expectEqual(@as(u64, 36), try c3Cycles(&.{ li_a2_7, li_a3_3, bne_zero_skip, divu_a1_a2_a3, ebreak }));
     try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ li_a2_7, li_a3_3, jal_skip, divu_a1_a2_a3, ebreak }));
 }
+
+const add_a3_a2_a2: u32 = 0x00c6_06b3;
+const add_a3_a4_a4: u32 = 0x00e7_06b3;
+const sw_a2_a1_four: u32 = 0x00c5_a223;
+const beq_a2_zero_skip: u32 = 0x0006_0463;
+
+fn c3CyclesOf(halfwords: []const u16) !u64 {
+    var memory: Memory = .{};
+    memory.parcels(halfwords);
+    var cpu = started(&memory, &.{});
+    const ran = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(?riscv.Stop, .breakpoint), ran.stop);
+    return ran.cycles;
+}
+
+test "the C3 instruction after a load that reads its register waits one cycle, board kernels lw_use, lw_sw_data, lw_beq and lw_add" {
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ lui_a1_ram, lw_a2_a1, add_a3_a2_a2, ebreak }));
+    try std.testing.expectEqual(@as(u64, 3), try c3Cycles(&.{ lui_a1_ram, lw_a2_a1, add_a3_a4_a4, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ lui_a1_ram, lw_a2_a1, sw_a2_a1_four, ebreak }));
+    try std.testing.expectEqual(@as(u64, 6), try c3Cycles(&.{ lui_a1_ram, lw_a2_a1, beq_a2_zero_skip, ebreak, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3CyclesOf(&.{ 0x05b7, 0x3fc8, 0x4190, 0x9632, c_ebreak }));
+}

@@ -154,6 +154,7 @@ pub fn Processor(comptime options: Options) type {
         last_fetch: u32,
         returns: u64,
         counter: Counter,
+        loaded: u32,
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -195,6 +196,7 @@ pub fn Processor(comptime options: Options) type {
                 .last_fetch = 0,
                 .returns = 0,
                 .counter = .{},
+                .loaded = 0,
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -310,7 +312,10 @@ pub fn Processor(comptime options: Options) type {
 
         fn priced(self: *Self, pc: u32, r: arch_step.Result) u32 {
             const shadow = if (r.class == .branch and r.branched) self.shadowOf(pc +% if (r.code & 3 == 3) @as(u32, 4) else 2) else 0;
-            return r.cycles + c3_timing.extraOf(r.code, &self.state.x) + shadow;
+            const registers = c3_timing.registersOf(r.code);
+            const waited: u32 = @intFromBool(registers.reads & self.loaded != 0);
+            self.loaded = if (r.class == .load) registers.writes else 0;
+            return r.cycles + c3_timing.extraOf(r.code, &self.state.x) + shadow + waited;
         }
 
         fn shadowOf(self: *Self, next: u32) u32 {
