@@ -1320,3 +1320,36 @@ test "setTiming answers unknown for every part, one cycle an instruction, until 
         for (std.enums.values(Class)) |class| try std.testing.expectEqual(@as(u8, 1), cpu.costOf(class).cycles);
     }
 }
+
+const csrwi_mpcer_cycle: u32 = 0x7e00_d073;
+const csrwi_mpccr_0: u32 = 0x7e20_5073;
+const csrwi_mpcmr_0: u32 = 0x7e10_5073;
+const csrr_a0_mpccr: u32 = 0x7e20_2573;
+const csrr_a1_mpcmr: u32 = 0x7e10_25f3;
+
+test "mpccr counts the cycles from the write that zeroed it to the read, under the CYCLE event and the enable mpcmr resets to, C3 TRM Registers 1.12 to 1.14" {
+    var memory: Memory = .{};
+    memory.program(&.{ csrwi_mpcer_cycle, csrwi_mpccr_0, nop, nop, csrr_a0_mpccr, csrr_a1_mpcmr, ebreak });
+    var cpu = started(&memory, &.{});
+    _ = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(u32, 3), cpu.state.x[10]);
+    try std.testing.expectEqual(@as(u32, 3), cpu.state.x[11]);
+}
+
+test "mpccr holds its count while mpcmr's COUNT_EN is clear, C3 TRM Register 1.13" {
+    var memory: Memory = .{};
+    memory.program(&.{ csrwi_mpcer_cycle, csrwi_mpccr_0, nop, csrwi_mpcmr_0, nop, nop, csrr_a0_mpccr, ebreak });
+    var cpu = started(&memory, &.{});
+    _ = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(u32, 2), cpu.state.x[10]);
+}
+
+test "the ESP32-C6 has no mpccr in this model, so reading it is an illegal instruction" {
+    var memory: Memory = .{};
+    memory.program(&.{ csrr_a0_mpccr, ebreak });
+    var cpu = Cpu.init(&memory, .esp32c6, .{});
+    cpu.reset();
+    cpu.state.pc = flash_base;
+    _ = cpu.step();
+    try std.testing.expectEqual(@as(u32, 2), cpu.state.csr.mcause);
+}

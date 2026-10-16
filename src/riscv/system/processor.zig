@@ -49,6 +49,28 @@ pub const Ended = enum { budget, deadline, stopped, asleep };
 /// What one run produced, counted for that run rather than as a total.
 pub const Run = struct { instructions: u64, cycles: u64, stop: ?Stop, ended: Ended };
 
+const count_en: u32 = 1 << 0;
+const count_sat: u32 = 1 << 1;
+const cycle_event: u32 = 1 << 0;
+const inst_event: u32 = 1 << 1;
+
+/// The C3's performance counter: its event and mode registers and the count stamped at the last write.
+const Counter = struct {
+    event: u32 = 0,
+    mode: u32 = count_en | count_sat,
+    count: u32 = 0,
+    cycles: u64 = 0,
+    instructions: u64 = 0,
+
+    /// The count now: cycles under CYCLE, else retired instructions under INST; no other event is modelled.
+    fn at(self: Counter, cycles: u64, instructions: u64) u32 {
+        if (self.mode & count_en == 0) return self.count;
+        const added = if (self.event & cycle_event != 0) cycles - self.cycles else if (self.event & inst_event != 0) instructions - self.instructions else 0;
+        const sum = @as(u64, self.count) + added;
+        return if (self.mode & count_sat != 0) @intCast(@min(sum, std.math.maxInt(u32))) else @truncate(sum);
+    }
+};
+
 const one_each: arch_step.Model.Costs = @splat(.{ .cycles = 1, .taken = 0 });
 
 fn costsOf(table: core.Table) arch_step.Model.Costs {
@@ -127,6 +149,7 @@ pub fn Processor(comptime options: Options) type {
         protected: bool,
         last_fetch: u32,
         returns: u64,
+        counter: Counter,
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -167,6 +190,7 @@ pub fn Processor(comptime options: Options) type {
                 .protected = false,
                 .last_fetch = 0,
                 .returns = 0,
+                .counter = .{},
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -565,6 +589,27 @@ pub fn Processor(comptime options: Options) type {
             self.pmp.write(number, value);
             self.memory.folded.unfold();
             self.reguard();
+        }
+
+        /// Answers mpcer, mpcmr or mpccr, the count read at the cycle this instruction issues in.
+        pub fn readCounter(self: *Self, number: csr.Counter) u32 {
+            return switch (number) {
+                .mpcer => self.counter.event,
+                .mpcmr => self.counter.mode,
+                .mpccr => self.counter.at(self.cycles, self.instructions),
+            };
+        }
+
+        /// Settles the count so far, then takes the write, C3 TRM Registers 1.12 to 1.14.
+        pub fn writeCounter(self: *Self, number: csr.Counter, value: u32) void {
+            self.counter.count = self.counter.at(self.cycles, self.instructions);
+            self.counter.cycles = self.cycles;
+            self.counter.instructions = self.instructions;
+            switch (number) {
+                .mpcer => self.counter.event = value & 0x7ff,
+                .mpcmr => self.counter.mode = value & 3,
+                .mpccr => self.counter.count = value,
+            }
         }
 
         /// The address a run of accesses began at: it feeds mtval and the record, and breaks the reservation.

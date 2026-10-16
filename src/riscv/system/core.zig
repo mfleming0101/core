@@ -54,6 +54,7 @@ const esp32c3_csr: csr.Implementation = .{
     .sc_failure = 1,
     .interrupt_csrs = false,
     .float = false,
+    .performance_counter = true,
 };
 
 const esp32c6_csr: csr.Implementation = blk: {
@@ -62,6 +63,7 @@ const esp32c6_csr: csr.Implementation = blk: {
     m.architecture_id = 0x8000_0002;
     m.implementation_id = 0x0000_0002;
     m.interrupt_csrs = true;
+    m.performance_counter = false;
     break :blk m;
 };
 
