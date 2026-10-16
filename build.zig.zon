@@ -4,10 +4,7 @@
     .fingerprint = 0x6b8d854f0bb7c86b,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .isa = .{
-            .url = "git+https://github.com/mfleming0101/isa.git?ref=v0.7.0#0eb60482993a810e7a4a5072198ce99b738aa0fe",
-            .hash = "isa-0.7.0-0alfDNtREAC8cYLprOJG-Da376mkaIkGwYSVq-3JK8DP",
-        },
+        .isa = .{ .path = "../isa" },
     },
     .paths = .{
         "build.zig",
