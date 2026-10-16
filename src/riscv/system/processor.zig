@@ -19,6 +19,7 @@ const intc_block = @import("intc.zig");
 const regions = @import("../../memory/regions.zig");
 const contract = @import("../../contract.zig");
 const trace = @import("../trace.zig");
+const c3_timing = @import("esp32c3_timing.zig");
 
 const Stop = arch_step.Stop;
 
@@ -86,6 +87,9 @@ pub fn Processor(comptime options: Options) type {
         for (options.cores, 0..) |c, i| out[i] = core.fitOf(c);
         break :blk out;
     };
+    const fitted = for (fits) |fit| {
+        if (fit != null) break true;
+    } else false;
     const specs = blk: {
         var out: [options.cores.len]core.Spec = undefined;
         for (options.cores, 0..) |c, i| out[i] = core.spec(c);
@@ -298,7 +302,7 @@ pub fn Processor(comptime options: Options) type {
             }
             if (r.executed) {
                 self.instructions += 1;
-                self.charge(r.cycles);
+                self.charge(if (fitted and self.timing == .fitted) r.cycles + c3_timing.extraOf(r.code, &self.state.x) else r.cycles);
             }
             self.stop = if (r.halted) self.settle(r) else null;
             return r;

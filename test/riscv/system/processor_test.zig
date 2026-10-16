@@ -1356,3 +1356,30 @@ test "the ESP32-C6 has no mpccr in this model, so reading it is an illegal instr
     _ = cpu.step();
     try std.testing.expectEqual(@as(u32, 2), cpu.state.csr.mcause);
 }
+
+fn c3Cycles(words: []const u32) !u64 {
+    var memory: Memory = .{};
+    memory.program(words);
+    var cpu = started(&memory, &.{});
+    const ran = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(?riscv.Stop, .breakpoint), ran.stop);
+    return ran.cycles;
+}
+
+const li_a2_7: u32 = 0x0070_0613;
+const li_a3_3: u32 = 0x0030_0693;
+const li_a3_minus_1: u32 = 0xfff0_0693;
+const li_a3_0: u32 = 0x0000_0693;
+const divu_a1_a2_a3: u32 = 0x02d6_55b3;
+const div_a1_a2_a3: u32 = 0x02d6_45b3;
+const mulh_a1_a2_a3: u32 = 0x02d6_15b3;
+const mul_a1_a2_a3: u32 = 0x02d6_05b3;
+
+test "a C3 divide takes three cycles and one more per leading zero of the divisor's magnitude, and MULH five, board kernels divu_7_3, divu_ff_ff, divu_by0, div_m7_3 and mulh" {
+    try std.testing.expectEqual(@as(u64, 35), try c3Cycles(&.{ li_a2_7, li_a3_3, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 5), try c3Cycles(&.{ li_a2_7, li_a3_minus_1, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 36), try c3Cycles(&.{ li_a2_7, li_a3_minus_1, div_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 37), try c3Cycles(&.{ li_a2_7, li_a3_0, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 7), try c3Cycles(&.{ li_a2_7, li_a3_3, mulh_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 3), try c3Cycles(&.{ li_a2_7, li_a3_3, mul_a1_a2_a3, ebreak }));
+}
