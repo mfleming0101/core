@@ -1422,3 +1422,22 @@ test "a C3 jump or taken branch onto a 32-bit instruction that starts mid-word c
     try std.testing.expectEqual(@as(u64, 3), try c3CyclesOf(&.{ 0x006f, 0x0060, 0x0001, c_li_a0_5, c_ebreak }));
     try std.testing.expectEqual(@as(u64, 2), try c3CyclesOf(&.{ 0x0001, 0x0513, 0x0050, c_ebreak }));
 }
+
+const auipc_t0: u32 = 0x0000_0297;
+const jr_t0_8: u32 = 0x0082_8067;
+const jr_t0_12: u32 = 0x00c2_8067;
+const lw_t0_a1: u32 = 0x0005_a283;
+const jr_t0: u32 = 0x0002_8067;
+
+test "a C3 JALR waits a cycle for a base the instruction before computed, or a load two before fetched, board kernels jalr, jalr_gap, lw_jalr, lw_nop_jalr and call_ret" {
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ auipc_t0, jr_t0_8, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ auipc_t0, nop, jr_t0_12, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ 0x0040_00ef, 0x0040_8067, ebreak }));
+    for ([_][]const u32{ &.{ lui_a1_ram, lw_t0_a1, jr_t0, ebreak }, &.{ lui_a1_ram, lw_t0_a1, nop, jr_t0, ebreak } }, [_]u32{ 12, 16 }) |words, target| {
+        var memory: Memory = .{};
+        memory.program(words);
+        memory.handler(&.{flash_base + target});
+        var cpu = started(&memory, &.{});
+        try std.testing.expectEqual(@as(u64, 6), cpu.run(.{ .instructions = 100 }).cycles);
+    }
+}

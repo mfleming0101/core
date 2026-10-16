@@ -156,6 +156,8 @@ pub fn Processor(comptime options: Options) type {
         counter: Counter,
         loaded: u32,
         landed: bool,
+        written: u32,
+        loaded_before: u32,
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -199,6 +201,8 @@ pub fn Processor(comptime options: Options) type {
                 .counter = .{},
                 .loaded = 0,
                 .landed = false,
+                .written = 0,
+                .loaded_before = 0,
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -317,9 +321,12 @@ pub fn Processor(comptime options: Options) type {
             const registers = c3_timing.registersOf(r.code);
             const waited: u32 = @intFromBool(registers.reads & self.loaded != 0);
             const landed: u32 = @intFromBool(self.landed and pc & 2 != 0 and r.code & 3 == 3);
+            const chained: u32 = @intFromBool(r.class == .jump and registers.reads & (self.written | self.loaded_before) != 0);
+            self.loaded_before = self.loaded;
             self.loaded = if (r.class == .load) registers.writes else 0;
+            self.written = if (r.class == .jump) 0 else registers.writes;
             self.landed = r.branched;
-            return r.cycles + c3_timing.extraOf(r.code, &self.state.x) + shadow + waited + landed;
+            return r.cycles + c3_timing.extraOf(r.code, &self.state.x) + shadow + waited + landed + chained;
         }
 
         fn shadowOf(self: *Self, next: u32) u32 {
