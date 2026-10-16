@@ -1,4 +1,5 @@
 pub fn extraOf(code: u32, x: *const [32]u32) u32 {
+    if (code & 0x7f == 0x0f) return 3;
     if (!multiplies(code)) return 0;
     return switch (code >> 12 & 7) {
         0 => 0,

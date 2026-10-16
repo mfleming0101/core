@@ -1441,3 +1441,7 @@ test "a C3 JALR waits a cycle for a base the instruction before computed, or a l
         try std.testing.expectEqual(@as(u64, 6), cpu.run(.{ .instructions = 100 }).cycles);
     }
 }
+
+test "a C3 FENCE takes four cycles, board kernel fence" {
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ 0x0ff0_000f, ebreak }));
+}
