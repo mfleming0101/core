@@ -147,19 +147,19 @@ test "a step reports the class and the address of the instruction it ran, and ch
     var memory: Memory = .{};
     memory.program(&.{ li_a0_5, ebreak });
     var cpu = started(&memory, &.{});
-    try std.testing.expectEqual(riscv.Step{ .address = flash_base, .class = .data_processing, .cost = null, .charged = 1, .sequential = false, .asleep = false, .stop = null }, cpu.step());
+    try std.testing.expectEqual(riscv.Step{ .address = flash_base, .class = .data_processing, .cost = 1, .charged = 1, .sequential = false, .asleep = false, .stop = null }, cpu.step());
     try std.testing.expectEqual(@as(u64, 1), cpu.instructions);
     try std.testing.expectEqual(@as(u64, 1), cpu.cycles);
 }
 
-test "a step reports no cycle count on either part, because neither has a fit" {
-    for ([_]riscv.Core{ .esp32c3, .esp32c6 }) |c| {
+test "a step reports its cycle count on the fitted C3 and none on the C6, which has no fit" {
+    for ([_]riscv.Core{ .esp32c3, .esp32c6 }, [_]?u8{ 1, null }) |c, cost| {
         var memory: Memory = .{};
         memory.program(&.{ li_a0_5, ebreak });
         var cpu = startedAs(&memory, c, &.{});
         const ran = cpu.step();
         try std.testing.expectEqual(@as(?Class, .data_processing), ran.class);
-        try std.testing.expectEqual(@as(?u8, null), ran.cost);
+        try std.testing.expectEqual(cost, ran.cost);
     }
 }
 
@@ -1310,15 +1310,18 @@ test "a build that carries the ESP32-C3 alone decodes no atomic row, so the A ex
     try std.testing.expect(c6.spec.pmp_static_priority);
 }
 
-test "setTiming answers unknown for every part, one cycle an instruction, until one is fitted" {
+test "the C3 starts fitted, a taken branch three cycles and a jump two, and the C6 answers unknown, one cycle an instruction" {
     var records: [4]riscv.trace.Record = undefined;
-    for (every) |c| {
-        var memory: Memory = .{};
-        var cpu = Cpu.init(&memory, c, riscv.trace.Ring.init(&records) catch unreachable);
-        try std.testing.expectEqual(.unknown, cpu.timing);
-        try std.testing.expectEqual(.unknown, cpu.setTiming(.fitted));
-        for (std.enums.values(Class)) |class| try std.testing.expectEqual(@as(u8, 1), cpu.costOf(class).cycles);
-    }
+    var memory: Memory = .{};
+    var c3 = Cpu.init(&memory, .esp32c3, riscv.trace.Ring.init(&records) catch unreachable);
+    try std.testing.expectEqual(.fitted, c3.timing);
+    try std.testing.expectEqual(@as(u8, 2), c3.costOf(.branch).taken);
+    try std.testing.expectEqual(@as(u8, 1), c3.costOf(.jump).taken);
+    try std.testing.expectEqual(.unknown, c3.setTiming(.unknown));
+    try std.testing.expectEqual(@as(u8, 0), c3.costOf(.branch).taken);
+    var c6 = Cpu.init(&memory, .esp32c6, riscv.trace.Ring.init(&records) catch unreachable);
+    try std.testing.expectEqual(.unknown, c6.setTiming(.fitted));
+    for (std.enums.values(Class)) |class| try std.testing.expectEqual(@as(u8, 1), c6.costOf(class).cycles);
 }
 
 const csrwi_mpcer_cycle: u32 = 0x7e00_d073;

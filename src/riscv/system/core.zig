@@ -91,12 +91,18 @@ pub fn spec(comptime core: Core) Spec {
     return out;
 }
 
-/// A part's table fitted to measurements, or null where none was; no part has one yet.
+/// A part's table fitted to measurements, or null where none was.
 pub fn fitOf(comptime core: Core) ?Table {
     return switch (core) {
-        .esp32c3, .esp32c6 => null,
+        .esp32c3 => esp32c3_fit,
+        .esp32c6 => null,
     };
 }
+
+const esp32c3_fit: Table = .{
+    .cycles = .initFill(1),
+    .taken = .init(.{ .data_processing = 0, .load = 0, .store = 0, .branch = 2, .jump = 1, .system = 0, .multiply = 0, .divide = 0, .atomic = 0, .load_reserved = 0 }),
+};
 
 fn like(comptime base: Core, comptime changes: anytype) Spec {
     var out = spec(base);
