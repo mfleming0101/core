@@ -322,11 +322,12 @@ pub fn Processor(comptime options: Options) type {
             const waited: u32 = @intFromBool(registers.reads & self.loaded != 0);
             const landed: u32 = @intFromBool(self.landed and pc & 2 != 0 and r.code & 3 == 3);
             const chained: u32 = @intFromBool(r.class == .jump and registers.reads & (self.written | self.loaded_before) != 0);
-            self.loaded_before = self.loaded;
+            const cost = r.cycles + c3_timing.extraOf(r.code, &self.state.x) + shadow + waited + landed + chained;
+            self.loaded_before = if (cost == 1) self.loaded else 0;
             self.loaded = if (r.class == .load) registers.writes else 0;
             self.written = if (r.class == .jump) 0 else registers.writes;
             self.landed = r.branched;
-            return r.cycles + c3_timing.extraOf(r.code, &self.state.x) + shadow + waited + landed + chained;
+            return cost;
         }
 
         fn shadowOf(self: *Self, next: u32) u32 {

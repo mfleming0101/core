@@ -1442,6 +1442,16 @@ test "a C3 JALR waits a cycle for a base the instruction before computed, or a l
     }
 }
 
+test "a C3 JALR waits on a load two before only when the instruction between took a single cycle, board kernels lw_beq_jalr, lw_mulh_jalr and lw_j_jalr" {
+    for ([_][]const u32{ &.{ lui_a1_ram, lw_t0_a1, beq_zero_skip, ebreak, jr_t0, ebreak }, &.{ lui_a1_ram, lw_t0_a1, mulh_a1_a2_a3, jr_t0, ebreak } }, [_]u32{ 20, 16 }, [_]u64{ 7, 9 }) |words, target, cycles| {
+        var memory: Memory = .{};
+        memory.program(words);
+        memory.handler(&.{flash_base + target});
+        var cpu = started(&memory, &.{});
+        try std.testing.expectEqual(cycles, cpu.run(.{ .instructions = 100 }).cycles);
+    }
+}
+
 test "a C3 FENCE takes four cycles, board kernel fence" {
     try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ 0x0ff0_000f, ebreak }));
 }
