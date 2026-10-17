@@ -1452,6 +1452,12 @@ test "a C3 JALR waits on a load two before only when the instruction between too
     }
 }
 
+test "a C3 JALR that links into its own base register takes a cycle more, board kernels jalr_same, jalr_same_gap and auipc_call" {
+    try std.testing.expectEqual(@as(u64, 5), try c3Cycles(&.{ auipc_t0, 0x0082_82e7, ebreak }));
+    try std.testing.expectEqual(@as(u64, 5), try c3Cycles(&.{ auipc_t0, nop, 0x00c2_82e7, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ auipc_t0, 0x0082_8367, ebreak }));
+}
+
 test "a C3 FENCE takes four cycles, board kernel fence" {
     try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ 0x0ff0_000f, ebreak }));
 }
