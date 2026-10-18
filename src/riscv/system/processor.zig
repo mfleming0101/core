@@ -364,9 +364,15 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn shadowOf(self: *Self, next: u32) u32 {
-            const low = self.memory.parcel(next) orelse return 0;
-            const high = self.memory.parcel(next +% 2) orelse return 0;
+            const low = self.parcelAt(next) orelse return 0;
+            const high = self.parcelAt(next +% 2) orelse return 0;
             return c3_timing.shadowOf(@as(u32, high) << 16 | low, &self.state.x);
+        }
+
+        fn parcelAt(self: *Self, at: u32) ?u16 {
+            const bytes = self.memory.folded.span(at, 2, .fetch);
+            if (bytes.len >= 2) return std.mem.readInt(u16, bytes[0..2], .little);
+            return self.memory.parcel(at);
         }
 
         fn advance(self: *Self, model: arch_step.Model, comptime tracing: bool) ?Stop {
