@@ -340,7 +340,7 @@ pub fn Processor(comptime options: Options) type {
 
         const dynamic = std.math.maxInt(u32);
 
-        const Known = struct { code: u32, reads: u32, writes: u32, fixed: u32, loads: u32, kept: u32, jumps: u32, memory: u8 };
+        const Known = struct { code: u32, reads: u32, fixed: u32, loads: u32, kept: u32, jumps: u32, memory: u8 };
 
         fn knownOf(code: u32, class: Class) Known {
             const registers = c3_timing.registersOf(code);
@@ -348,7 +348,6 @@ pub fn Processor(comptime options: Options) type {
             return .{
                 .code = code,
                 .reads = registers.reads,
-                .writes = registers.writes,
                 .fixed = if (c3_timing.fixedOf(code)) |fixed| fixed + @intFromBool(jump and registers.reads & registers.writes != 0) else dynamic,
                 .loads = if (class == .load) registers.writes else 0,
                 .kept = if (jump) 0 else registers.writes,
