@@ -37,7 +37,7 @@ pub fn Fetch(comptime Ports: type) type {
                     const ahead: i32 = @bitCast(last -% self.fp);
                     const ready = if (ahead < 0) self.ready[last >> 2 & 7] else self.at + @as(u32, @intCast(ahead >> 2)) + 1;
                     if (ready <= d and self.frozen != d) {
-                        self.cycle = @max(self.cycle, d + 1);
+                        self.cycle = d + 1;
                         return self.decoded(d, end, start, cost, extra, branched, to, port);
                     }
                 }
@@ -63,8 +63,10 @@ pub fn Fetch(comptime Ports: type) type {
         }
 
         inline fn decoded(self: *Self, d: u64, end: u32, start: u64, cost: u32, extra: u1, branched: bool, to: u32, port: u8) u32 {
-            const stop = self.pauseAt();
-            if (self.halt == never and stop <= d) self.halt = stop;
+            if (self.halt == never) {
+                const stop = self.pauseAt();
+                if (stop <= d) self.halt = stop;
+            }
             self.head = @max(self.head, end & ~@as(u32, 3));
             if (self.halt != never and (self.frontier(d) -% self.head) >> 2 <= low) {
                 @branchHint(.unlikely);
