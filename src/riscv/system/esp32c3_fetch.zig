@@ -118,14 +118,14 @@ pub fn Fetch(comptime Ports: type) type {
             return self.fp +% @as(u32, @intCast(@min(c, self.halt) - self.at)) * 4;
         }
 
-        fn keep(self: *Self, c: u64) void {
+        inline fn keep(self: *Self, c: u64) void {
             const k = @min(c, self.halt) - self.at;
             var i = k -| cap;
             while (i < k) : (i += 1) self.ready[(self.fp >> 2) +% @as(u32, @intCast(i)) & 7] = self.at + i + 1;
             self.fp +%= @as(u32, @intCast(k)) * 4;
         }
 
-        fn sweep(self: *Self, c: u64) void {
+        inline fn sweep(self: *Self, c: u64) void {
             const end = self.frontier(c);
             if (self.ports.data != 0) {
                 const b = self.block;
