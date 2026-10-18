@@ -20,6 +20,7 @@ const regions = @import("../../memory/regions.zig");
 const contract = @import("../../contract.zig");
 const trace = @import("../trace.zig");
 const c3_timing = @import("esp32c3_timing.zig");
+const c3_fetch = @import("esp32c3_fetch.zig");
 
 const Stop = arch_step.Stop;
 
@@ -27,6 +28,7 @@ const Stop = arch_step.Stop;
 pub const Options = struct {
     cores: []const core.Core,
     Bus: type,
+    Ports: type = void,
 };
 
 /// What one step produced: where it ran, what it was, what it cost and what it charged.
@@ -158,6 +160,7 @@ pub fn Processor(comptime options: Options) type {
         landed: bool,
         written: u32,
         loaded_before: u32,
+        fetch: if (options.Ports == void) void else c3_fetch.Fetch(options.Ports),
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -203,6 +206,7 @@ pub fn Processor(comptime options: Options) type {
                 .landed = false,
                 .written = 0,
                 .loaded_before = 0,
+                .fetch = if (options.Ports == void) {} else .{},
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -328,7 +332,9 @@ pub fn Processor(comptime options: Options) type {
             self.loaded = if (r.class == .load) registers.writes else 0;
             self.written = if (r.class == .jump) 0 else registers.writes;
             self.landed = r.branched;
-            return cost;
+            if (options.Ports == void) return cost;
+            const port = if (r.class == .load or r.class == .store) options.Ports.of(self.last_access) else 0;
+            return self.fetch.issue(pc, r.code & 3 == 3, cost, landed != 0, if (r.branched) self.state.pc else null, port);
         }
 
         fn shadowOf(self: *Self, next: u32) u32 {
