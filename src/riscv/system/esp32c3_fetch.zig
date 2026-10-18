@@ -9,32 +9,60 @@ pub fn Fetch(comptime Ports: type) type {
         const Self = @This();
 
         ports: Ports = .{},
-        cycle: u64 = 0,
         next: u64 = 1,
-        fp: u32 = 0,
+        expect: u32 = 0,
         head: u32 = 0,
+        cycle: u64 = 0,
+        fp: u32 = 0,
+        at: u64 = 0,
+        halt: u64 = never,
+        swept: u32 = 0,
+        block: Ports.Block = .{ .lo = 0, .hi = 0, .id = 0, .banks = 0 },
         ready: [8]u64 = @splat(0),
-        paused: bool = false,
         redirect: u64 = never,
         target: u32 = 0,
-        expect: u32 = 0,
         data: u64 = never,
         port: u8 = 0,
         frozen: u64 = never,
 
         pub fn issue(self: *Self, pc: u32, wide: bool, cost: u32, landed: bool, to: ?u32, port: u8) u32 {
             const start = self.next;
-            if (pc != self.expect) self.flush(@max(start - 1, self.cycle), pc);
             const extra = @intFromBool(landed);
             const end = pc +% @as(u32, if (wide) 4 else 2);
-            const first = pc & ~@as(u32, 3);
             const last = (end -% 1) & ~@as(u32, 3);
             var d = start + extra;
-            while (true) : (d += 1) {
-                self.upto(d);
-                if (self.readyAt(first) <= d and self.readyAt(last) <= d and self.frozen != d) break;
+            if (self.redirect <= d and self.data > d and pc == self.expect) self.redirected(self.redirect);
+            if (self.redirect == never and self.data > d and pc == self.expect) {
+                const ahead: i32 = @bitCast(last -% self.fp);
+                const ready = if (ahead < 0) self.ready[last >> 2 & 7] else self.at + @as(u32, @intCast(ahead >> 2)) + 1;
+                if (ready <= d and self.frozen != d) {
+                    self.cycle = @max(self.cycle, d + 1);
+                    return self.decoded(d, end, start, cost, extra, to, port);
+                }
             }
+            if (pc != self.expect) self.flush(@max(start - 1, self.cycle), pc);
+            const first = pc & ~@as(u32, 3);
+            while (true) {
+                self.upto(d);
+                const ready = @max(self.readyAt(first), self.readyAt(last));
+                if (ready > d) {
+                    d = @min(ready, self.redirect, self.data);
+                } else if (self.frozen == d) {
+                    d += 1;
+                } else break;
+            }
+            return self.decoded(d, end, start, cost, extra, to, port);
+        }
+
+        fn decoded(self: *Self, d: u64, end: u32, start: u64, cost: u32, extra: u1, to: ?u32, port: u8) u32 {
+            const stop = self.pauseAt();
+            if (self.halt == never and stop <= d) self.halt = stop;
             self.head = @max(self.head, end & ~@as(u32, 3));
+            if (self.halt != never and (self.frontier(d) -% self.head) >> 2 <= low) {
+                self.keep(d);
+                self.at = d + 1;
+                self.halt = never;
+            }
             var e = d + cost - extra;
             var sent = false;
             while (self.data <= e) {
@@ -43,7 +71,12 @@ pub fn Fetch(comptime Ports: type) type {
                     self.flush(e - 1, target);
                     sent = true;
                 };
-                self.upto(at);
+                if (self.redirect <= at) self.upto(at) else {
+                    const paused = self.pauseAt();
+                    if (self.halt == never and paused <= at) self.halt = paused;
+                    self.arbitrate(at);
+                    self.cycle = @max(self.cycle, at + 1);
+                }
                 if (self.frozen == at) e += 1;
             }
             if (to) |target| if (!sent or self.cycle <= e - 1) self.flush(@max(e - 1, self.cycle), target);
@@ -62,43 +95,96 @@ pub fn Fetch(comptime Ports: type) type {
         }
 
         fn readyAt(self: *const Self, word: u32) u64 {
-            return if (word -% self.head < self.fp -% self.head) self.ready[word >> 2 & 7] else never;
+            if (@as(i32, @bitCast(word -% self.head)) < 0) return never;
+            const ahead: i32 = @bitCast(word -% self.fp);
+            if (ahead < 0) return self.ready[word >> 2 & 7];
+            const at = self.at + @as(u32, @intCast(ahead >> 2));
+            return if (at < @min(self.halt, self.pauseAt())) at + 1 else never;
+        }
+
+        fn pauseAt(self: *const Self) u64 {
+            const held: i32 = @as(i32, @bitCast(self.fp -% self.head)) >> 2;
+            return self.at + @as(u32, @intCast(@max(cap - held, 0)));
+        }
+
+        fn frontier(self: *const Self, c: u64) u32 {
+            return self.fp +% @as(u32, @intCast(@min(c, self.halt) - self.at)) * 4;
+        }
+
+        fn keep(self: *Self, c: u64) void {
+            const k = @min(c, self.halt) - self.at;
+            var i = k -| cap;
+            while (i < k) : (i += 1) self.ready[(self.fp >> 2) +% @as(u32, @intCast(i)) & 7] = self.at + i + 1;
+            self.fp +%= @as(u32, @intCast(k)) * 4;
+        }
+
+        fn sweep(self: *Self, c: u64) void {
+            const end = self.frontier(c);
+            if (self.ports.data != 0) {
+                const b = self.block;
+                if (self.swept >= b.lo and end <= b.hi) {
+                    if (b.banks != 0) {
+                        const words = (end - self.swept) >> 2;
+                        const all = (@as(u64, 1) << @intCast(b.banks)) - 1;
+                        const run = if (words >= b.banks) all else ((@as(u64, 1) << @intCast(words)) - 1) << @intCast(((self.swept - b.lo) >> 2) % b.banks);
+                        self.ports.data &= ~(((run | run >> @intCast(b.banks)) & all) << @intCast(b.id));
+                    }
+                } else {
+                    self.ports.fetched(self.swept, end);
+                    self.block = Ports.blockOf(end);
+                }
+            }
+            self.swept = end;
+        }
+
+        fn portOf(self: *const Self, word: u32) u8 {
+            const b = self.block;
+            if (word < b.lo or word >= b.hi) return Ports.of(word);
+            return if (b.banks == 0) 0 else b.id + @as(u8, @intCast(((word - b.lo) >> 2) % b.banks));
+        }
+
+        fn redirected(self: *Self, t: u64) void {
+            const stop = self.pauseAt();
+            if (self.halt == never and stop <= t) self.halt = stop;
+            self.restart(t);
+        }
+
+        inline fn restart(self: *Self, t: u64) void {
+            self.sweep(t);
+            self.fp = self.target & ~@as(u32, 3);
+            self.head = self.fp;
+            self.swept = self.fp;
+            self.halt = never;
+            self.at = t;
+            self.redirect = never;
         }
 
         fn upto(self: *Self, c: u64) void {
-            while (self.cycle <= c) self.step();
+            while (true) {
+                const t = @min(self.redirect, self.data);
+                if (t > c) break;
+                const stop = self.pauseAt();
+                if (self.halt == never and stop <= t) self.halt = stop;
+                if (self.redirect == t) self.restart(t);
+                if (self.data == t) self.arbitrate(t);
+            }
+            self.cycle = @max(self.cycle, c + 1);
         }
 
-        fn step(self: *Self) void {
-            const c = self.cycle;
-            if (self.redirect <= c) {
-                self.fp = self.target & ~@as(u32, 3);
-                self.head = self.fp;
-                self.paused = false;
-                self.redirect = never;
-            }
-            const held = (self.fp -% self.head) >> 2;
-            if (held >= cap) self.paused = true;
-            if (self.paused and held <= low) self.paused = false;
-            var fetching = !self.paused;
-            const fport = if (fetching) Ports.of(self.fp) else 0;
-            if (self.data <= c) {
-                const won = !(fetching and fport == self.port and self.ports.dataLast(self.port));
-                if (won) {
-                    if (fetching and fport == self.port) fetching = false;
-                    self.ports.granted(self.port, true);
-                    self.data = never;
-                } else {
-                    self.frozen = c;
-                    self.data = c + 1;
+        inline fn arbitrate(self: *Self, t: u64) void {
+            const word = self.frontier(t);
+            self.sweep(t);
+            if (self.halt == never and self.portOf(word) == self.port) {
+                if (self.ports.dataLast(self.port)) {
+                    self.frozen = t;
+                    self.data = t + 1;
+                    return;
                 }
+                self.keep(t);
+                self.at = t + 1;
             }
-            if (fetching) {
-                if (fport != 0) self.ports.granted(fport, false);
-                self.ready[self.fp >> 2 & 7] = c + 1;
-                self.fp +%= 4;
-            }
-            self.cycle = c + 1;
+            self.ports.granted(self.port);
+            self.data = never;
         }
     };
 }
