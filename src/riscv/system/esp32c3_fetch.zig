@@ -25,25 +25,27 @@ pub fn Fetch(comptime Ports: type) type {
         port: u8 = 0,
         frozen: u64 = never,
 
-        pub fn issue(self: *Self, pc: u32, wide: bool, cost: u32, landed: bool, to: ?u32, port: u8) u32 {
+        pub fn issue(self: *Self, pc: u32, wide: bool, cost: u32, landed: bool, branched: bool, to: u32, port: u8) u32 {
             const start = self.next;
             const extra = @intFromBool(landed);
             const end = pc +% @as(u32, if (wide) 4 else 2);
             const last = (end -% 1) & ~@as(u32, 3);
             const d = start + extra;
-            if (self.redirect <= d and self.data > d and pc == self.expect) self.redirected(self.redirect);
-            if (self.redirect == never and self.data > d and pc == self.expect) {
-                const ahead: i32 = @bitCast(last -% self.fp);
-                const ready = if (ahead < 0) self.ready[last >> 2 & 7] else self.at + @as(u32, @intCast(ahead >> 2)) + 1;
-                if (ready <= d and self.frozen != d) {
-                    self.cycle = @max(self.cycle, d + 1);
-                    return self.decoded(d, end, start, cost, extra, to, port);
+            if (self.data > d and pc == self.expect) {
+                if (self.redirect <= d) self.redirected(self.redirect);
+                if (self.redirect == never) {
+                    const ahead: i32 = @bitCast(last -% self.fp);
+                    const ready = if (ahead < 0) self.ready[last >> 2 & 7] else self.at + @as(u32, @intCast(ahead >> 2)) + 1;
+                    if (ready <= d and self.frozen != d) {
+                        self.cycle = @max(self.cycle, d + 1);
+                        return self.decoded(d, end, start, cost, extra, branched, to, port);
+                    }
                 }
             }
-            return self.slow(pc, d, end, last, start, cost, extra, to, port);
+            return self.slow(pc, d, end, last, start, cost, extra, branched, to, port);
         }
 
-        noinline fn slow(self: *Self, pc: u32, from: u64, end: u32, last: u32, start: u64, cost: u32, extra: u1, to: ?u32, port: u8) u32 {
+        noinline fn slow(self: *Self, pc: u32, from: u64, end: u32, last: u32, start: u64, cost: u32, extra: u1, branched: bool, to: u32, port: u8) u32 {
             @branchHint(.cold);
             var d = from;
             if (pc != self.expect) self.flush(@max(start - 1, self.cycle), pc);
@@ -57,10 +59,10 @@ pub fn Fetch(comptime Ports: type) type {
                     d += 1;
                 } else break;
             }
-            return self.decoded(d, end, start, cost, extra, to, port);
+            return self.decoded(d, end, start, cost, extra, branched, to, port);
         }
 
-        inline fn decoded(self: *Self, d: u64, end: u32, start: u64, cost: u32, extra: u1, to: ?u32, port: u8) u32 {
+        inline fn decoded(self: *Self, d: u64, end: u32, start: u64, cost: u32, extra: u1, branched: bool, to: u32, port: u8) u32 {
             const stop = self.pauseAt();
             if (self.halt == never and stop <= d) self.halt = stop;
             self.head = @max(self.head, end & ~@as(u32, 3));
@@ -74,10 +76,10 @@ pub fn Fetch(comptime Ports: type) type {
             var sent = false;
             while (self.data <= e) {
                 const at = self.data;
-                if (to) |target| if (e - 1 <= at and self.cycle <= e - 1) {
-                    self.flush(e - 1, target);
+                if (branched and e - 1 <= at and self.cycle <= e - 1) {
+                    self.flush(e - 1, to);
                     sent = true;
-                };
+                }
                 if (self.redirect <= at) self.upto(at) else {
                     const paused = self.pauseAt();
                     if (self.halt == never and paused <= at) self.halt = paused;
@@ -86,9 +88,9 @@ pub fn Fetch(comptime Ports: type) type {
                 }
                 if (self.frozen == at) e += 1;
             }
-            if (to) |target| if (!sent or self.cycle <= e - 1) self.flush(@max(e - 1, self.cycle), target);
+            if (branched and (!sent or self.cycle <= e - 1)) self.flush(@max(e - 1, self.cycle), to);
             self.next = e;
-            self.expect = to orelse end;
+            self.expect = if (branched) to else end;
             if (port != 0) {
                 self.data = e + 1;
                 self.port = port;

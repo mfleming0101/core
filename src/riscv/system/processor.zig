@@ -334,7 +334,7 @@ pub fn Processor(comptime options: Options) type {
             self.landed = r.branched;
             if (options.Ports == void) return cost;
             const port = if (r.class == .load or r.class == .store) options.Ports.of(self.last_access) else 0;
-            return self.fetch.issue(pc, r.code & 3 == 3, cost, landed != 0, if (r.branched) self.state.pc else null, port);
+            return self.fetch.issue(pc, r.code & 3 == 3, cost, landed != 0, r.branched, self.state.pc, port);
         }
 
         fn shadowOf(self: *Self, next: u32) u32 {
