@@ -161,6 +161,7 @@ pub fn Processor(comptime options: Options) type {
         written: u32,
         loaded_before: u32,
         fetch: if (options.Ports == void) void else c3_fetch.Fetch(options.Ports),
+        known: if (options.Ports == void) void else [1024][3]u32,
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -207,6 +208,7 @@ pub fn Processor(comptime options: Options) type {
                 .written = 0,
                 .loaded_before = 0,
                 .fetch = if (options.Ports == void) {} else .{},
+                .known = if (options.Ports == void) {} else @splat(@splat(0)),
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -322,7 +324,7 @@ pub fn Processor(comptime options: Options) type {
 
         fn priced(self: *Self, pc: u32, r: arch_step.Result) u32 {
             const shadow = if (r.class == .branch and r.branched) self.shadowOf(pc +% if (r.code & 3 == 3) @as(u32, 4) else 2) else 0;
-            const registers = c3_timing.registersOf(r.code);
+            const registers = if (options.Ports == void) c3_timing.registersOf(r.code) else self.registersOf(pc, r.code);
             const waited: u32 = @intFromBool(registers.reads & self.loaded != 0);
             const landed: u32 = @intFromBool(self.landed and pc & 2 != 0 and r.code & 3 == 3);
             const chained: u32 = @intFromBool(r.class == .jump and registers.reads & (self.written | self.loaded_before) != 0);
@@ -335,6 +337,15 @@ pub fn Processor(comptime options: Options) type {
             if (options.Ports == void) return cost;
             const port = if (r.class == .load or r.class == .store) options.Ports.of(self.last_access) else 0;
             return self.fetch.issue(pc, r.code & 3 == 3, cost, landed != 0, r.branched, self.state.pc, port);
+        }
+
+        fn registersOf(self: *Self, pc: u32, code: u32) c3_timing.Registers {
+            const slot = &self.known[pc >> 1 & 1023];
+            if (slot[0] != code) {
+                const found = c3_timing.registersOf(code);
+                slot.* = .{ code, found.reads, found.writes };
+            }
+            return .{ .reads = slot[1], .writes = slot[2] };
         }
 
         fn shadowOf(self: *Self, next: u32) u32 {
