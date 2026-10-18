@@ -19,6 +19,8 @@ const intc_block = @import("intc.zig");
 const regions = @import("../../memory/regions.zig");
 const contract = @import("../../contract.zig");
 const trace = @import("../trace.zig");
+const c3_timing = @import("esp32c3_timing.zig");
+const c3_fetch = @import("esp32c3_fetch.zig");
 
 const Stop = arch_step.Stop;
 
@@ -26,6 +28,7 @@ const Stop = arch_step.Stop;
 pub const Options = struct {
     cores: []const core.Core,
     Bus: type,
+    Ports: type = void,
 };
 
 /// What one step produced: where it ran, what it was, what it cost and what it charged.
@@ -49,6 +52,28 @@ pub const Ended = enum { budget, deadline, stopped, asleep };
 /// What one run produced, counted for that run rather than as a total.
 pub const Run = struct { instructions: u64, cycles: u64, stop: ?Stop, ended: Ended };
 
+const count_en: u32 = 1 << 0;
+const count_sat: u32 = 1 << 1;
+const cycle_event: u32 = 1 << 0;
+const inst_event: u32 = 1 << 1;
+
+/// The C3's performance counter: its event and mode registers and the count stamped at the last write.
+const Counter = struct {
+    event: u32 = 0,
+    mode: u32 = count_en | count_sat,
+    count: u32 = 0,
+    cycles: u64 = 0,
+    instructions: u64 = 0,
+
+    /// The count now: cycles under CYCLE, else retired instructions under INST; no other event is modelled.
+    fn at(self: Counter, cycles: u64, instructions: u64) u32 {
+        if (self.mode & count_en == 0) return self.count;
+        const added = if (self.event & cycle_event != 0) cycles - self.cycles else if (self.event & inst_event != 0) instructions - self.instructions else 0;
+        const sum = @as(u64, self.count) + added;
+        return if (self.mode & count_sat != 0) @intCast(@min(sum, std.math.maxInt(u32))) else @truncate(sum);
+    }
+};
+
 const one_each: arch_step.Model.Costs = @splat(.{ .cycles = 1, .taken = 0 });
 
 fn costsOf(table: core.Table) arch_step.Model.Costs {
@@ -64,6 +89,9 @@ pub fn Processor(comptime options: Options) type {
         for (options.cores, 0..) |c, i| out[i] = core.fitOf(c);
         break :blk out;
     };
+    const fitted = for (fits) |fit| {
+        if (fit != null) break true;
+    } else false;
     const specs = blk: {
         var out: [options.cores.len]core.Spec = undefined;
         for (options.cores, 0..) |c, i| out[i] = core.spec(c);
@@ -127,6 +155,13 @@ pub fn Processor(comptime options: Options) type {
         protected: bool,
         last_fetch: u32,
         returns: u64,
+        counter: Counter,
+        loaded: u32,
+        landed: bool,
+        written: u32,
+        loaded_before: u32,
+        fetch: if (options.Ports == void) void else c3_fetch.Fetch(options.Ports),
+        known: if (options.Ports == void) void else [1024]Known,
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -167,6 +202,13 @@ pub fn Processor(comptime options: Options) type {
                 .protected = false,
                 .last_fetch = 0,
                 .returns = 0,
+                .counter = .{},
+                .loaded = 0,
+                .landed = false,
+                .written = 0,
+                .loaded_before = 0,
+                .fetch = if (options.Ports == void) {} else .{},
+                .known = if (options.Ports == void) {} else @splat(std.mem.zeroes(Known)),
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -274,10 +316,62 @@ pub fn Processor(comptime options: Options) type {
             }
             if (r.executed) {
                 self.instructions += 1;
-                self.charge(r.cycles);
+                self.charge(if (fitted and self.timing == .fitted) self.priced(pc, r) else r.cycles);
             }
             self.stop = if (r.halted) self.settle(r) else null;
             return r;
+        }
+
+        fn priced(self: *Self, pc: u32, r: arch_step.Result) u32 {
+            const shadow = if (r.class == .branch and r.branched) self.shadowOf(pc +% if (r.code & 3 == 3) @as(u32, 4) else 2) else 0;
+            const known = if (options.Ports == void) knownOf(r.code, r.class) else self.lookup(pc, r.code, r.class);
+            const waited: u32 = @intFromBool(known.reads & self.loaded != 0);
+            const landed: u32 = @intFromBool(self.landed and pc & 2 != 0 and r.code & 3 == 3);
+            const chained: u32 = @intFromBool(known.jumps & (self.written | self.loaded_before) != 0);
+            const cost = r.cycles + (if (known.fixed != dynamic) known.fixed else c3_timing.extraOf(r.code, &self.state.x)) + shadow + waited + landed + chained;
+            self.loaded_before = if (cost == 1) self.loaded else 0;
+            self.loaded = known.loads;
+            self.written = known.kept;
+            self.landed = r.branched;
+            if (options.Ports == void) return cost;
+            const port = options.Ports.of(self.last_access) & known.memory;
+            return self.fetch.issue(pc, r.code & 3 == 3, cost, landed != 0, r.branched, self.state.pc, port);
+        }
+
+        const dynamic = std.math.maxInt(u32);
+
+        const Known = struct { code: u32, reads: u32, fixed: u32, loads: u32, kept: u32, jumps: u32, memory: u8 };
+
+        fn knownOf(code: u32, class: Class) Known {
+            const registers = c3_timing.registersOf(code);
+            const jump = class == .jump;
+            return .{
+                .code = code,
+                .reads = registers.reads,
+                .fixed = if (c3_timing.fixedOf(code)) |fixed| fixed + @intFromBool(jump and registers.reads & registers.writes != 0) else dynamic,
+                .loads = if (class == .load) registers.writes else 0,
+                .kept = if (jump) 0 else registers.writes,
+                .jumps = if (jump) registers.reads else 0,
+                .memory = if (class == .load or class == .store) 0xff else 0,
+            };
+        }
+
+        fn lookup(self: *Self, pc: u32, code: u32, class: Class) Known {
+            const slot = &self.known[pc >> 1 & 1023];
+            if (slot.code != code) slot.* = knownOf(code, class);
+            return slot.*;
+        }
+
+        fn shadowOf(self: *Self, next: u32) u32 {
+            const low = self.parcelAt(next) orelse return 0;
+            const high = self.parcelAt(next +% 2) orelse return 0;
+            return c3_timing.shadowOf(@as(u32, high) << 16 | low, &self.state.x);
+        }
+
+        fn parcelAt(self: *Self, at: u32) ?u16 {
+            const bytes = self.memory.folded.span(at, 2, .fetch);
+            if (bytes.len >= 2) return std.mem.readInt(u16, bytes[0..2], .little);
+            return self.memory.parcel(at);
         }
 
         fn advance(self: *Self, model: arch_step.Model, comptime tracing: bool) ?Stop {
@@ -565,6 +659,27 @@ pub fn Processor(comptime options: Options) type {
             self.pmp.write(number, value);
             self.memory.folded.unfold();
             self.reguard();
+        }
+
+        /// Answers mpcer, mpcmr or mpccr, the count read at the cycle this instruction issues in.
+        pub fn readCounter(self: *Self, number: csr.Counter) u32 {
+            return switch (number) {
+                .mpcer => self.counter.event,
+                .mpcmr => self.counter.mode,
+                .mpccr => self.counter.at(self.cycles, self.instructions),
+            };
+        }
+
+        /// Settles the count so far, then takes the write, C3 TRM Registers 1.12 to 1.14.
+        pub fn writeCounter(self: *Self, number: csr.Counter, value: u32) void {
+            self.counter.count = self.counter.at(self.cycles, self.instructions);
+            self.counter.cycles = self.cycles;
+            self.counter.instructions = self.instructions;
+            switch (number) {
+                .mpcer => self.counter.event = value & 0x7ff,
+                .mpcmr => self.counter.mode = value & 3,
+                .mpccr => self.counter.count = value,
+            }
         }
 
         /// The address a run of accesses began at: it feeds mtval and the record, and breaks the reservation.

@@ -147,19 +147,19 @@ test "a step reports the class and the address of the instruction it ran, and ch
     var memory: Memory = .{};
     memory.program(&.{ li_a0_5, ebreak });
     var cpu = started(&memory, &.{});
-    try std.testing.expectEqual(riscv.Step{ .address = flash_base, .class = .data_processing, .cost = null, .charged = 1, .sequential = false, .asleep = false, .stop = null }, cpu.step());
+    try std.testing.expectEqual(riscv.Step{ .address = flash_base, .class = .data_processing, .cost = 1, .charged = 1, .sequential = false, .asleep = false, .stop = null }, cpu.step());
     try std.testing.expectEqual(@as(u64, 1), cpu.instructions);
     try std.testing.expectEqual(@as(u64, 1), cpu.cycles);
 }
 
-test "a step reports no cycle count on either part, because neither has a fit" {
-    for ([_]riscv.Core{ .esp32c3, .esp32c6 }) |c| {
+test "a step reports its cycle count on the fitted C3 and none on the C6, which has no fit" {
+    for ([_]riscv.Core{ .esp32c3, .esp32c6 }, [_]?u8{ 1, null }) |c, cost| {
         var memory: Memory = .{};
         memory.program(&.{ li_a0_5, ebreak });
         var cpu = startedAs(&memory, c, &.{});
         const ran = cpu.step();
         try std.testing.expectEqual(@as(?Class, .data_processing), ran.class);
-        try std.testing.expectEqual(@as(?u8, null), ran.cost);
+        try std.testing.expectEqual(cost, ran.cost);
     }
 }
 
@@ -1310,13 +1310,154 @@ test "a build that carries the ESP32-C3 alone decodes no atomic row, so the A ex
     try std.testing.expect(c6.spec.pmp_static_priority);
 }
 
-test "setTiming answers unknown for every part, one cycle an instruction, until one is fitted" {
+test "the C3 starts fitted, a taken branch three cycles and a jump two, and the C6 answers unknown, one cycle an instruction" {
     var records: [4]riscv.trace.Record = undefined;
-    for (every) |c| {
+    var memory: Memory = .{};
+    var c3 = Cpu.init(&memory, .esp32c3, riscv.trace.Ring.init(&records) catch unreachable);
+    try std.testing.expectEqual(.fitted, c3.timing);
+    try std.testing.expectEqual(@as(u8, 2), c3.costOf(.branch).taken);
+    try std.testing.expectEqual(@as(u8, 1), c3.costOf(.jump).taken);
+    try std.testing.expectEqual(.unknown, c3.setTiming(.unknown));
+    try std.testing.expectEqual(@as(u8, 0), c3.costOf(.branch).taken);
+    var c6 = Cpu.init(&memory, .esp32c6, riscv.trace.Ring.init(&records) catch unreachable);
+    try std.testing.expectEqual(.unknown, c6.setTiming(.fitted));
+    for (std.enums.values(Class)) |class| try std.testing.expectEqual(@as(u8, 1), c6.costOf(class).cycles);
+}
+
+const csrwi_mpcer_cycle: u32 = 0x7e00_d073;
+const csrwi_mpccr_0: u32 = 0x7e20_5073;
+const csrwi_mpcmr_0: u32 = 0x7e10_5073;
+const csrr_a0_mpccr: u32 = 0x7e20_2573;
+const csrr_a1_mpcmr: u32 = 0x7e10_25f3;
+
+test "mpccr counts the cycles from the write that zeroed it to the read, under the CYCLE event and the enable mpcmr resets to, C3 TRM Registers 1.12 to 1.14" {
+    var memory: Memory = .{};
+    memory.program(&.{ csrwi_mpcer_cycle, csrwi_mpccr_0, nop, nop, csrr_a0_mpccr, csrr_a1_mpcmr, ebreak });
+    var cpu = started(&memory, &.{});
+    _ = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(u32, 3), cpu.state.x[10]);
+    try std.testing.expectEqual(@as(u32, 3), cpu.state.x[11]);
+}
+
+test "mpccr holds its count while mpcmr's COUNT_EN is clear, C3 TRM Register 1.13" {
+    var memory: Memory = .{};
+    memory.program(&.{ csrwi_mpcer_cycle, csrwi_mpccr_0, nop, csrwi_mpcmr_0, nop, nop, csrr_a0_mpccr, ebreak });
+    var cpu = started(&memory, &.{});
+    _ = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(u32, 2), cpu.state.x[10]);
+}
+
+test "the ESP32-C6 has no mpccr in this model, so reading it is an illegal instruction" {
+    var memory: Memory = .{};
+    memory.program(&.{ csrr_a0_mpccr, ebreak });
+    var cpu = Cpu.init(&memory, .esp32c6, .{});
+    cpu.reset();
+    cpu.state.pc = flash_base;
+    _ = cpu.step();
+    try std.testing.expectEqual(@as(u32, 2), cpu.state.csr.mcause);
+}
+
+fn c3Cycles(words: []const u32) !u64 {
+    var memory: Memory = .{};
+    memory.program(words);
+    var cpu = started(&memory, &.{});
+    const ran = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(?riscv.Stop, .breakpoint), ran.stop);
+    return ran.cycles;
+}
+
+const li_a2_7: u32 = 0x0070_0613;
+const li_a3_3: u32 = 0x0030_0693;
+const li_a3_minus_1: u32 = 0xfff0_0693;
+const li_a3_0: u32 = 0x0000_0693;
+const divu_a1_a2_a3: u32 = 0x02d6_55b3;
+const div_a1_a2_a3: u32 = 0x02d6_45b3;
+const mulh_a1_a2_a3: u32 = 0x02d6_15b3;
+const mul_a1_a2_a3: u32 = 0x02d6_05b3;
+
+test "a C3 divide takes three cycles and one more per leading zero of the divisor's magnitude, and MULH five, board kernels divu_7_3, divu_ff_ff, divu_by0, div_m7_3 and mulh" {
+    try std.testing.expectEqual(@as(u64, 35), try c3Cycles(&.{ li_a2_7, li_a3_3, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 5), try c3Cycles(&.{ li_a2_7, li_a3_minus_1, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 36), try c3Cycles(&.{ li_a2_7, li_a3_minus_1, div_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 37), try c3Cycles(&.{ li_a2_7, li_a3_0, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 7), try c3Cycles(&.{ li_a2_7, li_a3_3, mulh_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 3), try c3Cycles(&.{ li_a2_7, li_a3_3, mul_a1_a2_a3, ebreak }));
+}
+
+const beq_zero_skip: u32 = 0x0000_0463;
+const bne_zero_skip: u32 = 0x0000_1463;
+const jal_skip: u32 = 0x0080_006f;
+
+test "a taken C3 branch over a divide waits out that divide less one cycle, a jump over it does not, board kernels beq_divu, beq_divu_ff, loop_divu_exit and jal_divu" {
+    try std.testing.expectEqual(@as(u64, 37), try c3Cycles(&.{ li_a2_7, li_a3_3, beq_zero_skip, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 7), try c3Cycles(&.{ li_a2_7, li_a3_minus_1, beq_zero_skip, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 36), try c3Cycles(&.{ li_a2_7, li_a3_3, bne_zero_skip, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ li_a2_7, li_a3_3, jal_skip, divu_a1_a2_a3, ebreak }));
+}
+
+const add_a3_a2_a2: u32 = 0x00c6_06b3;
+const add_a3_a4_a4: u32 = 0x00e7_06b3;
+const sw_a2_a1_four: u32 = 0x00c5_a223;
+const beq_a2_zero_skip: u32 = 0x0006_0463;
+
+fn c3CyclesOf(halfwords: []const u16) !u64 {
+    var memory: Memory = .{};
+    memory.parcels(halfwords);
+    var cpu = started(&memory, &.{});
+    const ran = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(?riscv.Stop, .breakpoint), ran.stop);
+    return ran.cycles;
+}
+
+test "the C3 instruction after a load that reads its register waits one cycle, board kernels lw_use, lw_sw_data, lw_beq and lw_add" {
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ lui_a1_ram, lw_a2_a1, add_a3_a2_a2, ebreak }));
+    try std.testing.expectEqual(@as(u64, 3), try c3Cycles(&.{ lui_a1_ram, lw_a2_a1, add_a3_a4_a4, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ lui_a1_ram, lw_a2_a1, sw_a2_a1_four, ebreak }));
+    try std.testing.expectEqual(@as(u64, 6), try c3Cycles(&.{ lui_a1_ram, lw_a2_a1, beq_a2_zero_skip, ebreak, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3CyclesOf(&.{ 0x05b7, 0x3fc8, 0x4190, 0x9632, c_ebreak }));
+}
+
+test "a C3 jump or taken branch onto a 32-bit instruction that starts mid-word costs one more cycle, onto a 16-bit one none, board kernels jal_mis, beq_mis and beq_mis16" {
+    try std.testing.expectEqual(@as(u64, 4), try c3CyclesOf(&.{ 0x006f, 0x0060, 0x0001, 0x0513, 0x0050, c_ebreak }));
+    try std.testing.expectEqual(@as(u64, 3), try c3CyclesOf(&.{ 0x006f, 0x0060, 0x0001, c_li_a0_5, c_ebreak }));
+    try std.testing.expectEqual(@as(u64, 2), try c3CyclesOf(&.{ 0x0001, 0x0513, 0x0050, c_ebreak }));
+}
+
+const auipc_t0: u32 = 0x0000_0297;
+const jr_t0_8: u32 = 0x0082_8067;
+const jr_t0_12: u32 = 0x00c2_8067;
+const lw_t0_a1: u32 = 0x0005_a283;
+const jr_t0: u32 = 0x0002_8067;
+
+test "a C3 JALR waits a cycle for a base the instruction before computed, or a load two before fetched, board kernels jalr, jalr_gap, lw_jalr, lw_nop_jalr and call_ret" {
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ auipc_t0, jr_t0_8, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ auipc_t0, nop, jr_t0_12, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ 0x0040_00ef, 0x0040_8067, ebreak }));
+    for ([_][]const u32{ &.{ lui_a1_ram, lw_t0_a1, jr_t0, ebreak }, &.{ lui_a1_ram, lw_t0_a1, nop, jr_t0, ebreak } }, [_]u32{ 12, 16 }) |words, target| {
         var memory: Memory = .{};
-        var cpu = Cpu.init(&memory, c, riscv.trace.Ring.init(&records) catch unreachable);
-        try std.testing.expectEqual(.unknown, cpu.timing);
-        try std.testing.expectEqual(.unknown, cpu.setTiming(.fitted));
-        for (std.enums.values(Class)) |class| try std.testing.expectEqual(@as(u8, 1), cpu.costOf(class).cycles);
+        memory.program(words);
+        memory.handler(&.{flash_base + target});
+        var cpu = started(&memory, &.{});
+        try std.testing.expectEqual(@as(u64, 6), cpu.run(.{ .instructions = 100 }).cycles);
     }
+}
+
+test "a C3 JALR waits on a load two before only when the instruction between took a single cycle, board kernels lw_beq_jalr, lw_mulh_jalr and lw_j_jalr" {
+    for ([_][]const u32{ &.{ lui_a1_ram, lw_t0_a1, beq_zero_skip, ebreak, jr_t0, ebreak }, &.{ lui_a1_ram, lw_t0_a1, mulh_a1_a2_a3, jr_t0, ebreak } }, [_]u32{ 20, 16 }, [_]u64{ 7, 9 }) |words, target, cycles| {
+        var memory: Memory = .{};
+        memory.program(words);
+        memory.handler(&.{flash_base + target});
+        var cpu = started(&memory, &.{});
+        try std.testing.expectEqual(cycles, cpu.run(.{ .instructions = 100 }).cycles);
+    }
+}
+
+test "a C3 JALR that links into its own base register takes a cycle more, board kernels jalr_same, jalr_same_gap and auipc_call" {
+    try std.testing.expectEqual(@as(u64, 5), try c3Cycles(&.{ auipc_t0, 0x0082_82e7, ebreak }));
+    try std.testing.expectEqual(@as(u64, 5), try c3Cycles(&.{ auipc_t0, nop, 0x00c2_82e7, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ auipc_t0, 0x0082_8367, ebreak }));
+}
+
+test "a C3 FENCE takes four cycles, board kernel fence" {
+    try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ 0x0ff0_000f, ebreak }));
 }
