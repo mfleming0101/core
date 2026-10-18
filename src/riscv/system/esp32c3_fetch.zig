@@ -30,7 +30,7 @@ pub fn Fetch(comptime Ports: type) type {
             const extra = @intFromBool(landed);
             const end = pc +% @as(u32, if (wide) 4 else 2);
             const last = (end -% 1) & ~@as(u32, 3);
-            var d = start + extra;
+            const d = start + extra;
             if (self.redirect <= d and self.data > d and pc == self.expect) self.redirected(self.redirect);
             if (self.redirect == never and self.data > d and pc == self.expect) {
                 const ahead: i32 = @bitCast(last -% self.fp);
@@ -40,6 +40,12 @@ pub fn Fetch(comptime Ports: type) type {
                     return self.decoded(d, end, start, cost, extra, to, port);
                 }
             }
+            return self.slow(pc, d, end, last, start, cost, extra, to, port);
+        }
+
+        noinline fn slow(self: *Self, pc: u32, from: u64, end: u32, last: u32, start: u64, cost: u32, extra: u1, to: ?u32, port: u8) u32 {
+            @branchHint(.cold);
+            var d = from;
             if (pc != self.expect) self.flush(@max(start - 1, self.cycle), pc);
             const first = pc & ~@as(u32, 3);
             while (true) {
@@ -54,11 +60,12 @@ pub fn Fetch(comptime Ports: type) type {
             return self.decoded(d, end, start, cost, extra, to, port);
         }
 
-        fn decoded(self: *Self, d: u64, end: u32, start: u64, cost: u32, extra: u1, to: ?u32, port: u8) u32 {
+        inline fn decoded(self: *Self, d: u64, end: u32, start: u64, cost: u32, extra: u1, to: ?u32, port: u8) u32 {
             const stop = self.pauseAt();
             if (self.halt == never and stop <= d) self.halt = stop;
             self.head = @max(self.head, end & ~@as(u32, 3));
             if (self.halt != never and (self.frontier(d) -% self.head) >> 2 <= low) {
+                @branchHint(.unlikely);
                 self.keep(d);
                 self.at = d + 1;
                 self.halt = never;
@@ -175,6 +182,7 @@ pub fn Fetch(comptime Ports: type) type {
             const word = self.frontier(t);
             self.sweep(t);
             if (self.halt == never and self.portOf(word) == self.port) {
+                @branchHint(.unlikely);
                 if (self.ports.dataLast(self.port)) {
                     self.frozen = t;
                     self.data = t + 1;
