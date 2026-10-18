@@ -336,7 +336,7 @@ pub fn Processor(comptime options: Options) type {
             self.written = if (r.class == .jump) 0 else registers.writes;
             self.landed = r.branched;
             if (options.Ports == void) return cost;
-            const port = if (r.class == .load or r.class == .store) options.Ports.of(self.last_access) else 0;
+            const port = options.Ports.of(self.last_access) & -%@as(u8, @intFromBool(r.class == .load or r.class == .store));
             return self.fetch.issue(pc, r.code & 3 == 3, cost, landed != 0, r.branched, self.state.pc, port);
         }
 

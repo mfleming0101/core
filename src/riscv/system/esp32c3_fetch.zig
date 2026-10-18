@@ -93,10 +93,8 @@ pub fn Fetch(comptime Ports: type) type {
             if (branched and (!sent or self.cycle <= e - 1)) self.flush(@max(e - 1, self.cycle), to);
             self.next = e;
             self.expect = if (branched) to else end;
-            if (port != 0) {
-                self.data = e + 1;
-                self.port = port;
-            }
+            self.data = if (port != 0) e + 1 else never;
+            self.port = port;
             return @intCast(e - start);
         }
 
