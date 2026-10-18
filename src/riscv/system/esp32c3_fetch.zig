@@ -36,7 +36,7 @@ pub fn Fetch(comptime Ports: type) type {
                 if (self.redirect == never) {
                     const ahead: i32 = @bitCast(last -% self.fp);
                     const ready = if (ahead < 0) self.ready[last >> 2 & 7] else self.at + @as(u32, @intCast(ahead >> 2)) + 1;
-                    if (ready <= d and self.frozen != d) {
+                    if (ready <= d) {
                         self.cycle = d + 1;
                         return self.decoded(d, end, start, cost, extra, branched, to, port);
                     }
