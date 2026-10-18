@@ -1,10 +1,14 @@
 pub fn extraOf(code: u32, x: *const [32]u32) u32 {
+    return fixedOf(code) orelse latencyOf(code, x) - 1;
+}
+
+pub fn fixedOf(code: u32) ?u32 {
     if (code & 0x7f == 0x0f) return 3;
     if (!multiplies(code)) return 0;
     return switch (code >> 12 & 7) {
         0 => 0,
         1, 2, 3 => 4,
-        else => latencyOf(code, x) - 1,
+        else => null,
     };
 }
 

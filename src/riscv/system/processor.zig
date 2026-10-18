@@ -161,7 +161,7 @@ pub fn Processor(comptime options: Options) type {
         written: u32,
         loaded_before: u32,
         fetch: if (options.Ports == void) void else c3_fetch.Fetch(options.Ports),
-        known: if (options.Ports == void) void else [1024][3]u32,
+        known: if (options.Ports == void) void else [1024][4]u32,
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -324,12 +324,13 @@ pub fn Processor(comptime options: Options) type {
 
         fn priced(self: *Self, pc: u32, r: arch_step.Result) u32 {
             const shadow = if (r.class == .branch and r.branched) self.shadowOf(pc +% if (r.code & 3 == 3) @as(u32, 4) else 2) else 0;
-            const registers = if (options.Ports == void) c3_timing.registersOf(r.code) else self.registersOf(pc, r.code);
+            const known = if (options.Ports == void) knownOf(r.code) else self.lookup(pc, r.code);
+            const registers: c3_timing.Registers = .{ .reads = known[1], .writes = known[2] };
             const waited: u32 = @intFromBool(registers.reads & self.loaded != 0);
             const landed: u32 = @intFromBool(self.landed and pc & 2 != 0 and r.code & 3 == 3);
             const chained: u32 = @intFromBool(r.class == .jump and registers.reads & (self.written | self.loaded_before) != 0);
             const relinked: u32 = @intFromBool(r.class == .jump and registers.reads & registers.writes != 0);
-            const cost = r.cycles + c3_timing.extraOf(r.code, &self.state.x) + shadow + waited + landed + chained + relinked;
+            const cost = r.cycles + (if (known[3] != dynamic) known[3] else c3_timing.extraOf(r.code, &self.state.x)) + shadow + waited + landed + chained + relinked;
             self.loaded_before = if (cost == 1) self.loaded else 0;
             self.loaded = if (r.class == .load) registers.writes else 0;
             self.written = if (r.class == .jump) 0 else registers.writes;
@@ -339,13 +340,17 @@ pub fn Processor(comptime options: Options) type {
             return self.fetch.issue(pc, r.code & 3 == 3, cost, landed != 0, r.branched, self.state.pc, port);
         }
 
-        fn registersOf(self: *Self, pc: u32, code: u32) c3_timing.Registers {
+        const dynamic = std.math.maxInt(u32);
+
+        fn knownOf(code: u32) [4]u32 {
+            const registers = c3_timing.registersOf(code);
+            return .{ code, registers.reads, registers.writes, c3_timing.fixedOf(code) orelse dynamic };
+        }
+
+        fn lookup(self: *Self, pc: u32, code: u32) [4]u32 {
             const slot = &self.known[pc >> 1 & 1023];
-            if (slot[0] != code) {
-                const found = c3_timing.registersOf(code);
-                slot.* = .{ code, found.reads, found.writes };
-            }
-            return .{ .reads = slot[1], .writes = slot[2] };
+            if (slot[0] != code) slot.* = knownOf(code);
+            return slot.*;
         }
 
         fn shadowOf(self: *Self, next: u32) u32 {
