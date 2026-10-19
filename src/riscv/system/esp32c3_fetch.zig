@@ -90,7 +90,7 @@ pub fn Fetch(comptime Ports: type) type {
                 }
                 if (self.frozen == at) e += 1;
             }
-            if (branched and (!sent or self.cycle <= e - 1)) self.flush(@max(e - 1, self.cycle), to);
+            if (branched and (!sent or self.cycle <= e - 1)) self.flush(e - 1, to);
             self.next = e;
             self.expect = if (branched) to else end;
             self.data = if (port != 0) e + 1 else never;
@@ -117,7 +117,7 @@ pub fn Fetch(comptime Ports: type) type {
         }
 
         fn frontier(self: *const Self, c: u64) u32 {
-            return self.fp +% @as(u32, @intCast(@min(c, self.halt) - self.at)) * 4;
+            return self.fp +% @as(u32, @intCast(@min(c, self.halt) -| self.at)) * 4;
         }
 
         inline fn keep(self: *Self, c: u64) void {

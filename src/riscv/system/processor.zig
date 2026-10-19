@@ -165,7 +165,8 @@ pub fn Processor(comptime options: Options) type {
         written: u32,
         loaded_before: u32,
         fetch: if (options.Ports == void) void else c3_fetch.Fetch(options.Ports),
-        known: if (options.Ports == void) void else [1024]Known,
+        known: if (options.Ports == void or c6_fitted) void else [1024]Known,
+        quiet: if (options.Ports == void or !c6_fitted) void else u32,
 
         fn slotOf(c: core.Core) usize {
             for (options.cores, 0..) |candidate, i| {
@@ -212,7 +213,8 @@ pub fn Processor(comptime options: Options) type {
                 .written = 0,
                 .loaded_before = 0,
                 .fetch = if (options.Ports == void) {} else .{},
-                .known = if (options.Ports == void) {} else @splat(std.mem.zeroes(Known)),
+                .known = if (options.Ports == void or c6_fitted) {} else @splat(std.mem.zeroes(Known)),
+                .quiet = if (options.Ports == void or !c6_fitted) {} else 0,
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -353,7 +355,19 @@ pub fn Processor(comptime options: Options) type {
             self.loaded = if (r.class == .load) registers.writes else 0;
             self.written = if (c6_timing.multiplies(r.code)) registers.writes else 0;
             self.landed = r.branched;
+            if (options.Ports == void) return cost;
+            if (self.quiet != 0 or (r.class == .load and options.Ports.of(self.last_access) != 0)) return self.ported(pc, r, cost, landed != 0);
             return cost;
+        }
+
+        noinline fn ported(self: *Self, pc: u32, r: arch_step.Result, cost: u32, landed: bool) u32 {
+            const port = if (r.class == .load) options.Ports.of(self.last_access) else 0;
+            if (port != 0) {
+                if (self.quiet == 0) self.fetch = .{};
+                self.quiet = 64;
+            }
+            self.quiet -= 1;
+            return self.fetch.issue(pc, r.code & 3 == 3, cost, landed, r.branched, self.state.pc, port);
         }
 
         const dynamic = std.math.maxInt(u32);
