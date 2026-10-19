@@ -63,7 +63,6 @@ const esp32c6_csr: csr.Implementation = blk: {
     m.architecture_id = 0x8000_0002;
     m.implementation_id = 0x0000_0002;
     m.interrupt_csrs = true;
-    m.performance_counter = false;
     break :blk m;
 };
 

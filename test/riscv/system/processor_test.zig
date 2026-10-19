@@ -1347,14 +1347,16 @@ test "mpccr holds its count while mpcmr's COUNT_EN is clear, C3 TRM Register 1.1
     try std.testing.expectEqual(@as(u32, 2), cpu.state.x[10]);
 }
 
-test "the ESP32-C6 has no mpccr in this model, so reading it is an illegal instruction" {
+test "the ESP32-C6 has mpcer, mpcmr and mpccr too, C6 TRM Registers 1.22 to 1.24" {
     var memory: Memory = .{};
-    memory.program(&.{ csrr_a0_mpccr, ebreak });
+    memory.program(&.{ csrwi_mpcer_cycle, csrwi_mpccr_0, nop, nop, csrr_a0_mpccr, csrr_a1_mpcmr, ebreak });
     var cpu = Cpu.init(&memory, .esp32c6, .{});
     cpu.reset();
     cpu.state.pc = flash_base;
-    _ = cpu.step();
-    try std.testing.expectEqual(@as(u32, 2), cpu.state.csr.mcause);
+    _ = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(u32, 0), cpu.state.csr.mcause);
+    try std.testing.expectEqual(@as(u32, 3), cpu.state.x[10]);
+    try std.testing.expectEqual(@as(u32, 3), cpu.state.x[11]);
 }
 
 fn c3Cycles(words: []const u32) !u64 {
