@@ -152,8 +152,8 @@ test "a step reports the class and the address of the instruction it ran, and ch
     try std.testing.expectEqual(@as(u64, 1), cpu.cycles);
 }
 
-test "a step reports its cycle count on the fitted C3 and none on the C6, which has no fit" {
-    for ([_]riscv.Core{ .esp32c3, .esp32c6 }, [_]?u8{ 1, null }) |c, cost| {
+test "a step reports its cycle count on the fitted C3 and C6" {
+    for ([_]riscv.Core{ .esp32c3, .esp32c6 }, [_]?u8{ 1, 1 }) |c, cost| {
         var memory: Memory = .{};
         memory.program(&.{ li_a0_5, ebreak });
         var cpu = startedAs(&memory, c, &.{});
@@ -1310,7 +1310,7 @@ test "a build that carries the ESP32-C3 alone decodes no atomic row, so the A ex
     try std.testing.expect(c6.spec.pmp_static_priority);
 }
 
-test "the C3 starts fitted, a taken branch three cycles and a jump two, and the C6 answers unknown, one cycle an instruction" {
+test "the C3 starts fitted, a taken branch three cycles and a jump two, and the C6 starts fitted, a jump two" {
     var records: [4]riscv.trace.Record = undefined;
     var memory: Memory = .{};
     var c3 = Cpu.init(&memory, .esp32c3, riscv.trace.Ring.init(&records) catch unreachable);
@@ -1320,8 +1320,8 @@ test "the C3 starts fitted, a taken branch three cycles and a jump two, and the 
     try std.testing.expectEqual(.unknown, c3.setTiming(.unknown));
     try std.testing.expectEqual(@as(u8, 0), c3.costOf(.branch).taken);
     var c6 = Cpu.init(&memory, .esp32c6, riscv.trace.Ring.init(&records) catch unreachable);
-    try std.testing.expectEqual(.unknown, c6.setTiming(.fitted));
-    for (std.enums.values(Class)) |class| try std.testing.expectEqual(@as(u8, 1), c6.costOf(class).cycles);
+    try std.testing.expectEqual(.fitted, c6.timing);
+    try std.testing.expectEqual(@as(u8, 1), c6.costOf(.jump).taken);
 }
 
 const csrwi_mpcer_cycle: u32 = 0x7e00_d073;
@@ -1462,4 +1462,59 @@ test "a C3 JALR that links into its own base register takes a cycle more, board 
 
 test "a C3 FENCE takes four cycles, board kernel fence" {
     try std.testing.expectEqual(@as(u64, 4), try c3Cycles(&.{ 0x0ff0_000f, ebreak }));
+}
+
+fn c6Cycles(words: []const u32) !u64 {
+    var memory: Memory = .{};
+    memory.program(words);
+    memory.handler(&.{ram_base});
+    var cpu = startedAs(&memory, .esp32c6, &.{});
+    const ran = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(?riscv.Stop, .breakpoint), ran.stop);
+    return ran.cycles;
+}
+
+fn c6CyclesOf(halfwords: []const u16) !u64 {
+    var memory: Memory = .{};
+    memory.parcels(halfwords);
+    var cpu = startedAs(&memory, .esp32c6, &.{});
+    const ran = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(?riscv.Stop, .breakpoint), ran.stop);
+    return ran.cycles;
+}
+
+test "a C6 MULH takes two cycles, MUL one, a divide ten whatever its operands and FENCE five, board kernels mulh, mul, divu_7_3, divu_ff_ff, divu_by0, div_ovf and fence" {
+    try std.testing.expectEqual(@as(u64, 4), try c6Cycles(&.{ li_a2_7, li_a3_3, mulh_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 3), try c6Cycles(&.{ li_a2_7, li_a3_3, mul_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 12), try c6Cycles(&.{ li_a2_7, li_a3_3, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 12), try c6Cycles(&.{ li_a2_7, li_a3_0, divu_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 12), try c6Cycles(&.{ li_a2_7, li_a3_minus_1, div_a1_a2_a3, ebreak }));
+    try std.testing.expectEqual(@as(u64, 5), try c6Cycles(&.{ 0x0ff0_000f, ebreak }));
+}
+
+const lw_a3_a2: u32 = 0x0006_2683;
+const mulh_a4_a3_a3: u32 = 0x02d6_9733;
+const li_a3_1: u32 = 0x0010_0693;
+const mul_a2_a1_a3: u32 = 0x02d5_8633;
+
+test "a C6 load's register reaches an ALU operand a cycle late and a load or store base two, and a MUL's reaches a base one late, board kernels lw_use, lw_lw_base, lw_nop_lw_base, lw_nop2_lw_base, lw_mulh_lw_base, mul_lw_base and divu_lw_base" {
+    try std.testing.expectEqual(@as(u64, 4), try c6Cycles(&.{ lui_a1_ram, lw_a2_a1, add_a3_a2_a2, ebreak }));
+    try std.testing.expectEqual(@as(u64, 3), try c6Cycles(&.{ lui_a1_ram, lw_a2_a1, add_a3_a4_a4, ebreak }));
+    try std.testing.expectEqual(@as(u64, 5), try c6Cycles(&.{ lui_a1_ram, lw_a2_a1, lw_a3_a2, ebreak }));
+    try std.testing.expectEqual(@as(u64, 5), try c6Cycles(&.{ lui_a1_ram, lw_a2_a1, nop, lw_a3_a2, ebreak }));
+    try std.testing.expectEqual(@as(u64, 5), try c6Cycles(&.{ lui_a1_ram, lw_a2_a1, nop, nop, lw_a3_a2, ebreak }));
+    try std.testing.expectEqual(@as(u64, 5), try c6Cycles(&.{ lui_a1_ram, lw_a2_a1, mulh_a4_a3_a3, lw_a3_a2, ebreak }));
+    try std.testing.expectEqual(@as(u64, 5), try c6Cycles(&.{ lui_a1_ram, li_a3_1, mul_a2_a1_a3, lw_a3_a2, ebreak }));
+}
+
+test "a C6 forward branch costs one cycle not taken and three taken, a JAL two and a JALR three, board kernels beq_taken, beq_untaken, jal and jalr" {
+    try std.testing.expectEqual(@as(u64, 3), try c6Cycles(&.{ beq_zero_skip, ebreak, ebreak }));
+    try std.testing.expectEqual(@as(u64, 1), try c6Cycles(&.{ bne_zero_skip, ebreak }));
+    try std.testing.expectEqual(@as(u64, 2), try c6Cycles(&.{ jal_skip, ebreak, ebreak }));
+    try std.testing.expectEqual(@as(u64, 4), try c6Cycles(&.{ auipc_t0, jr_t0_8, ebreak }));
+}
+
+test "a C6 jump or taken branch onto a 32-bit instruction that starts mid-word costs one more cycle, onto a 16-bit one none, board kernels beq_mis, beq_mis16 and cj_land_c0" {
+    try std.testing.expectEqual(@as(u64, 4), try c6CyclesOf(&.{ 0x006f, 0x0060, 0x0001, 0x0513, 0x0050, c_ebreak }));
+    try std.testing.expectEqual(@as(u64, 3), try c6CyclesOf(&.{ 0x006f, 0x0060, 0x0001, c_li_a0_5, c_ebreak }));
 }

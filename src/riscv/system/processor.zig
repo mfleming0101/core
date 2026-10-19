@@ -21,6 +21,7 @@ const contract = @import("../../contract.zig");
 const trace = @import("../trace.zig");
 const c3_timing = @import("esp32c3_timing.zig");
 const c3_fetch = @import("esp32c3_fetch.zig");
+const c6_timing = @import("esp32c6_timing.zig");
 
 const Stop = arch_step.Stop;
 
@@ -91,6 +92,9 @@ pub fn Processor(comptime options: Options) type {
     };
     const fitted = for (fits) |fit| {
         if (fit != null) break true;
+    } else false;
+    const c6_fitted = for (options.cores, fits) |c, fit| {
+        if (c == .esp32c6 and fit != null) break true;
     } else false;
     const specs = blk: {
         var out: [options.cores.len]core.Spec = undefined;
@@ -323,6 +327,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn priced(self: *Self, pc: u32, r: arch_step.Result) u32 {
+            if (c6_fitted and (options.cores.len == 1 or self.spec.core == .esp32c6)) return self.pricedC6(pc, r);
             const shadow = if (r.class == .branch and r.branched) self.shadowOf(pc +% if (r.code & 3 == 3) @as(u32, 4) else 2) else 0;
             const known = if (options.Ports == void) knownOf(r.code, r.class) else self.lookup(pc, r.code, r.class);
             const waited: u32 = @intFromBool(known.reads & self.loaded != 0);
@@ -336,6 +341,19 @@ pub fn Processor(comptime options: Options) type {
             if (options.Ports == void) return cost;
             const port = options.Ports.of(self.last_access) & known.memory;
             return self.fetch.issue(pc, r.code & 3 == 3, cost, landed != 0, r.branched, self.state.pc, port);
+        }
+
+        fn pricedC6(self: *Self, pc: u32, r: arch_step.Result) u32 {
+            const registers = c3_timing.registersOf(r.code);
+            const late = self.loaded | self.loaded_before | self.written;
+            const waits = @as(u32, @intFromBool(registers.reads & self.loaded != 0)) + @intFromBool(c6_timing.baseOf(r.code) & late != 0);
+            const landed: u32 = @intFromBool(self.landed and pc & 2 != 0 and r.code & 3 == 3);
+            const cost = r.cycles + c6_timing.extraOf(r.code, r.class, r.branched) + waits + landed;
+            self.loaded_before = if (cost == 1) self.loaded else 0;
+            self.loaded = if (r.class == .load) registers.writes else 0;
+            self.written = if (c6_timing.multiplies(r.code)) registers.writes else 0;
+            self.landed = r.branched;
+            return cost;
         }
 
         const dynamic = std.math.maxInt(u32);
