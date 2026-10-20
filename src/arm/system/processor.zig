@@ -718,7 +718,12 @@ pub fn Processor(comptime options: Options) type {
             self.state.msp = sp & ~@as(u32, 3);
             self.state.lr = 0xffff_ffff;
             self.state.branchTo(entry);
-            if (self.trace.recording()) self.last = trace.snapshot(&self.state);
+            self.attach(self.trace);
+        }
+
+        pub fn attach(self: *Self, ring: trace.Ring) void {
+            self.trace = ring;
+            if (ring.recording()) self.last = trace.snapshot(&self.state);
         }
 
         fn restart(self: *Self) void {

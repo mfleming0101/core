@@ -217,6 +217,23 @@ test "the debug processor runs the same program, its trace matches the golden li
     try std.testing.expectEqual(@as(u64, 4), cpu.cycles);
 }
 
+test "a ring attached after reset records from the next instruction against the registers as they stand, and an empty ring stops recording" {
+    var m = loaded();
+    var cpu = fast(.m0plus, &m);
+    cpu.reset();
+    _ = cpu.run(.{ .instructions = 1 });
+    cpu.attach(try .init(&ring));
+    _ = cpu.run(.{ .instructions = 1 });
+    var buffer: [128]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buffer);
+    try arm.trace.writeLine(&w, cpu.trace.last().?, cpu.groups());
+    try std.testing.expectEqualStrings("at      1  pc=0000000a code=1c81 adds r1, r0, #2 ; r1=00000003\n", w.buffered());
+    cpu.attach(.{});
+    _ = cpu.run(.{ .instructions = 1 });
+    try std.testing.expect(!cpu.trace.recording());
+    try std.testing.expectEqual(@as(u64, 3), cpu.instructions);
+}
+
 test "the debug processor explains its stop" {
     var m = loaded();
     var cpu = traced(.m0plus, &m);

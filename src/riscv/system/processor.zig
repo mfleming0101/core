@@ -252,7 +252,12 @@ pub fn Processor(comptime options: Options) type {
 
         fn atReset(self: *Self) void {
             self.state.pc = self.spec.reset_pc;
-            if (self.trace.recording()) self.last = trace.snapshot(&self.state);
+            self.attach(self.trace);
+        }
+
+        pub fn attach(self: *Self, ring: trace.Ring) void {
+            self.trace = ring;
+            if (ring.recording()) self.last = trace.snapshot(&self.state);
         }
 
         /// Stands the hart still at a stop, which every later run and step then does nothing past.
