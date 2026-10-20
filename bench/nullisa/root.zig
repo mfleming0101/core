@@ -335,6 +335,7 @@ pub const riscv = struct {
             sc_failure: u32,
             interrupt_csrs: bool,
             float: bool,
+            performance_counter: bool = false,
         };
 
         pub const sail: Implementation = .{
