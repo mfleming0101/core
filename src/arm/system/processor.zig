@@ -835,7 +835,7 @@ pub fn Processor(comptime options: Options) type {
                 self.waits.next = pc +% 2 & ~@as(u32, 3);
             }
             const r = @call(.always_inline, arch_step.step, .{ Self, gate, &self.state, self, model });
-            if (regarding(r.code)) self.restand();
+            if (self.protection and regarding(r.code)) self.restand();
             if (Waits != void) self.waits.next = 1;
             if (tracing) {
                 if (r.halt() == .data_fault or r.halt() == .data_violation or r.halt() == .unaligned_access) self.touched = self.last_access;
