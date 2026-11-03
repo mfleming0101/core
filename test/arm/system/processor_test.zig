@@ -3622,6 +3622,70 @@ test "exception entry with FPCCR.LSPEN set defers the floating-point context ins
     }
 }
 
+test "a floating-point instruction answers to the CPACR write just before it, enabling or refusing it, B3.2.20" {
+    inline for (.{ .m4, .m33 }) |core| {
+        var m = placed(&svc_vectors, &.{0x40}, &.{&.{ 0x6001, 0xee30, 0x0a20, 0x6002, 0xee30, 0x0a20, 0xbe00 }});
+        var cpu = fast(core, &m);
+        cpu.reset();
+        cpu.state.r[0] = 0xe000_ed88;
+        cpu.state.r[1] = 0x00f0_0000;
+        cpu.state.r[2] = 0;
+        cpu.state.fp[0] = 0x3f80_0000;
+        cpu.state.fp[1] = 0x4000_0000;
+        try std.testing.expectEqual(@as(?arm.Stop, null), cpu.run(.{ .instructions = 2 }).stop);
+        try std.testing.expectEqual(@as(u32, 0x4040_0000), cpu.state.fp[0]);
+        _ = cpu.run(.{ .instructions = 2 });
+        try std.testing.expectEqual(@as(u32, 1 << 19), cpu.scb.get(scb_block.cfsr));
+        try std.testing.expectEqual(@as(u32, 0x4040_0000), cpu.state.fp[0]);
+    }
+}
+
+test "a floating-point instruction fills the lazy frame an FPCCR write just reserved, and opens a context from FPDSCR after an MSR clears CONTROL.FPCA, B1.5.7 B3.2.20 B1.4.4" {
+    inline for (.{ .m4, .m33 }) |core| {
+        var m = placed(&svc_vectors, &.{0x40}, &.{&.{ 0x6023, 0x6001, 0xee30, 0x0a20, 0xf385, 0x8814, 0xee30, 0x0a20, 0xbe00 }});
+        var cpu = fast(core, &m);
+        cpu.reset();
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed88, 0x00f0_0000));
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ef3c, 0x00c0_0000));
+        cpu.state.r[0] = 0xe000_ef34;
+        cpu.state.r[1] = cpu.peek(4, 0xe000_ef34).? | scb_block.lspact;
+        cpu.state.r[3] = 0x800;
+        cpu.state.r[4] = 0xe000_ef38;
+        cpu.state.r[5] = 0;
+        cpu.state.control |= State.control_fpca | (if (core == .m33) State.control_sfpa else 0);
+        cpu.state.fp[0] = 0x3f80_0000;
+        cpu.state.fp[1] = 0x4000_0000;
+        try std.testing.expectEqual(@as(?arm.Stop, null), cpu.run(.{ .instructions = 3 }).stop);
+        try std.testing.expectEqual(@as(?u32, 0x3f80_0000), m.peek(4, 0x800));
+        try std.testing.expectEqual(@as(u32, 0), cpu.scb.get(scb_block.fpccr) & scb_block.lspact);
+        try std.testing.expectEqual(@as(u32, 0x4040_0000), cpu.state.fp[0]);
+        try std.testing.expectEqual(@as(u32, 0), cpu.state.fpscr & 0x00c0_0000);
+        try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
+        try std.testing.expectEqual(@as(u32, 0x00c0_0000), cpu.state.fpscr & 0x00c0_0000);
+        try std.testing.expectEqual(State.control_fpca, cpu.state.control & State.control_fpca);
+        try std.testing.expectEqual(@as(u32, 0x40a0_0000), cpu.state.fp[0]);
+    }
+}
+
+test "after a return that drops an unfilled lazy frame, a floating-point instruction runs without filling it, B1.5.8" {
+    inline for (.{ .m4, .m33 }) |core| {
+        var m = placed(&svc_vectors, &.{ 0x40, 0x60 }, &.{
+            &.{ 0xee00, 0x0a10, 0xdf00, 0xee30, 0x0a20, 0xee10, 0x6a10, 0xbe00 },
+            &.{ 0xbf00, 0x4770 },
+        });
+        var cpu = fast(core, &m);
+        cpu.reset();
+        try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed88, 0x00f0_0000));
+        cpu.state.r[0] = 0x3f80_0000;
+        cpu.state.fp[1] = 0x4000_0000;
+        try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 20 }).stop);
+        try std.testing.expectEqual(@as(u32, 0x4040_0000), cpu.state.r[6]);
+        try std.testing.expectEqual(@as(u32, 0), cpu.scb.get(scb_block.fpccr) & scb_block.lspact);
+        try std.testing.expectEqual(@as(?u32, 0), m.peek(4, 0x1000 - 0x68 + 0x20));
+        try std.testing.expectEqual(@as(u32, 0x1000), cpu.state.msp);
+    }
+}
+
 fn protect(cpu: *Cpu, base: u32, limit: u32, attributes: u32, control: u32) void {
     _ = cpu.poke(4, 0xe000_ed98, 0);
     _ = cpu.poke(4, 0xe000_ed9c, base | attributes);
@@ -4699,6 +4763,7 @@ test "an exception return to Non-secure code whose floating-point frame NSACR.CP
     try std.testing.expectEqual(@as(?arm.Stop, null), cpu.run(.{ .instructions = 2 }).stop);
     try std.testing.expectEqual(@as(u32, 0x4a2), cpu.state.pc);
     cpu.scb.put(scb_block.nsacr, 0);
+    cpu.reguard();
     cpu.state.fp[0] = 0x1111;
     try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
     try std.testing.expect(cpu.state.secure);

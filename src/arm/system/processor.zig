@@ -480,6 +480,7 @@ pub fn Processor(comptime options: Options) type {
         protection: bool,
         unguarded: bool,
         guarding: u32,
+        fp_open: bool,
         forced_unpriv: bool,
         taken: ?Taken,
         vector: Vector,
@@ -562,6 +563,7 @@ pub fn Processor(comptime options: Options) type {
                 .protection = false,
                 .unguarded = true,
                 .guarding = 0,
+                .fp_open = false,
                 .forced_unpriv = false,
                 .taken = null,
                 .vector = .{},
@@ -1697,6 +1699,11 @@ pub fn Processor(comptime options: Options) type {
 
         /// The address of a reserved but unfilled lazy floating-point frame, if one stands.
         pub fn lazyFpFrame(self: *Self) ?u32 {
+            if (self.fpOpen()) return null;
+            return self.owed();
+        }
+
+        fn owed(self: *Self) ?u32 {
             const owner = self.lazyBlock();
             if (owner.get(scb_block.fpccr) & scb_block.lspact == 0) return null;
             return owner.get(scb_block.fpcar);
@@ -1725,6 +1732,7 @@ pub fn Processor(comptime options: Options) type {
 
         /// Reserves a lazy frame at an address and records what could fault then, or clears LSPACT.
         pub fn setLazyFp(self: *Self, frame: ?u32) void {
+            defer self.fp_open = self.fpOpenNow();
             const address = frame orelse {
                 const owner = self.lazyBlock();
                 owner.put(scb_block.fpccr, owner.get(scb_block.fpccr) & ~scb_block.lspact);
@@ -1748,7 +1756,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn lazyNonSecure(self: *Self) bool {
-            return self.scb.get(scb_block.fpccr) & scb_block.fp_secure == 0 and self.lazyFpFrame() != null;
+            return self.scb.get(scb_block.fpccr) & scb_block.fp_secure == 0 and self.owed() != null;
         }
 
         fn readiness(self: *Self) u32 {
@@ -1775,6 +1783,21 @@ pub fn Processor(comptime options: Options) type {
         /// Whether CPACR, NSACR and CPPWR.SU10 allow the FPU; NSACR or SU10 refusals fault NOCP to
         /// Secure, v8-M RDXYK RYTQC IsCPEnabled.
         pub fn coprocessorEnabled(self: *Self) bool {
+            return self.fpOpen() or self.permitted();
+        }
+
+        fn fpOpen(self: *Self) bool {
+            if (builtin.mode == .Debug and self.fp_open) std.debug.assert(self.fpOpenNow());
+            return self.fp_open;
+        }
+
+        fn fpOpenNow(self: *Self) bool {
+            const flags = self.flags;
+            defer self.flags = flags;
+            return self.permitted() and self.owed() == null;
+        }
+
+        fn permitted(self: *Self) bool {
             if (!self.architecture().main() or self.scs().get(scb_block.cpacr) & scb_block.cp10 == 0) return false;
             return !self.spec.security or self.securityPermits();
         }
@@ -1851,13 +1874,15 @@ pub fn Processor(comptime options: Options) type {
             };
         }
 
-        /// Recomputes the guard word and unfolds the cache when anything deciding a refusal changed.
+        /// Recomputes the guard word and whether the floating-point unit is open, and unfolds the cache
+        /// when anything deciding a refusal changed.
         pub noinline fn reguard(self: *Self) void {
             const was = self.protection;
             const stood = self.guarding;
             self.protection = self.mpu.enabled() or (if (self.nonSecureMpu()) |unit| unit.enabled() else false);
             self.unguarded = self.guardless();
             self.guarding = self.regard();
+            self.fp_open = self.fpOpenNow();
             if (was != self.protection or stood != self.guarding or self.spec.security) self.memory.folded.unfold();
         }
 
