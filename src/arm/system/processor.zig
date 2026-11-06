@@ -1328,7 +1328,7 @@ pub fn Processor(comptime options: Options) type {
             self.pending |= one(n);
             self.due |= if (n < 2) @as(u32, 1) << @intCast(n) else other_due;
             self.pended();
-            if (self.due & asleep_due != 0 and self.woken()) self.due &= ~asleep_due;
+            self.wake();
         }
 
         fn pended(self: *Self) void {
@@ -1490,7 +1490,7 @@ pub fn Processor(comptime options: Options) type {
             }
             self.pended();
             self.due = (self.due & kept_due) | summary(self.pending);
-            if (self.due & asleep_due != 0 and self.woken()) self.due &= ~asleep_due;
+            self.wake();
         }
 
         /// Raises lines that arrived at cycle at, so an M0 or M0+ abandons a load or store multiple they interrupt.
@@ -1522,6 +1522,10 @@ pub fn Processor(comptime options: Options) type {
         /// Sets the event register, which is what SEV does.
         pub fn event(self: *Self) void {
             self.flags.event = true;
+        }
+
+        fn wake(self: *Self) void {
+            if (self.due & asleep_due != 0 and self.woken()) self.due &= ~asleep_due;
         }
 
         fn woken(self: *Self) bool {
@@ -2260,6 +2264,7 @@ pub fn Processor(comptime options: Options) type {
             if (self.cycles != self.serviced) self.service();
             if (!self.addressable(address, true)) return null;
             const was = self.pending;
+            defer self.wake();
             defer if (self.pending & ~was != 0) self.pended();
             defer self.schedule();
             defer self.rearm();
