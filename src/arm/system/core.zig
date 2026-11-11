@@ -110,6 +110,7 @@ pub const Part = struct {
     systick_reference: u8 = 0,
     /// Whether SYST_CSR.CLKSOURCE resets to the processor clock where a reference clock is fitted.
     systick_processor_clock: bool = false,
+    wake: u8 = 0,
     /// EWIC events an M55 or M85 supports: zero for none, else 4 to 483, M55 and M85 TRM A.1.
     ewic: u16 = 0,
 };

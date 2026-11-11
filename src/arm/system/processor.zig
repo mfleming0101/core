@@ -411,7 +411,8 @@ pub fn Processor(comptime options: Options) type {
             for_event: bool = false,
             nocp_secure: bool = false,
             debugging: bool = false,
-            _: u2 = 0,
+            slept: bool = false,
+            _: u1 = 0,
         };
 
         const stopped: Set = 1 << 0;
@@ -457,6 +458,7 @@ pub fn Processor(comptime options: Options) type {
         mpu_ns: MpuNs,
         banked: State.Banked,
         itns: Lines,
+        waking: u8,
         flags: Flags,
         active: Set,
         pending: Set,
@@ -540,6 +542,7 @@ pub fn Processor(comptime options: Options) type {
                 .mpu_ns = if (MpuNs == void) {} else .init(part.mpu_ns_regions.?, spec.architecture.v8(), spec.architecture == .armv8_1m_main),
                 .banked = .{},
                 .itns = 0,
+                .waking = part.wake,
                 .flags = .{},
                 .active = 0,
                 .pending = 0,
@@ -698,6 +701,7 @@ pub fn Processor(comptime options: Options) type {
                 .calibration = self.systick.calibration & SysTick.calibrated,
                 .systick_reference = self.systick.reference,
                 .systick_processor_clock = self.systick.reference != 0 and self.systick.start & SysTick.clksource != 0,
+                .wake = self.waking,
             };
             if (M7 != void) self.m7.wiring(&out);
             if (Impdef != void) {
@@ -1369,6 +1373,10 @@ pub fn Processor(comptime options: Options) type {
                 return true;
             }
             if (self.due & asleep_due != 0) self.stall();
+            if (self.flags.slept) {
+                self.flags.slept = false;
+                self.charge(self.waking);
+            }
             var handled = false;
             if (self.due & returned_due != 0) {
                 self.finishReturn();
@@ -1507,6 +1515,7 @@ pub fn Processor(comptime options: Options) type {
             }
             if (self.best() != null) return;
             self.flags.for_event = wait == .event;
+            self.flags.slept = self.waking != 0;
             if (Idle != void) Idle.alarm = std.math.maxInt(u64);
             self.due |= asleep_due;
         }

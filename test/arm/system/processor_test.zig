@@ -1750,6 +1750,31 @@ test "a WFI no device can end gives up at the sleep limit and the run goes on, B
     try std.testing.expectEqual(@as(u32, 0x15), cpu.state.r[4]);
 }
 
+test "a part's wake cycles delay the first instruction after a WFI or WFE the core slept in, and a core that never slept pays none, B1.5.17 B1.5.18 B1.5.19" {
+    for ([_]u16{ 0xbf30, 0xbf20 }) |wait| {
+        var charged: [2]u8 = undefined;
+        for ([_]u8{ 0, 1 }, &charged) |wake, *resumed| {
+            var m = placed(&irq_vectors, &.{0x100}, &.{&.{ 0xb672, wait, 0x2415, 0xbe00 }});
+            var cpu = Cpu.init(&m, .m4, .{ .wake = wake }, .{});
+            cpu.reset();
+            try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 0x2));
+            _ = cpu.step();
+            try std.testing.expect(cpu.step().asleep);
+            cpu.pend(1);
+            resumed.* = cpu.step().charged;
+            try std.testing.expectEqual(@as(u32, 0x15), cpu.state.r[4]);
+        }
+        try std.testing.expectEqual(charged[0] + 1, charged[1]);
+    }
+    var m = placed(&irq_vectors, &.{0x100}, &.{&.{ 0xb672, 0x2415, 0xbe00 }});
+    var cpu = Cpu.init(&m, .m4, .{ .wake = 1 }, .{});
+    cpu.reset();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 0x2));
+    _ = cpu.step();
+    cpu.pend(1);
+    try std.testing.expectEqual(@as(u8, 1), cpu.step().charged);
+}
+
 test "IPR orders two pending interrupts by priority, and equal priorities take the lower number first, B1.5.4 B3.4.7" {
     for ([_]u32{ 0x0040_8000, 0 }, [_]u32{ 0x1211, 0x1112 }) |ipr0, order| {
         var m = placed(&irq_vectors, &.{ 0x100, 0x1e0 }, &.{ &nops_then_break, &irq_record });
