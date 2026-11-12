@@ -30,6 +30,8 @@ pub const Spec = struct {
     mpu_regions: u8 = 0,
     mvfr: [3]u32 = @splat(0),
     caches: bool = false,
+    system_vector: u8 = 0,
+    system_handler: u8 = 0,
 };
 
 /// A cycle table: each class's cost, the extra when taken, and what each register of its list adds.
@@ -196,6 +198,8 @@ pub fn spec(comptime core: Core) Spec {
             .floating_point = true,
             .mpu_regions = 8,
             .mvfr = .{ 0x1011_0021, 0x1100_0011, 0x0000_0000 },
+            .system_vector = 1,
+            .system_handler = 3,
         },
         .m0 => like(.m0plus, .{
             .mpu_regions = 0,

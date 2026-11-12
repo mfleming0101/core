@@ -877,6 +877,11 @@ pub fn Processor(comptime options: Options) type {
             return self.cycles - at;
         }
 
+        fn systemFetch(self: *Self, n: Index) u8 {
+            const vector = self.scs().get(scb_block.vtor) +% @as(u32, numberOf(n)) * 4;
+            return (if (vector -% 0x2000_0000 < 0xc000_0000) self.spec.system_vector else 0) + (if (self.state.pc -% 0x2000_0000 < 0xc000_0000) self.spec.system_handler else 0);
+        }
+
         fn overlapped(self: *Self, n: Index) u64 {
             if (Issuing == void or self.spec.core != .m4 or !self.pipeline.issuing or self.arrival.set & one(n) == 0) return 0;
             const last = self.pipeline.issued;
@@ -2710,7 +2715,7 @@ pub fn Processor(comptime options: Options) type {
                 self.flags.escalated = false;
                 const early = (if (abandoning) self.abandon(next.n) else 0) + (if (stamped) self.overlapped(next.n) else 0);
                 _ = self.enter(next.n);
-                self.delay(@intCast(@as(u64, self.spec.entry) -| early));
+                self.delay(@intCast(@as(u64, self.spec.entry) + self.systemFetch(next.n) -| early));
                 return true;
             }
             if (self.flags.escalated and numberOf(next.n) == hard_fault) {
