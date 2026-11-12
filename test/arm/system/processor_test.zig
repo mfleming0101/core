@@ -1188,6 +1188,14 @@ fn expectRestarted(cpu: *Cpu, arrival: u64) !void {
     try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 10 }).stop);
 }
 
+test "the M4 enters an interrupt arriving inside a UDIV 12 cycles after the arrival, not after the UDIV, as TIM2 into a UDIV loop on a NUCLEO-G431RB, wake-probe g431-timing-ram-attached-v3, M4 TRM 3.3.1" {
+    var m = placed(&multiple_vectors, &.{ 0x100, 0x120, 0x140 }, &.{ &.{ 0xfbb0, 0xf0f0, 0xbe00 }, &.{0xbe00}, &.{0x4770} });
+    const t = interruptAt(.m4, &m, 1);
+    try std.testing.expect(t.end > t.arrival);
+    try std.testing.expectEqual(t.arrival + 12, t.cpu.cycles);
+    try std.testing.expectEqual(@as(u32, 0x140), t.cpu.state.pc);
+}
+
 test "the M0+ abandons an LDM for an interrupt arriving inside it, enters 15 cycles after the arrival at every phase, and reloads from the restored base on return, M0+ TRM 3.6.1, v6-M B1.5.10" {
     for (1..9) |phase| {
         var m = multipleAt(0xc8ff);

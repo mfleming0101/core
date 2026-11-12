@@ -165,7 +165,7 @@ fn Targets(comptime n: u8) type {
     };
 }
 
-const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, folds: bool = false, blocks: bool = false };
+const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, folds: bool = false, blocks: bool = false, waited: bool = false, ended: u64 = 0 };
 
 const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, table: bool = false, indexed: bool = false, _: u8 = 0 };
 
@@ -344,6 +344,7 @@ pub fn Processor(comptime options: Options) type {
     const abandoning = for (options.cores) |c| {
         if (c == .m0 or c == .m0plus) break true;
     } else false;
+    const stamped = abandoning or std.mem.indexOfScalar(core.Core, options.cores, .m4) != null;
     const Kept = if (abandoning) Multiple else void;
     const Idle = options.Idle;
     const Waits = if (options.Waits == void) void else struct { hook: options.Waits, word: u32 = 1, next: u32 = 1, spec: bool = false, l1: if (M7 == void) void else l1_block.L1, pfu: if (M7 == void) void else pfu_block.Stream = if (M7 == void) {} else .{} };
@@ -434,7 +435,7 @@ pub fn Processor(comptime options: Options) type {
 
         const Vector = struct { n: Index = 0, at: u32 = 0, target: u32 = 0, from: u32 = 0 };
 
-        const Arrival = if (abandoning) struct { at: u64, set: Set } else void;
+        const Arrival = if (stamped) struct { at: u64, set: Set } else void;
 
         spec: core.Spec,
         model: arch_step.Model,
@@ -572,7 +573,7 @@ pub fn Processor(comptime options: Options) type {
                 .vector = .{},
                 .waits = if (Waits == void) {} else .{ .hook = undefined, .l1 = if (M7 == void) {} else .init(part) },
                 .kept = if (abandoning) .{} else {},
-                .arrival = if (abandoning) .{ .at = 0, .set = 0 } else {},
+                .arrival = if (stamped) .{ .at = 0, .set = 0 } else {},
             };
             _ = made.setTiming(.fitted);
             made.reguard();
@@ -853,6 +854,7 @@ pub fn Processor(comptime options: Options) type {
                 const cost = if (Issuing != void and issuing and self.pipeline.issuing) self.issued(pc, r, conditional) else r.cycles;
                 if (Waits != void) self.cycles += self.fetchedAfter(pc, r, cost);
                 self.charge(cost);
+                if (stamped and Issuing != void) self.pipeline.issued.ended = self.cycles;
             }
             if (abandoning) self.kept.valid = r.executed and multiple(r.code) and self.due & returned_due == 0;
             self.stop = if (r.halted) self.settle(r.stop) else null;
@@ -873,6 +875,13 @@ pub fn Processor(comptime options: Options) type {
             (if (self.state.control & State.control_spsel != 0) &self.state.psp else &self.state.msp).* = kept.sp;
             self.state.branchTo(kept.pc | 1);
             return self.cycles - at;
+        }
+
+        fn overlapped(self: *Self, n: Index) u64 {
+            if (Issuing == void or self.spec.core != .m4 or !self.pipeline.issuing or self.arrival.set & one(n) == 0) return 0;
+            const last = self.pipeline.issued;
+            if (last.waited or last.class == .store or load_lists.contains(last.class) or store_lists.contains(last.class) or self.arrival.at >= last.ended) return 0;
+            return last.ended -| @max(self.arrival.at, last.start);
         }
 
         fn fetchWord(self: *Self, word: u32) u32 {
@@ -1026,6 +1035,7 @@ pub fn Processor(comptime options: Options) type {
             const indexed = if (class == .store and f.indexed) issue.indexed else 0;
             const overlap = (issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and (port < 0x2000_0000) == (last.port < 0x2000_0000) and !blocks) or hidden;
             const port_wait = if (Waits != void and (class == .load or stores or load_lists.contains(class) or lookup)) self.ported(stores, f.words, start - @intFromBool(overlap)) else 0;
+            next.waited = port_wait != 0;
             const cost = (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait +| @intFromBool(blocks and extended) +| @intFromBool(blocks and f.addressed & self.pipeline.axi_prev != 0)) -| @intFromBool(overlap or (blocks and !last.blocks));
             if (blocks) {
                 self.pipeline.axi_prev = self.pipeline.axi;
@@ -1466,7 +1476,7 @@ pub fn Processor(comptime options: Options) type {
                 Idle.alarm = std.math.maxInt(u64);
                 self.due &= ~asleep_due;
             }
-            if (abandoning) self.arrival = .{ .at = @min(self.attention, self.cycles), .set = self.pending & ~was };
+            if (stamped) self.arrival = .{ .at = @min(self.attention, self.cycles), .set = self.pending & ~was };
             self.schedule();
             if (self.cycles >= self.deadline) self.due |= bound_due;
         }
@@ -1503,7 +1513,7 @@ pub fn Processor(comptime options: Options) type {
 
         /// Raises lines that arrived at cycle at, so an M0 or M0+ abandons a load or store multiple they interrupt.
         pub fn pendAllAt(self: *Self, raised: Lines, at: u64) void {
-            if (abandoning) self.arrival = .{ .at = at, .set = @as(Set, raised) << first_interrupt };
+            if (stamped) self.arrival = .{ .at = at, .set = @as(Set, raised) << first_interrupt };
             self.pendAll(raised);
         }
 
@@ -2698,7 +2708,7 @@ pub fn Processor(comptime options: Options) type {
             if (next.priority < self.executionPriority()) {
                 self.pending &= ~one(next.n);
                 self.flags.escalated = false;
-                const early = if (abandoning) self.abandon(next.n) else 0;
+                const early = (if (abandoning) self.abandon(next.n) else 0) + (if (stamped) self.overlapped(next.n) else 0);
                 _ = self.enter(next.n);
                 self.delay(@intCast(@as(u64, self.spec.entry) -| early));
                 return true;
