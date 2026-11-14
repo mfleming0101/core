@@ -1446,7 +1446,7 @@ pub fn Processor(comptime options: Options) type {
             self.stop = self.leave(self.state.pc);
             self.delay(self.spec.exit);
             const held = self.memory.asserted();
-            if (held != 0) self.pending |= @as(Set, held) << first_interrupt;
+            if (held != 0) self.pending |= @as(Set, held) << first_interrupt & ~self.active;
             self.rearm();
             if (self.stop == null and self.sleepsOnExit()) self.sleep(.interrupt);
             if (Idle != void and self.stop == null and !self.state.handler()) Idle.poll(self);

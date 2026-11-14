@@ -2781,6 +2781,39 @@ test "an interrupt line a device still holds high at exception return is pended 
     try std.testing.expect(!latch.held);
 }
 
+test "a line held high while its handler is active is not pended again when a preempting handler returns, so its handler runs once, Armv8-M B12.2 RGYCN" {
+    var flash: [0x8c]u8 = @splat(0);
+    std.mem.writeInt(u32, flash[0..4], 0x2000_0080, .little);
+    std.mem.writeInt(u32, flash[4..8], 0x21, .little);
+    std.mem.writeInt(u32, flash[0x40..][0..4], 0x61, .little);
+    std.mem.writeInt(u32, flash[0x44..][0..4], 0x75, .little);
+    for ([_]u16{ 0xbf00, 0xbf00, 0xbf00, 0xbf00, 0xbe00 }, 0..) |code, i| {
+        std.mem.writeInt(u16, flash[0x20 + i * 2 ..][0..2], code, .little);
+    }
+    for ([_]u16{ 0x4807, 0x6801, 0x3101, 0x6001, 0x4a06, 0x2302, 0x6013, 0x4a06, 0x6011, 0x4770, 0x4802, 0x6841, 0x3101, 0x6041, 0x4770 }, 0..) |code, i| {
+        std.mem.writeInt(u16, flash[0x60 + i * 2 ..][0..2], code, .little);
+    }
+    std.mem.writeInt(u32, flash[0x80..][0..4], 0x2000_0000, .little);
+    std.mem.writeInt(u32, flash[0x84..][0..4], 0xe000_e200, .little);
+    std.mem.writeInt(u32, flash[0x88..][0..4], 0x4000_0000, .little);
+    var ram: [0x80]u8 = @splat(0);
+    var latch: Latch = .{};
+    var entries = [_]Regions.Entry{
+        .{ .memory = .{ .base = 0, .bytes = &flash, .writable = false } },
+        .{ .memory = .{ .base = 0x2000_0000, .bytes = &ram, .writable = true } },
+        .{ .device = .{ .base = 0x4000_0000, .size = 0x10, .device = .{ .context = &latch, .read = Latch.read, .write = Latch.write, .tick = Latch.tick, .asserted = Latch.asserted } } },
+    };
+    var regions = try Regions.adopt(&entries);
+    var cpu = arm.Processor(.{ .cores = every, .Bus = Regions }).init(&regions, .m4, .{}, .{});
+    cpu.reset();
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e400, 0x80));
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_e100, 3));
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 60 }).stop);
+    try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, ram[0..4], .little));
+    try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, ram[4..8], .little));
+    try std.testing.expect(!latch.held);
+}
+
 const Pulser = struct {
     fired: bool = false,
 
