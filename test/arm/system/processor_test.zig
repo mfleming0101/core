@@ -1322,6 +1322,61 @@ test "an SVC inside the HardFault handler cannot escalate any further and locks 
     try std.testing.expectEqual(@as(?arm.Stop, .unrecoverable_exception), again.stop);
 }
 
+const lockup_vectors = [_]u32{ 0x1000, 0x41, 0x61, 0xa1 };
+
+test "only an NMI the caller lets in takes the M0+ out of a lockup in the HardFault handler, with 0xFFFFFFFE as the return address, and returning there locks it up again, v6-M B1.5.15" {
+    var m = placed(&lockup_vectors, &.{ 0x40, 0x60, 0xa0 }, &.{ &.{0xde00}, &.{ 0xbe00, 0x4770 }, &.{0xde00} });
+    var cpu = fast(.m0plus, &m);
+    cpu.reset();
+    try std.testing.expectEqual(@as(?arm.Stop, .undefined_instruction), cpu.run(.{ .instructions = 100 }).stop);
+    try std.testing.expect(cpu.state.lockup);
+    try std.testing.expect(!cpu.exitLockup());
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed04, 1 << 31));
+    cpu.rearm();
+    const passive = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(u64, 0), passive.instructions);
+    try std.testing.expectEqual(@as(?arm.Stop, .undefined_instruction), passive.stop);
+    try std.testing.expect(cpu.exitLockup());
+    try std.testing.expect(!cpu.state.lockup);
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 100 }).stop);
+    try std.testing.expectEqual(@as(u32, 2), cpu.state.xpsr & State.ipsr_mask);
+    try std.testing.expectEqual(@as(?u32, 0xffff_fffe), m.peek(4, cpu.state.msp + 24));
+    _ = cpu.run(.{ .instructions = 100 });
+    try std.testing.expect(cpu.state.lockup);
+}
+
+test "an NMI taken out of a lockup in the M4's HardFault handler returns to the instruction that locked it, which locks it up again, v7-M B1.5.15" {
+    var m = placed(&lockup_vectors, &.{ 0x40, 0x60, 0xa0 }, &.{ &.{0xde00}, &.{ 0xbe00, 0x4770 }, &.{0xde00} });
+    var cpu = fast(.m4, &m);
+    cpu.reset();
+    try std.testing.expectEqual(@as(?arm.Stop, .undefined_instruction), cpu.run(.{ .instructions = 100 }).stop);
+    try std.testing.expectEqual(@as(u32, 0xa0), cpu.state.pc);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed04, 1 << 31));
+    cpu.rearm();
+    try std.testing.expect(cpu.exitLockup());
+    try std.testing.expectEqual(@as(?arm.Stop, .breakpoint), cpu.run(.{ .instructions = 100 }).stop);
+    try std.testing.expectEqual(@as(?u32, 0xa0), m.peek(4, cpu.state.msp + 24));
+    try std.testing.expectEqual(@as(?arm.Stop, .undefined_instruction), cpu.run(.{ .instructions = 100 }).stop);
+    try std.testing.expect(cpu.state.lockup);
+    try std.testing.expectEqual(@as(u32, 0xa0), cpu.state.pc);
+}
+
+test "a lockup in the NMI handler is not left by another NMI, v6-M B1.5.15" {
+    var m = placed(&lockup_vectors, &.{ 0x40, 0x60, 0xa0 }, &.{ &.{0xde00}, &.{0xde00}, &.{0xde00} });
+    var cpu = fast(.m0plus, &m);
+    cpu.reset();
+    _ = cpu.run(.{ .instructions = 100 });
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed04, 1 << 31));
+    cpu.rearm();
+    try std.testing.expect(cpu.exitLockup());
+    _ = cpu.run(.{ .instructions = 100 });
+    try std.testing.expect(cpu.state.lockup);
+    try std.testing.expectEqual(@as(u32, 2), cpu.state.xpsr & State.ipsr_mask);
+    try std.testing.expectEqual(@as(?void, {}), cpu.poke(4, 0xe000_ed04, 1 << 31));
+    cpu.rearm();
+    try std.testing.expect(!cpu.exitLockup());
+}
+
 test "the M4 and M33 accept aligned byte and halfword accesses to SHPR2, SHPR3, and the IPR words only, and the M0+ answers only words, v7-M B3.2.2 B3.2.11 B3.4.9, v8-M D1.2.235 D1.2.236 D1.2.185" {
     inline for (.{ .m4, .m33 }) |core| {
         var m: Memory = .{};

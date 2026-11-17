@@ -758,6 +758,18 @@ pub fn Processor(comptime options: Options) type {
             return stop;
         }
 
+        pub fn exitLockup(self: *Self) bool {
+            if (!self.state.lockup) return false;
+            const next = self.best() orelse return false;
+            if (numberOf(next.n) != nmi or next.priority >= self.executionPriority()) return false;
+            self.state.lockup = false;
+            self.stop = null;
+            self.pending &= ~stopped;
+            self.rearm();
+            if (self.architecture() == .armv6m) self.state.pc = 0xffff_fffe;
+            return true;
+        }
+
         fn record(self: *Self, pc: u32, code: ?u32, why: trace.Note) void {
             if (!self.trace.recording()) return;
             self.trace.reserve().write(pc, code, &self.last, &self.state, self.touched, self.cycles, why);
