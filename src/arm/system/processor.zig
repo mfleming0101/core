@@ -182,7 +182,64 @@ fn regarding(code: u32) bool {
 }
 
 fn Pipeline(comptime entries: u8, comptime facts_bits: comptime_int) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0 };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0, fpu: FpUnit = .{} };
+}
+
+const FpUnit = struct {
+    free: u64 = 0,
+    made: u32 = 0,
+    ready: u64 = 0,
+
+    fn after(unit: FpUnit, x: Float) u64 {
+        const read = if (x.reads & unit.made != 0) unit.ready else if (x.addend & unit.made != 0) unit.ready - 1 else 0;
+        return @max(unit.free, read);
+    }
+
+    fn issued(comptime fpu: core.Fpu, x: Float, start: u64) FpUnit {
+        const hold: u64 = switch (x.kind) {
+            .chain => fpu.chain,
+            .iterate => fpu.iterate,
+            else => 1,
+        };
+        return .{ .free = if (hold > 1) start + hold else 0, .made = if (x.kind == .move) 0 else x.makes, .ready = start + hold + fpu.result };
+    }
+};
+
+const Float = struct { kind: enum { move, arith, chain, iterate } = .move, reads: u32 = 0, addend: u32 = 0, makes: u32 = 0 };
+
+fn single(code: u32, comptime four: u5, comptime one: u5) u32 {
+    return @as(u32, 1) << @intCast((code >> four & 15) << 1 | (code >> one & 1));
+}
+
+fn double(code: u32, comptime four: u5, comptime one: u5) u32 {
+    return @as(u32, 3) << @truncate(((code >> one & 1) << 4 | (code >> four & 15)) << 1);
+}
+
+fn floatOf(code: u32) Float {
+    if (code & 0xff00_0e10 == 0xee00_0a00) {
+        const d = single(code, 12, 22);
+        const n = single(code, 16, 7);
+        const m = single(code, 0, 5);
+        return switch (code >> 20 & 0xb) {
+            0b0000, 0b0001, 0b1001, 0b1010 => .{ .kind = .chain, .reads = n | m, .addend = d, .makes = d },
+            0b0010, 0b0011 => .{ .kind = .arith, .reads = n | m, .makes = d },
+            0b1000 => .{ .kind = .iterate, .reads = n | m, .makes = d },
+            0b1011 => if (code & 1 << 6 == 0) .{} else switch (code >> 16 & 15) {
+                0b0000 => .{ .reads = m },
+                0b0001 => if (code & 1 << 7 == 0) .{ .reads = m } else .{ .kind = .iterate, .reads = m, .makes = d },
+                0b0100 => .{ .reads = d | m },
+                0b0101 => .{ .reads = d },
+                0b1010, 0b1011, 0b1110, 0b1111 => .{ .kind = .arith, .reads = d, .makes = d },
+                else => .{ .kind = .arith, .reads = m, .makes = d },
+            },
+            else => .{},
+        };
+    }
+    if (code & 0xffff_0fff == 0xeef1_0a10) return .{ .reads = if (code >> 12 & 15 == 15) 0 else ~@as(u32, 0) };
+    if (code & 0xfff0_0f7f == 0xee10_0a10) return .{ .reads = single(code, 16, 7) };
+    if (code & 0xfff0_0ed0 == 0xec50_0a10) return .{ .reads = if (code & 1 << 8 == 0) single(code, 0, 5) | single(code, 0, 5) << 1 else double(code, 0, 5) };
+    if (code & 0xff30_0e00 == 0xed00_0a00) return .{ .reads = if (code & 1 << 8 == 0) single(code, 12, 22) else double(code, 12, 22) };
+    return .{};
 }
 
 const sp_bit: u16 = 1 << 13;
@@ -992,10 +1049,12 @@ pub fn Processor(comptime options: Options) type {
             const slowed = if (pending == 0) 0 else @max(self.pipeline.slowed[@ctz(pending)], self.pipeline.slowed[15 - @clz(pending)]);
             const port = if (blocks) self.pipeline.data & ~@as(u32, 3) else if (Waits != void and M7 != void and self.spec.core == .m7 and self.caches(.data, self.pipeline.data)) 0x2000_0000 | (self.pipeline.data & 4) else self.pipeline.data & 0xe000_0004;
             const axi = if (blocks and f.addressed & self.pipeline.axi_alu != 0) self.pipeline.axi_at + 4 else if (blocks and f.addressed & self.pipeline.axi != 0) self.pipeline.axi_at + 3 else if (M7 != void and Waits != void and class == .data_processing and last.blocks and last.narrow and f.sources & last.loaded != 0) self.pipeline.axi_at + 1 else 0;
-            const ready = @max(product, shift, fed, slowed, axi);
+            const float: ?Float = if (issue.fpu != null and !r.skipped and r.code & 0xec00_0e00 == 0xec00_0a00) floatOf(r.code) else null;
+            const ready = @max(product, shift, fed, slowed, axi, if (float) |x| self.pipeline.fpu.after(x) else 0);
             const extended = f.addressed & @as(u16, @truncate(self.pipeline.extended)) != 0;
             const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port) and blocks == last.blocks and (!blocks or (port >> 3 == last.port >> 3 and f.addressed & last.written == 0));
             const start = if (paired) last.start else @max(self.cycles + (if (stalled) issue.address + (if (last.narrow and !blocks) issue.load -| 1 else 0) else 0), ready);
+            if (float) |x| self.pipeline.fpu = .issued(issue.fpu.?, x, start);
             const multiply = class == .multiply;
             const loading = class == .load;
             const held = issue.slow != 0 and conditional and class == .data_processing;

@@ -46,8 +46,13 @@ pub const Timing = enum { unknown, fitted };
 pub const Pairs = std.EnumArray(Class, std.EnumSet(Class));
 
 /// How a core issues after the previous instruction: pairing, waits, stalls, penalties, prefetch, fetch
-/// words, branch targets, IT/NOP folding.
-pub const Issue = struct { pairs: Pairs, waits: Pairs, delays: std.EnumSet(Class), address: u8, product: u8, load: u8, shift: u8, pipelined: bool, width: u8, miss: u8, mispredict: u8, flush: u8, forward: u8, rmw: u8, indexed: u8, buffer: u8, slow: u8, prefetch: u8, fetch: u8, targets: u8, reach: u32, table: u8, settle: u8, fold: bool, stack: bool };
+/// words, branch targets, IT/NOP folding, the FPU.
+pub const Issue = struct { pairs: Pairs, waits: Pairs, delays: std.EnumSet(Class), address: u8, product: u8, load: u8, shift: u8, pipelined: bool, width: u8, miss: u8, mispredict: u8, flush: u8, forward: u8, rmw: u8, indexed: u8, buffer: u8, slow: u8, prefetch: u8, fetch: u8, targets: u8, reach: u32, table: u8, settle: u8, fold: bool, stack: bool, fpu: ?Fpu = null };
+
+/// How a core's FPU issues: the cycles a multiply-accumulate and a divide or square root hold it
+/// from the next floating-point instruction, and the cycles before a consumer may read an
+/// arithmetic result once the FPU is free.
+pub const Fpu = struct { chain: u8, iterate: u8, result: u8 };
 
 /// A fitted table, the rules it needs beyond one cost a class, and how the core issues.
 pub const Fit = struct { table: Table, rules: Rules, issue: ?Issue = null };
@@ -240,7 +245,7 @@ pub fn fitOf(comptime core: Core) ?Fit {
                 .per_register = register_lists,
             };
             const alone: Pairs = .initFill(.initEmpty());
-            break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 2, .zero_dividend = 2, .narrower = 3, .base = 4, .bits = 4, .signed = 0 }, .straddle = true }, .issue = .{ .pairs = alone, .waits = alone, .delays = .initMany(&.{ .data_processing, .multiply }), .address = 1, .product = 0, .load = 0, .shift = 0, .pipelined = true, .width = 0, .miss = 0, .mispredict = 0, .flush = 2, .forward = 0, .rmw = 0, .indexed = 1, .buffer = 0, .slow = 0, .prefetch = 12, .fetch = 0, .targets = 0, .reach = 0, .table = 4, .settle = 0, .fold = true, .stack = true } };
+            break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 2, .zero_dividend = 2, .narrower = 3, .base = 4, .bits = 4, .signed = 0 }, .straddle = true }, .issue = .{ .pairs = alone, .waits = alone, .delays = .initMany(&.{ .data_processing, .multiply }), .address = 1, .product = 0, .load = 0, .shift = 0, .pipelined = true, .width = 0, .miss = 0, .mispredict = 0, .flush = 2, .forward = 0, .rmw = 0, .indexed = 1, .buffer = 0, .slow = 0, .prefetch = 12, .fetch = 0, .targets = 0, .reach = 0, .table = 4, .settle = 0, .fold = true, .stack = true, .fpu = .{ .chain = 3, .iterate = 14, .result = 1 } } };
         },
         .m7 => blk: {
             var table: Table = .{ .cycles = .initFill(1), .taken = .initFill(0), .per_register = .initFill(0) };
