@@ -165,7 +165,7 @@ fn Targets(comptime n: u8) type {
     };
 }
 
-const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, folds: bool = false, blocks: bool = false, waited: bool = false, ended: u64 = 0 };
+const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, folds: bool = false, blocks: bool = false, waited: bool = false, ended: u64 = 0, vldr: bool = false };
 
 const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, table: bool = false, indexed: bool = false, _: u8 = 0 };
 
@@ -1037,7 +1037,7 @@ pub fn Processor(comptime options: Options) type {
             const shifted = f.shifted | if (conditional) f.written else 0;
             const last = self.pipeline.issued;
             if (issue.fold and class == .system and last.folds and r.code >> 8 == 0xbf and r.code & 0xf != 0) return self.fetched(issue, r, 0);
-            const late = f.addressed & (if (issue.stack) ~@as(u16, 0) else ~sp_bit) & (if (last.blocks) last.loaded else last.written) != 0;
+            const late = f.addressed & (if (issue.stack) ~@as(u16, 0) else ~sp_bit) & ((if (last.blocks) last.loaded else last.written) | @intFromBool(last.vldr)) != 0;
             const stalled = late and !(issue.targets != 0 and class == .branch) and issue.delays.contains(last.class);
             const reads = f.sources & last.written != 0;
             const product = if (f.sources & last.product != 0) last.ready else 0;
@@ -1072,6 +1072,7 @@ pub fn Processor(comptime options: Options) type {
             next.class = class;
             if (sets) next.flagged = start;
             next.written = f.written;
+            next.vldr = float != null and r.code & 0xff30_0f00 == 0xed10_0a00;
             next.leads = !paired and !f.table;
             next.start = start;
             if (multiply or held) {
