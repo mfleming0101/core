@@ -205,7 +205,7 @@ const FpUnit = struct {
     }
 };
 
-const Float = struct { kind: enum { move, arith, chain, iterate } = .move, reads: u32 = 0, addend: u32 = 0, makes: u32 = 0 };
+const Float = struct { kind: enum { move, arith, chain, iterate, pair, double } = .move, reads: u32 = 0, addend: u32 = 0, makes: u32 = 0 };
 
 fn single(code: u32, comptime four: u5, comptime one: u5) u32 {
     return @as(u32, 1) << @intCast((code >> four & 15) << 1 | (code >> one & 1));
@@ -237,8 +237,8 @@ fn floatOf(code: u32) Float {
     }
     if (code & 0xffff_0fff == 0xeef1_0a10) return .{ .reads = if (code >> 12 & 15 == 15) 0 else ~@as(u32, 0) };
     if (code & 0xfff0_0f7f == 0xee10_0a10) return .{ .reads = single(code, 16, 7) };
-    if (code & 0xfff0_0ed0 == 0xec50_0a10) return .{ .reads = if (code & 1 << 8 == 0) single(code, 0, 5) | single(code, 0, 5) << 1 else double(code, 0, 5) };
-    if (code & 0xff30_0e00 == 0xed00_0a00) return .{ .reads = if (code & 1 << 8 == 0) single(code, 12, 22) else double(code, 12, 22) };
+    if (code & 0xffe0_0ed0 == 0xec40_0a10) return .{ .kind = .pair, .reads = if (code & 1 << 20 == 0) 0 else if (code & 1 << 8 == 0) single(code, 0, 5) | single(code, 0, 5) << 1 else double(code, 0, 5) };
+    if (code & 0xff20_0e00 == 0xed00_0a00) return .{ .kind = if (code & 1 << 8 == 0) .move else .double, .reads = if (code & 1 << 20 != 0) 0 else if (code & 1 << 8 == 0) single(code, 12, 22) else double(code, 12, 22) };
     return .{};
 }
 
@@ -1025,7 +1025,8 @@ pub fn Processor(comptime options: Options) type {
             const class: Class = if (r.skipped) .data_processing else f.class;
             inline for (fits, 0..) |fit, at| {
                 const issue = (fit orelse continue).issue orelse continue;
-                if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (class) {
+                const moved: Class = if (issue.fpu != null and !r.skipped and r.code & 0xff20_0f00 == 0xed00_0b00) (if (r.code & 1 << 20 != 0) .load_multiple else .store_multiple) else class;
+                if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (moved) {
                     inline else => |c| self.dual(issue, r, f, c, conditional),
                 }) +| (if (issue.targets == 0 or class != .branch) 0 else self.predict(issue, pc, r));
             }
@@ -1112,7 +1113,12 @@ pub fn Processor(comptime options: Options) type {
             const overlap = (issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and (port < 0x2000_0000) == (last.port < 0x2000_0000) and !blocks) or hidden;
             const port_wait = if (Waits != void and (class == .load or stores or load_lists.contains(class) or lookup)) self.ported(stores, f.words, start - @intFromBool(overlap)) else 0;
             next.waited = port_wait != 0;
-            const cost = (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| beats +| forward +| flush +| table +| indexed +| port_wait +| @intFromBool(blocks and extended) +| @intFromBool(blocks and f.addressed & self.pipeline.axi_prev != 0)) -| @intFromBool(overlap or (blocks and !last.blocks));
+            const transfer: u8 = if (float) |x| switch (x.kind) {
+                .pair => issue.fpu.?.pair -| r.cycles,
+                .double => issue.fpu.?.double -| r.cycles,
+                else => 0,
+            } else 0;
+            const cost = (@as(u8, @intCast(start - self.cycles)) +| r.cycles +| transfer +| beats +| forward +| flush +| table +| indexed +| port_wait +| @intFromBool(blocks and extended) +| @intFromBool(blocks and f.addressed & self.pipeline.axi_prev != 0)) -| @intFromBool(overlap or (blocks and !last.blocks));
             if (blocks) {
                 self.pipeline.axi_prev = self.pipeline.axi;
                 self.pipeline.axi = written;
