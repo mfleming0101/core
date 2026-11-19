@@ -165,14 +165,14 @@ fn Targets(comptime n: u8) type {
     };
 }
 
-const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, folds: bool = false, blocks: bool = false, waited: bool = false, ended: u64 = 0, vldr: bool = false };
+const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, folds: bool = false, blocks: bool = false, waited: bool = false, ended: u64 = 0 };
 
-const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, table: bool = false, indexed: bool = false, _: u8 = 0 };
+const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, table: bool = false, indexed: bool = false, vfp: bool = false, _: u7 = 0 };
 
 fn factsOf(code: u32, row: u11) Facts {
     const entry = &meta.entries[row];
     const operands = operand_masks.of(entry, code);
-    return .{ .code = code, .written = operands.written, .sources = operands.sources, .addressed = operands.addressed, .shifted = shiftedOf(code), .class = entry.class, .loaded = @intCast(@ctz(loadedOf(code))), .words = @intCast(instruction.words(entry.class, code)), .sets = setsFlags(code, false), .sets_it = setsFlags(code, true), .carries = carries(code), .extends = extends(code), .shifts = shifts(code), .quick = swift(code), .narrow = narrowLoad(code), .isb = isb(code), .table = code & 0xfff0_ffe0 == 0xe8d0_f000, .indexed = indexedStore(code) };
+    return .{ .code = code, .written = operands.written, .sources = operands.sources, .addressed = operands.addressed, .shifted = shiftedOf(code), .class = entry.class, .loaded = @intCast(@ctz(loadedOf(code))), .words = @intCast(instruction.words(entry.class, code)), .sets = setsFlags(code, false), .sets_it = setsFlags(code, true), .carries = carries(code), .extends = extends(code), .shifts = shifts(code), .quick = swift(code), .narrow = narrowLoad(code), .isb = isb(code), .table = code & 0xfff0_ffe0 == 0xe8d0_f000, .indexed = indexedStore(code), .vfp = code & 0xec00_0e00 == 0xec00_0a00 };
 }
 
 const Side = enum { instruction, data };
@@ -245,6 +245,7 @@ fn floatOf(code: u32) Float {
 const sp_bit: u16 = 1 << 13;
 const store_lists: std.EnumSet(Class) = .initMany(&.{ .store_multiple, .push });
 const load_lists: std.EnumSet(Class) = .initMany(&.{ .load_multiple, .pop, .pop_pc });
+const float_classes: std.EnumSet(Class) = .initMany(&.{ .data_processing, .load, .store, .load_multiple, .store_multiple, .special_register });
 
 const Multiple = struct { valid: bool = false, start: u64 = 0, pc: u32 = 0, sp: u32 = 0, low: [8]u32 = @splat(0) };
 
@@ -1025,19 +1026,25 @@ pub fn Processor(comptime options: Options) type {
             const class: Class = if (r.skipped) .data_processing else f.class;
             inline for (fits, 0..) |fit, at| {
                 const issue = (fit orelse continue).issue orelse continue;
-                const moved: Class = if (issue.fpu != null and !r.skipped and r.code & 0xff20_0f00 == 0xed00_0b00) (if (r.code & 1 << 20 != 0) .load_multiple else .store_multiple) else class;
-                if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (moved) {
-                    inline else => |c| self.dual(issue, r, f, c, conditional),
+                if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (class) {
+                    inline else => |c| if (issue.fpu != null and (comptime float_classes.contains(c)) and f.vfp and !r.skipped) self.floated(issue, r, f, c, conditional) else self.dual(issue, r, f, c, conditional, false),
                 }) +| (if (issue.targets == 0 or class != .branch) 0 else self.predict(issue, pc, r));
             }
             unreachable;
         }
 
-        inline fn dual(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, comptime class: Class, conditional: bool) u8 {
+        noinline fn floated(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, class: Class, conditional: bool) u8 {
+            const moved: Class = if (r.code & 0xff20_0f00 == 0xed00_0b00) (if (r.code & 1 << 20 != 0) .load_multiple else .store_multiple) else class;
+            return switch (moved) {
+                inline else => |c| self.dual(issue, r, f, c, conditional, true),
+            };
+        }
+
+        inline fn dual(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, comptime class: Class, conditional: bool, comptime vfp: bool) u8 {
             const shifted = f.shifted | if (conditional) f.written else 0;
             const last = self.pipeline.issued;
             if (issue.fold and class == .system and last.folds and r.code >> 8 == 0xbf and r.code & 0xf != 0) return self.fetched(issue, r, 0);
-            const late = f.addressed & (if (issue.stack) ~@as(u16, 0) else ~sp_bit) & ((if (last.blocks) last.loaded else last.written) | @intFromBool(last.vldr)) != 0;
+            const late = f.addressed & (if (issue.stack) ~@as(u16, 0) else ~sp_bit) & (if (last.blocks) last.loaded else last.written) != 0;
             const stalled = late and !(issue.targets != 0 and class == .branch) and issue.delays.contains(last.class);
             const reads = f.sources & last.written != 0;
             const product = if (f.sources & last.product != 0) last.ready else 0;
@@ -1050,7 +1057,7 @@ pub fn Processor(comptime options: Options) type {
             const slowed = if (pending == 0) 0 else @max(self.pipeline.slowed[@ctz(pending)], self.pipeline.slowed[15 - @clz(pending)]);
             const port = if (blocks) self.pipeline.data & ~@as(u32, 3) else if (Waits != void and M7 != void and self.spec.core == .m7 and self.caches(.data, self.pipeline.data)) 0x2000_0000 | (self.pipeline.data & 4) else self.pipeline.data & 0xe000_0004;
             const axi = if (blocks and f.addressed & self.pipeline.axi_alu != 0) self.pipeline.axi_at + 4 else if (blocks and f.addressed & self.pipeline.axi != 0) self.pipeline.axi_at + 3 else if (M7 != void and Waits != void and class == .data_processing and last.blocks and last.narrow and f.sources & last.loaded != 0) self.pipeline.axi_at + 1 else 0;
-            const float: ?Float = if (issue.fpu != null and !r.skipped and r.code & 0xec00_0e00 == 0xec00_0a00) floatOf(r.code) else null;
+            const float: ?Float = if (vfp) floatOf(r.code) else null;
             const ready = @max(product, shift, fed, slowed, axi, if (float) |x| self.pipeline.fpu.after(x) else 0);
             const extended = f.addressed & @as(u16, @truncate(self.pipeline.extended)) != 0;
             const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port) and blocks == last.blocks and (!blocks or (port >> 3 == last.port >> 3 and f.addressed & last.written == 0));
@@ -1071,8 +1078,7 @@ pub fn Processor(comptime options: Options) type {
             const next = &self.pipeline.issued;
             next.class = class;
             if (sets) next.flagged = start;
-            next.written = f.written;
-            next.vldr = float != null and r.code & 0xff30_0f00 == 0xed10_0a00;
+            next.written = if (float != null and r.code & 0xff30_0f00 == 0xed10_0a00) 1 else f.written;
             next.leads = !paired and !f.table;
             next.start = start;
             if (multiply or held) {
