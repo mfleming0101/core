@@ -1150,9 +1150,12 @@ pub fn Processor(comptime options: Options) type {
             const class: Class = if (r.skipped) .data_processing else f.class;
             inline for (fits, 0..) |fit, at| {
                 const issue = (fit orelse continue).issue orelse continue;
-                if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (class) {
-                    inline else => |c| if (window and issue.fpu != null and (comptime (if (issue.fpu.?.lanes == null) float_classes else stacked_classes).contains(c)) and r.code & 0xec00_0e00 == 0xec00_0a00 and !r.skipped) self.floated(issue, r, f, c, conditional) else self.dual(issue, r, f, c, conditional, false, window),
-                }) +| (if (issue.targets == 0 or class != .branch) 0 else self.predict(issue, pc, r));
+                if (fits.len == 1 or slotOf(self.spec.core) == at) {
+                    const cost = switch (class) {
+                        inline else => |c| if (window and issue.fpu != null and (comptime (if (issue.fpu.?.lanes == null) float_classes else stacked_classes).contains(c)) and r.code & 0xec00_0e00 == 0xec00_0a00 and !r.skipped) self.floated(issue, r, f, c, conditional) else self.dual(issue, r, f, c, conditional, false, window),
+                    };
+                    return if (issue.targets == 0 or class != .branch) cost else self.predict(issue, pc, r, cost, comptime fit.?.table.cycles.get(.branch) + fit.?.table.taken.get(.branch));
+                }
             }
             unreachable;
         }
@@ -1322,7 +1325,7 @@ pub fn Processor(comptime options: Options) type {
             return cycles +| wait +| late;
         }
 
-        fn predict(self: *Self, comptime issue: core.Issue, pc: u32, r: arch_step.Result) u8 {
+        fn predict(self: *Self, comptime issue: core.Issue, pc: u32, r: arch_step.Result, cost: u8, comptime plain: u8) u8 {
             const t = &self.pipeline.targets;
             const found = t.find(pc);
             const taken = if (found) |i| t.counts[i] >= 2 else false;
@@ -1339,11 +1342,12 @@ pub fn Processor(comptime options: Options) type {
                 const wrong = (taken and moved) or far;
                 if (M7 != void and Waits != void) self.waits.pfu.turned = taken and !wrong;
                 const table = if (!wrong and r.code & 0xfff0_ffe0 == 0xe8d0_f000) issue.table else 0;
-                return if (sequential) 0 else self.refetch(issue, pc, r.code, taken, wrong) +| table;
+                const looped = taken and !wrong and target < pc and r.cycles > plain;
+                return (cost +| if (sequential) 0 else self.refetch(issue, pc, r.code, taken, wrong) +| table) -| @intFromBool(looped);
             }
             if (found) |i| t.counts[i] -|= 1;
             if (M7 != void and Waits != void) self.waits.pfu.turned = taken;
-            return if (taken) issue.mispredict else 0;
+            return cost +| if (taken) issue.mispredict else 0;
         }
 
         fn refetch(self: *Self, comptime issue: core.Issue, pc: u32, code: u32, taken: bool, wrong: bool) u8 {
