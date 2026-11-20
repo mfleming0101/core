@@ -167,12 +167,12 @@ fn Targets(comptime n: u8) type {
 
 const Issued = struct { class: Class = .data_processing, flagged: u64 = 0, written: u16 = 0, leads: bool = false, start: u64 = 0, product: u16 = 0, ready: u64 = 0, loaded: u16 = 0, fed: u64 = 0, flags: bool = false, narrow: bool = false, behind: i16 = 0, group: u16 = 0, prior: u16 = 0, slow: u16 = 0, held: u16 = 0, port: u32 = 0, shifts: bool = false, folds: bool = false, blocks: bool = false, waited: bool = false, ended: u64 = 0 };
 
-const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, table: bool = false, indexed: bool = false, vfp: bool = false, _: u7 = 0 };
+const Facts = packed struct(u128) { code: u32 = 0x1_0000, written: u16 = 0, sources: u16 = 0, addressed: u16 = 0, shifted: u16 = 0, class: Class = .data_processing, loaded: u4 = 0, words: u6 = 0, sets: bool = false, sets_it: bool = false, carries: bool = false, extends: bool = false, shifts: bool = false, quick: bool = false, narrow: bool = false, isb: bool = false, table: bool = false, indexed: bool = false, _: u8 = 0 };
 
 fn factsOf(code: u32, row: u11) Facts {
     const entry = &meta.entries[row];
     const operands = operand_masks.of(entry, code);
-    return .{ .code = code, .written = operands.written, .sources = operands.sources, .addressed = operands.addressed, .shifted = shiftedOf(code), .class = entry.class, .loaded = @intCast(@ctz(loadedOf(code))), .words = @intCast(instruction.words(entry.class, code)), .sets = setsFlags(code, false), .sets_it = setsFlags(code, true), .carries = carries(code), .extends = extends(code), .shifts = shifts(code), .quick = swift(code), .narrow = narrowLoad(code), .isb = isb(code), .table = code & 0xfff0_ffe0 == 0xe8d0_f000, .indexed = indexedStore(code), .vfp = code & 0xec00_0e00 == 0xec00_0a00 };
+    return .{ .code = code, .written = operands.written, .sources = operands.sources, .addressed = operands.addressed, .shifted = shiftedOf(code), .class = entry.class, .loaded = @intCast(@ctz(loadedOf(code))), .words = @intCast(instruction.words(entry.class, code)), .sets = setsFlags(code, false), .sets_it = setsFlags(code, true), .carries = carries(code), .extends = extends(code), .shifts = shifts(code), .quick = swift(code), .narrow = narrowLoad(code), .isb = isb(code), .table = code & 0xfff0_ffe0 == 0xe8d0_f000, .indexed = indexedStore(code) };
 }
 
 const Side = enum { instruction, data };
@@ -182,7 +182,7 @@ fn regarding(code: u32) bool {
 }
 
 fn Pipeline(comptime entries: u8, comptime facts_bits: comptime_int) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: bool = false, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0, fpu: FpUnit = .{} };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: Mode = .off, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0, fpu: FpUnit = .{} };
 }
 
 const FpUnit = struct {
@@ -204,6 +204,8 @@ const FpUnit = struct {
         return .{ .free = if (hold > 1) start + hold else 0, .made = if (x.kind == .move) 0 else x.makes, .ready = start + hold + fpu.result };
     }
 };
+
+const Mode = enum(u8) { off, on, window };
 
 const Float = struct { kind: enum { move, arith, chain, iterate, pair, double } = .move, reads: u32 = 0, addend: u32 = 0, makes: u32 = 0 };
 
@@ -363,6 +365,9 @@ pub fn Processor(comptime options: Options) type {
         for (fits) |fit| n = @max(n, if (fit) |f| if (f.issue) |issue| issue.targets else 0 else 0);
         break :blk n;
     };
+    const floats = for (fits) |fit| {
+        if (fit != null and fit.?.issue != null and fit.?.issue.?.fpu != null) break true;
+    } else false;
     const Issuing = for (fits) |fit| {
         if (fit != null and fit.?.issue != null) break Pipeline(entries, options.facts_bits);
     } else void;
@@ -645,7 +650,7 @@ pub fn Processor(comptime options: Options) type {
             const fit = if (timing == .fitted) fits[slotOf(self.spec.core)] else null;
             self.model.rules = if (fit) |f| f.rules else .{};
             self.model.costs = if (fit) |f| costsOf(f.table) else one_each;
-            if (Issuing != void) self.pipeline = .{ .issuing = fit != null and fit.?.issue != null };
+            if (Issuing != void) self.pipeline = .{ .issuing = if (fit != null and fit.?.issue != null) .on else .off };
             self.timing = if (fit != null) .fitted else .unknown;
             return self.timing;
         }
@@ -921,7 +926,7 @@ pub fn Processor(comptime options: Options) type {
             if (r.executed) {
                 self.instructions += 1;
                 if (profile.enabled and self.instructions % profile.sample_every == 0) profile.sample(pc);
-                const cost = if (Issuing != void and issuing and self.pipeline.issuing) self.issued(pc, r, conditional) else r.cycles;
+                const cost = if (Issuing != void and issuing and self.pipeline.issuing == .on) self.issued(pc, r, conditional, false) else if (Issuing != void and floats and issuing and self.pipeline.issuing == .window) self.windowed(pc, r, conditional) else r.cycles;
                 if (Waits != void) self.cycles += self.fetchedAfter(pc, r, cost);
                 self.charge(cost);
                 if (stamped and Issuing != void) self.pipeline.issued.ended = self.cycles;
@@ -953,7 +958,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn overlapped(self: *Self, n: Index) u64 {
-            if (Issuing == void or self.spec.core != .m4 or !self.pipeline.issuing or self.arrival.set & one(n) == 0) return 0;
+            if (Issuing == void or self.spec.core != .m4 or self.pipeline.issuing == .off or self.arrival.set & one(n) == 0) return 0;
             const last = self.pipeline.issued;
             if (last.waited or last.class == .store or load_lists.contains(last.class) or store_lists.contains(last.class) or self.arrival.at >= last.ended) return 0;
             return last.ended -| @max(self.arrival.at, last.start);
@@ -1016,7 +1021,7 @@ pub fn Processor(comptime options: Options) type {
             return target + self.waits.hook.wait(kind, pc +% 2, self.cycles + cost -| 1);
         }
 
-        inline fn issued(self: *Self, pc: u32, r: arch_step.Result, conditional: bool) u8 {
+        inline fn issued(self: *Self, pc: u32, r: arch_step.Result, conditional: bool, comptime window: bool) u8 {
             const set = self.pipeline.facts[(r.code *% 0x9e37_79b1 >> 32 - options.facts_bits) & ~@as(u32, 1) ..][0..2];
             const f = if (set[0].code == r.code) set[0] else if (set[1].code == r.code) set[1] else blk: {
                 set[1] = set[0];
@@ -1027,13 +1032,18 @@ pub fn Processor(comptime options: Options) type {
             inline for (fits, 0..) |fit, at| {
                 const issue = (fit orelse continue).issue orelse continue;
                 if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (class) {
-                    inline else => |c| if (issue.fpu != null and (comptime float_classes.contains(c)) and f.vfp and !r.skipped) self.floated(issue, r, f, c, conditional) else self.dual(issue, r, f, c, conditional, false),
+                    inline else => |c| if (window and issue.fpu != null and (comptime float_classes.contains(c)) and r.code & 0xec00_0e00 == 0xec00_0a00 and !r.skipped) self.floated(issue, r, f, c, conditional) else self.dual(issue, r, f, c, conditional, false),
                 }) +| (if (issue.targets == 0 or class != .branch) 0 else self.predict(issue, pc, r));
             }
             unreachable;
         }
 
-        noinline fn floated(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, class: Class, conditional: bool) u8 {
+        noinline fn windowed(self: *Self, pc: u32, r: arch_step.Result, conditional: bool) u8 {
+            self.pipeline.issuing = .on;
+            return self.issued(pc, r, conditional, true);
+        }
+
+        inline fn floated(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, class: Class, conditional: bool) u8 {
             const moved: Class = if (r.code & 0xff20_0f00 == 0xed00_0b00) (if (r.code & 1 << 20 != 0) .load_multiple else .store_multiple) else class;
             return switch (moved) {
                 inline else => |c| self.dual(issue, r, f, c, conditional, true),
@@ -1154,7 +1164,7 @@ pub fn Processor(comptime options: Options) type {
             return self.waits.hook.wait(kind, address, at);
         }
 
-        fn fetched(self: *Self, comptime issue: core.Issue, r: arch_step.Result, cycles: u8) u8 {
+        inline fn fetched(self: *Self, comptime issue: core.Issue, r: arch_step.Result, cycles: u8) u8 {
             if (issue.prefetch == 0) return cycles;
             const prefetch: i16 = issue.prefetch;
             const held = prefetch - self.pipeline.issued.behind;
@@ -1200,7 +1210,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn modify(self: *Self, at: u32) void {
-            if (!self.pipeline.issuing) return;
+            if (self.pipeline.issuing == .off) return;
             inline for (fits, 0..) |fit, i| {
                 const issue = (fit orelse continue).issue orelse continue;
                 if (fits.len == 1 or slotOf(self.spec.core) == i) return self.hold(issue, at);
@@ -1895,6 +1905,7 @@ pub fn Processor(comptime options: Options) type {
         /// Whether CPACR, NSACR and CPPWR.SU10 allow the FPU; NSACR or SU10 refusals fault NOCP to
         /// Secure, v8-M RDXYK RYTQC IsCPEnabled.
         pub fn coprocessorEnabled(self: *Self) bool {
+            if (Issuing != void and floats and self.pipeline.issuing == .on and self.spec.core == .m4) self.pipeline.issuing = .window;
             return self.fpOpen() or self.permitted();
         }
 

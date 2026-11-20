@@ -5005,7 +5005,7 @@ test "a core starts at its fit, the M0+'s, M4's or M7's, and setTiming answers o
     var m0plus = fast(.m0plus, &m);
     try std.testing.expectEqual(.fitted, m0plus.timing);
     try std.testing.expectEqual(@as(u8, 2), m0plus.costOf(.load).cycles);
-    try std.testing.expect(m0plus.model.rules.divide == null and !m0plus.model.rules.straddle and !m0plus.pipeline.issuing);
+    try std.testing.expect(m0plus.model.rules.divide == null and !m0plus.model.rules.straddle and m0plus.pipeline.issuing == .off);
     var m4 = fast(.m4, &m);
     try std.testing.expectEqual(.fitted, m4.timing);
     try std.testing.expectEqual(@as(u8, 1), m4.costOf(.store).cycles);
@@ -5014,11 +5014,11 @@ test "a core starts at its fit, the M0+'s, M4's or M7's, and setTiming answers o
     try std.testing.expectEqual(@as(u8, 1), m4.costOf(.divide).cycles);
     try std.testing.expect(m4.model.rules.divide == null and !m4.model.rules.straddle);
     var m7 = fast(.m7, &m);
-    try std.testing.expect(m7.pipeline.issuing);
+    try std.testing.expect(m7.pipeline.issuing == .on);
     try std.testing.expectEqual(.unknown, m7.setTiming(.unknown));
-    try std.testing.expect(!m7.pipeline.issuing);
+    try std.testing.expect(m7.pipeline.issuing == .off);
     try std.testing.expectEqual(.fitted, m7.setTiming(.fitted));
-    try std.testing.expect(m7.pipeline.issuing);
+    try std.testing.expect(m7.pipeline.issuing == .on);
     for ([_]arm.Core{ .m3, .m33 }) |c| {
         var cpu = fast(c, &m);
         try std.testing.expectEqual(.unknown, cpu.timing);
