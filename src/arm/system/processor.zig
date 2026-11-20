@@ -232,6 +232,11 @@ const FpUnit = struct {
         return at;
     }
 
+    fn landed(unit: *FpUnit, x: Float, at: u64) void {
+        var made = x.writes;
+        while (made != 0) : (made &= made - 1) unit.regs[@ctz(made)] = at;
+    }
+
     fn paired(unit: *const FpUnit, x: Float, start: u64) bool {
         return (x.pipe and unit.piped == start) or (x.into and (unit.into == start or unit.piped == start)) or (x.kind == .chain and unit.moved == start);
     }
@@ -1238,6 +1243,7 @@ pub fn Processor(comptime options: Options) type {
             }
             if (paired and blocks) {
                 self.pipeline.axi |= written;
+                if (paced) |l| if (float) |x| self.pipeline.fpu.landed(x, self.pipeline.axi_at + l.landed);
                 return 0;
             }
             if (paired) return if (Waits != void and (loading or lookup)) @intCast((start + self.ported(false, f.words, start)) -| self.cycles) else 0;
@@ -1260,6 +1266,7 @@ pub fn Processor(comptime options: Options) type {
                 self.pipeline.axi = written;
                 self.pipeline.axi_alu = 0;
                 self.pipeline.axi_at = self.cycles + cost - @intFromBool(last.blocks);
+                if (paced) |l| if (float) |x| self.pipeline.fpu.landed(x, self.pipeline.axi_at + l.landed);
             }
             return self.fetched(issue, r, cost, start - @intFromBool(overlap), vfp, window);
         }
