@@ -189,19 +189,79 @@ const FpUnit = struct {
     free: u64 = 0,
     made: u32 = 0,
     ready: u64 = 0,
+    regs: [32]u64 = @splat(0),
+    accs: [32]u64 = @splat(0),
+    macs: u32 = 0,
+    adder: u64 = 0,
+    file: u64 = 0,
+    piped: u64 = 0,
+    into: u64 = 0,
+    moved: u64 = 0,
+    iterating: u64 = 0,
+    latest: u64 = 0,
 
     fn after(unit: FpUnit, x: Float) u64 {
         const read = if (x.reads & unit.made != 0) unit.ready else if (x.addend & unit.made != 0) unit.ready - 1 else 0;
         return @max(unit.free, read);
     }
 
-    fn issued(comptime fpu: core.Fpu, x: Float, start: u64) FpUnit {
+    fn issued(unit: *FpUnit, comptime fpu: core.Fpu, x: Float, start: u64) void {
         const hold: u64 = switch (x.kind) {
             .chain => fpu.chain,
             .iterate => fpu.iterate,
             else => 1,
         };
-        return .{ .free = if (hold > 1) start + hold else 0, .made = if (x.kind == .move) 0 else x.makes, .ready = start + hold + fpu.result };
+        unit.free = if (hold > 1) start + hold else 0;
+        unit.made = if (x.kind == .move) 0 else x.makes;
+        unit.ready = start + hold + fpu.result;
+    }
+
+    fn waits(unit: *const FpUnit, comptime lanes: core.Lanes, x: Float) u64 {
+        var at = unit.free;
+        if (x.status) return @max(at, unit.latest -| lanes.status);
+        if (x.adds) at = @max(at, unit.adder);
+        if (x.transfer) at = @max(at, unit.file);
+        if (x.unit != .simple) at = @max(at, unit.iterating);
+        var reads = if (x.stores) 0 else x.reads;
+        while (reads != 0) : (reads &= reads - 1) at = @max(at, unit.regs[@ctz(reads)]);
+        var addend = x.addend;
+        while (addend != 0) : (addend &= addend - 1) {
+            const bit: u5 = @intCast(@ctz(addend));
+            at = @max(at, if (unit.macs >> bit & 1 != 0) unit.accs[bit] else unit.regs[bit] -| @intFromBool(!x.fused and x.unit == .simple));
+        }
+        return at;
+    }
+
+    fn paired(unit: *const FpUnit, x: Float, start: u64) bool {
+        return (x.pipe and unit.piped == start) or (x.into and (unit.into == start or unit.piped == start)) or (x.kind == .chain and unit.moved == start);
+    }
+
+    fn took(unit: *FpUnit, comptime lanes: core.Lanes, x: Float, start: u64) u8 {
+        const op: core.FpOp = switch (x.unit) {
+            .simple => .{ .block = 0, .busy = 0, .free = 0, .ready = if (x.kind == .chain) (if (x.fused) lanes.fused else lanes.chained) else if (x.writes == 0) lanes.arith else if (x.kind == .pair) lanes.paired else if (x.into) lanes.into else lanes.load },
+            inline else => |u| @field(lanes, @tagName(u)),
+        };
+        if (op.free != 0) unit.free = start + op.free;
+        if (op.busy != 0) unit.iterating = start + op.busy;
+        const ready = start + op.ready;
+        var made = x.makes | x.writes;
+        const mac = x.kind == .chain and x.unit == .simple;
+        while (made != 0) : (made &= made - 1) {
+            unit.regs[@ctz(made)] = ready;
+            unit.accs[@ctz(made)] = start + lanes.accumulate;
+        }
+        unit.macs = if (mac) unit.macs | x.makes else unit.macs & ~(x.makes | x.writes);
+        if (mac) {
+            unit.adder = start + lanes.adder;
+            unit.file = start + lanes.file;
+        }
+        if (x.pipe) {
+            unit.piped = start;
+            unit.latest = @max(unit.latest, ready);
+        }
+        if (x.into) unit.into = start;
+        if (x.transfer) unit.moved = start;
+        return if (x.status) lanes.flags else op.block;
     }
 };
 
@@ -209,7 +269,24 @@ const Mode = enum(u8) { off, on, window };
 
 const Cap = struct { word: u32 = 0, at: u64 = 0 };
 
-const Float = struct { kind: enum { move, arith, chain, iterate, pair, double } = .move, reads: u32 = 0, addend: u32 = 0, makes: u32 = 0 };
+const Float = struct { kind: enum { move, arith, chain, iterate, pair, double } = .move, reads: u32 = 0, addend: u32 = 0, makes: u32 = 0, writes: u32 = 0, unit: Unit = .simple, fused: bool = false, pipe: bool = false, adds: bool = false, transfer: bool = false, into: bool = false, status: bool = false, stores: bool = false, alone: bool = false };
+
+const Unit = enum { simple, divide, root, wide_divide, wide_root, wide_mul, wide_mla, wide_fma, wide_add, wide_sum, wide_cmp };
+
+fn wideOf(regs: *const [32]u32, code: u32, comptime four: u5) u64 {
+    const k = code >> four & 15;
+    return @as(u64, regs[2 * k + 1]) << 32 | regs[2 * k];
+}
+
+fn summed(x: Float, regs: *const [32]u32, code: u32) Float {
+    if (x.unit != .wide_add) return x;
+    const n = wideOf(regs, code, 16);
+    const m = wideOf(regs, code, 0);
+    const subtracts = (code & 1 << 6 != 0) != (n >> 63 != m >> 63);
+    var y = x;
+    if (n >> 52 & 0x7ff == m >> 52 & 0x7ff and (!subtracts or n << 1 == m << 1)) y.unit = .wide_sum;
+    return y;
+}
 
 fn single(code: u32, comptime four: u5, comptime one: u5) u32 {
     return @as(u32, 1) << @intCast((code >> four & 15) << 1 | (code >> one & 1));
@@ -219,18 +296,32 @@ fn double(code: u32, comptime four: u5, comptime one: u5) u32 {
     return @as(u32, 3) << @truncate(((code >> one & 1) << 4 | (code >> four & 15)) << 1);
 }
 
+fn sized(code: u32, wide: bool, comptime four: u5, comptime one: u5) u32 {
+    return if (wide) double(code, four, one) else single(code, four, one);
+}
+
 fn floatOf(code: u32) Float {
+    if (code & 0xff00_0e10 == 0xfe00_0a00) {
+        const wide = code & 1 << 8 != 0;
+        const rounds = code & 0xffb8_0e50 == 0xfeb8_0a40;
+        const d = sized(code, wide and code & 0xffbc_0e50 != 0xfebc_0a40, 12, 22);
+        return .{ .kind = .arith, .reads = (if (rounds) 0 else sized(code, wide, 16, 7)) | sized(code, wide, 0, 5), .makes = d, .pipe = true, .adds = true, .alone = wide or code & 0xff80_0e50 == 0xfe00_0a00 };
+    }
     if (code & 0xff00_0e10 == 0xee00_0a00) {
-        const d = single(code, 12, 22);
-        const n = single(code, 16, 7);
-        const m = single(code, 0, 5);
-        return switch (code >> 20 & 0xb) {
+        const wide = code & 1 << 8 != 0;
+        const opc2 = code >> 16 & 15;
+        const converts = code >> 20 & 0xb == 0b1011 and code & 1 << 6 != 0;
+        const d = sized(code, if (converts and opc2 == 0b0111) !wide else wide and !(converts and opc2 & 0b1110 == 0b1100), 12, 22);
+        const n = sized(code, wide, 16, 7);
+        const m = sized(code, wide and !(converts and opc2 == 0b1000), 0, 5);
+        const opc = code >> 20 & 0xb;
+        var x: Float = switch (opc) {
             0b0000, 0b0001, 0b1001, 0b1010 => .{ .kind = .chain, .reads = n | m, .addend = d, .makes = d },
             0b0010, 0b0011 => .{ .kind = .arith, .reads = n | m, .makes = d },
             0b1000 => .{ .kind = .iterate, .reads = n | m, .makes = d },
-            0b1011 => if (code & 1 << 6 == 0) .{} else switch (code >> 16 & 15) {
-                0b0000 => .{ .reads = m },
-                0b0001 => if (code & 1 << 7 == 0) .{ .reads = m } else .{ .kind = .iterate, .reads = m, .makes = d },
+            0b1011 => if (code & 1 << 6 == 0) .{ .makes = d } else switch (opc2) {
+                0b0000 => .{ .reads = m, .makes = d },
+                0b0001 => if (code & 1 << 7 == 0) .{ .reads = m, .makes = d } else .{ .kind = .iterate, .reads = m, .makes = d },
                 0b0100 => .{ .reads = d | m },
                 0b0101 => .{ .reads = d },
                 0b1010, 0b1011, 0b1110, 0b1111 => .{ .kind = .arith, .reads = d, .makes = d },
@@ -238,11 +329,31 @@ fn floatOf(code: u32) Float {
             },
             else => .{},
         };
+        const copies = opc == 0b1011 and code & 0xc0 == 0x40 and opc2 == 0;
+        x.pipe = !copies;
+        x.into = copies;
+        x.fused = opc == 0b1001 or opc == 0b1010;
+        x.adds = x.kind != .chain and x.kind != .iterate and opc != 0b0010 and !copies;
+        const compares = opc == 0b1011 and code & 1 << 6 != 0 and opc2 & 0b1110 == 0b0100;
+        x.unit = switch (x.kind) {
+            .iterate => if (opc == 0b1000) (if (wide) .wide_divide else .divide) else if (wide) .wide_root else .root,
+            .chain => if (!wide) .simple else if (x.fused) .wide_fma else .wide_mla,
+            else => if (!wide) .simple else if (opc == 0b0010) .wide_mul else if (opc == 0b0011) .wide_add else if (compares) .wide_cmp else .simple,
+        };
+        x.alone = wide and x.unit != .wide_add and x.unit != .wide_cmp;
+        return x;
     }
-    if (code & 0xffff_0fff == 0xeef1_0a10) return .{ .reads = if (code >> 12 & 15 == 15) 0 else ~@as(u32, 0) };
-    if (code & 0xfff0_0f7f == 0xee10_0a10) return .{ .reads = single(code, 16, 7) };
-    if (code & 0xffe0_0ed0 == 0xec40_0a10) return .{ .kind = .pair, .reads = if (code & 1 << 20 == 0) 0 else if (code & 1 << 8 == 0) single(code, 0, 5) | single(code, 0, 5) << 1 else double(code, 0, 5) };
-    if (code & 0xff20_0e00 == 0xed00_0a00) return .{ .kind = if (code & 1 << 8 == 0) .move else .double, .reads = if (code & 1 << 20 != 0) 0 else if (code & 1 << 8 == 0) single(code, 12, 22) else double(code, 12, 22) };
+    if (code & 0xffff_0fff == 0xeef1_0a10) return .{ .reads = if (code >> 12 & 15 == 15) 0 else ~@as(u32, 0), .status = true };
+    if (code & 0xfff0_0f7f == 0xee10_0a10) return .{ .reads = single(code, 16, 7), .transfer = true };
+    if (code & 0xfff0_0f7f == 0xee00_0a10) return .{ .writes = single(code, 16, 7), .transfer = true, .into = true };
+    if (code & 0xffe0_0ed0 == 0xec40_0a10) {
+        const regs = if (code & 1 << 8 == 0) single(code, 0, 5) | single(code, 0, 5) << 1 else double(code, 0, 5);
+        return .{ .kind = .pair, .reads = if (code & 1 << 20 == 0) 0 else regs, .writes = if (code & 1 << 20 == 0) regs else 0, .transfer = true, .into = code & 1 << 20 == 0, .alone = true };
+    }
+    if (code & 0xff20_0e00 == 0xed00_0a00) {
+        const regs = if (code & 1 << 8 == 0) single(code, 12, 22) else double(code, 12, 22);
+        return .{ .kind = if (code & 1 << 8 == 0) .move else .double, .reads = if (code & 1 << 20 != 0) 0 else regs, .writes = if (code & 1 << 20 != 0) regs else 0, .transfer = true, .stores = code & 1 << 20 == 0 };
+    }
     return .{};
 }
 
@@ -1070,12 +1181,16 @@ pub fn Processor(comptime options: Options) type {
             const slowed = if (pending == 0) 0 else @max(self.pipeline.slowed[@ctz(pending)], self.pipeline.slowed[15 - @clz(pending)]);
             const port = if (blocks) self.pipeline.data & ~@as(u32, 3) else if (Waits != void and M7 != void and self.spec.core == .m7 and self.caches(.data, self.pipeline.data)) 0x2000_0000 | (self.pipeline.data & 4) else self.pipeline.data & 0xe000_0004;
             const axi = if (blocks and f.addressed & self.pipeline.axi_alu != 0) self.pipeline.axi_at + 4 else if (blocks and f.addressed & self.pipeline.axi != 0) self.pipeline.axi_at + 3 else if (M7 != void and Waits != void and class == .data_processing and last.blocks and last.narrow and f.sources & last.loaded != 0) self.pipeline.axi_at + 1 else 0;
-            const float: ?Float = if (vfp) floatOf(r.code) else null;
-            const ready = @max(product, shift, fed, slowed, axi, if (float) |x| self.pipeline.fpu.after(x) else 0);
+            const paced = comptime if (issue.fpu) |u| u.lanes else null;
+            const float: ?Float = if (!vfp) null else if (paced != null) summed(floatOf(r.code), &self.state.fp, r.code) else floatOf(r.code);
+            const ready = @max(product, shift, fed, slowed, axi, if (float) |x| (if (paced) |l| self.pipeline.fpu.waits(l, x) else self.pipeline.fpu.after(x)) else 0);
             const extended = f.addressed & @as(u16, @truncate(self.pipeline.extended)) != 0;
-            const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port) and blocks == last.blocks and (!blocks or (port >> 3 == last.port >> 3 and f.addressed & last.written == 0));
+            const paired = last.leads and !late and ready <= last.start and issue.pairs.get(last.class).contains(class) and !(reads and issue.waits.get(last.class).contains(class)) and !(last.flags and f.carries) and !f.extends and !(last.shifts and f.shifts) and !(class == .load and last.class == .load and last.port == port) and blocks == last.blocks and (!blocks or (port >> 3 == last.port >> 3 and f.addressed & last.written == 0)) and !(paced != null and float != null and (float.?.unit != .simple or float.?.status or float.?.kind == .pair or self.pipeline.fpu.paired(float.?, last.start)));
             const start = if (paired) last.start else @max(self.cycles + (if (stalled) issue.address + (if (last.narrow and !blocks) issue.load -| 1 else 0) else 0), ready);
-            if (float) |x| self.pipeline.fpu = .issued(issue.fpu.?, x, start);
+            const block: u8 = if (float) |x| (if (paced) |l| self.pipeline.fpu.took(l, x, start) else blk: {
+                self.pipeline.fpu.issued(issue.fpu.?, x, start);
+                break :blk 0;
+            }) else 0;
             const multiply = class == .multiply;
             const loading = class == .load;
             const held = issue.slow != 0 and conditional and class == .data_processing;
@@ -1091,8 +1206,8 @@ pub fn Processor(comptime options: Options) type {
             const next = &self.pipeline.issued;
             next.class = class;
             if (sets) next.flagged = start;
-            next.written = if (float != null and r.code & 0xff30_0f00 == 0xed10_0a00) 1 else f.written;
-            next.leads = !paired and !f.table;
+            next.written = if (paced == null and float != null and r.code & 0xff30_0f00 == 0xed10_0a00) 1 else f.written;
+            next.leads = !paired and !f.table and !(paced != null and float != null and float.?.alone);
             next.start = start;
             if (multiply or held) {
                 next.product = f.written;
@@ -1133,7 +1248,7 @@ pub fn Processor(comptime options: Options) type {
             const overlap = (issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and (port < 0x2000_0000) == (last.port < 0x2000_0000) and !blocks) or hidden;
             const port_wait = if (Waits != void and (class == .load or stores or load_lists.contains(class) or lookup)) self.ported(stores, f.words, start - @intFromBool(overlap)) else 0;
             next.waited = port_wait != 0;
-            const transfer: u8 = if (float) |x| switch (x.kind) {
+            const transfer: u8 = if (paced != null) (if (block > 1) block -| r.cycles else 0) else if (float) |x| switch (x.kind) {
                 .pair => issue.fpu.?.pair -| r.cycles,
                 .double => issue.fpu.?.double -| r.cycles,
                 else => 0,
@@ -1929,7 +2044,7 @@ pub fn Processor(comptime options: Options) type {
         /// Whether CPACR, NSACR and CPPWR.SU10 allow the FPU; NSACR or SU10 refusals fault NOCP to
         /// Secure, v8-M RDXYK RYTQC IsCPEnabled.
         pub fn coprocessorEnabled(self: *Self) bool {
-            if (Issuing != void and floats and self.pipeline.issuing == .on and self.spec.core == .m4) self.pipeline.issuing = .window;
+            if (Issuing != void and floats and self.pipeline.issuing == .on) self.pipeline.issuing = .window;
             return self.fpOpen() or self.permitted();
         }
 

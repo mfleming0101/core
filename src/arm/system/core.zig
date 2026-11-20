@@ -52,7 +52,11 @@ pub const Issue = struct { pairs: Pairs, waits: Pairs, delays: std.EnumSet(Class
 /// How a core's FPU issues: the cycles a multiply-accumulate and a divide or square root hold it
 /// from the next floating-point instruction, the cycles before a consumer may read an arithmetic
 /// result once the FPU is free, and the cycles of a two-register VMOV and of a VLDR.64 or VSTR.64.
-pub const Fpu = struct { chain: u8, iterate: u8, result: u8, pair: u8, double: u8, release: u8 };
+pub const Fpu = struct { chain: u8, iterate: u8, result: u8, pair: u8, double: u8, release: u8, lanes: ?Lanes = null };
+
+pub const Lanes = struct { arith: u8, chained: u8, fused: u8, into: u8, paired: u8, load: u8, accumulate: u8, adder: u8, file: u8, status: u8, flags: u8, divide: FpOp, root: FpOp, wide_divide: FpOp, wide_root: FpOp, wide_mul: FpOp, wide_mla: FpOp, wide_fma: FpOp, wide_add: FpOp, wide_sum: FpOp, wide_cmp: FpOp };
+
+pub const FpOp = struct { block: u8, busy: u8, free: u8, ready: u8 };
 
 /// A fitted table, the rules it needs beyond one cost a class, and how the core issues.
 pub const Fit = struct { table: Table, rules: Rules, issue: ?Issue = null };
@@ -266,7 +270,7 @@ pub fn fitOf(comptime core: Core) ?Fit {
             var waits: Pairs = .initFill(.initEmpty());
             waits.set(.data_processing, .initOne(.data_processing));
             waits.set(.load, .initOne(.data_processing));
-            break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 3, .zero_dividend = 7, .narrower = 3, .base = 3, .bits = 2, .signed = 1 }, .straddle = true }, .issue = .{ .pairs = pairs, .waits = waits, .delays = .initFull(), .address = 1, .product = 1, .load = 2, .shift = 1, .pipelined = false, .width = 2, .miss = 3, .mispredict = 6, .flush = 2, .forward = 5, .rmw = 4, .indexed = 0, .buffer = 11, .slow = 2, .prefetch = 0, .fetch = 8, .targets = 34, .reach = 4096, .table = 1, .settle = 2, .fold = false, .stack = false } };
+            break :blk .{ .table = table, .rules = .{ .divide = .{ .zero_divisor = 3, .zero_dividend = 7, .narrower = 3, .base = 3, .bits = 2, .signed = 1 }, .straddle = true }, .issue = .{ .pairs = pairs, .waits = waits, .delays = .initFull(), .address = 1, .product = 1, .load = 2, .shift = 1, .pipelined = false, .width = 2, .miss = 3, .mispredict = 6, .flush = 2, .forward = 5, .rmw = 4, .indexed = 0, .buffer = 11, .slow = 2, .prefetch = 0, .fetch = 8, .targets = 34, .reach = 4096, .table = 1, .settle = 2, .fold = false, .stack = false, .fpu = .{ .chain = 1, .iterate = 1, .result = 2, .pair = 1, .double = 1, .release = 0, .lanes = .{ .arith = 3, .chained = 6, .fused = 5, .into = 2, .paired = 3, .load = 0, .accumulate = 3, .adder = 4, .file = 3, .status = 2, .flags = 5, .divide = .{ .block = 15, .busy = 16, .free = 15, .ready = 17 }, .root = .{ .block = 13, .busy = 14, .free = 13, .ready = 16 }, .wide_divide = .{ .block = 30, .busy = 30, .free = 30, .ready = 32 }, .wide_root = .{ .block = 28, .busy = 28, .free = 28, .ready = 30 }, .wide_mul = .{ .block = 4, .busy = 5, .free = 5, .ready = 7 }, .wide_mla = .{ .block = 7, .busy = 7, .free = 7, .ready = 11 }, .wide_fma = .{ .block = 7, .busy = 7, .free = 7, .ready = 10 }, .wide_add = .{ .block = 2, .busy = 2, .free = 2, .ready = 4 }, .wide_sum = .{ .block = 1, .busy = 1, .free = 1, .ready = 3 }, .wide_cmp = .{ .block = 2, .busy = 2, .free = 2, .ready = 4 } } } } };
         },
         else => null,
     };
