@@ -57,7 +57,7 @@ pub const Stream = struct {
         const entering = line != self.decoding;
         self.decoding = line;
         const held = line == self.line and index >= self.from;
-        if (entering and held and self.turn == null) self.entered = now + settle;
+        const turning = self.turn != null;
         const next = self.line +% 1;
         if (self.turn) |t| {
             self.turn = null;
@@ -77,6 +77,7 @@ pub const Stream = struct {
                 if (passed and line == next) self.entered = now + landed;
             }
         } else if (!held) self.read(hook, line, index, if (line == next and self.ahead != never) self.sequel() else @max(self.done, now));
+        if (entering and !turning) self.entered = now + settle;
         self.last = self.beats[index];
         return @intCast(self.beats[index] -| now);
     }
