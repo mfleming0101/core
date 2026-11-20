@@ -361,6 +361,7 @@ const sp_bit: u16 = 1 << 13;
 const store_lists: std.EnumSet(Class) = .initMany(&.{ .store_multiple, .push });
 const load_lists: std.EnumSet(Class) = .initMany(&.{ .load_multiple, .pop, .pop_pc });
 const float_classes: std.EnumSet(Class) = .initMany(&.{ .data_processing, .load, .store, .load_multiple, .store_multiple, .special_register });
+const stacked_classes: std.EnumSet(Class) = .initMany(&.{ .data_processing, .load, .store, .load_multiple, .store_multiple, .special_register, .push, .pop });
 
 const Multiple = struct { valid: bool = false, start: u64 = 0, pc: u32 = 0, sp: u32 = 0, low: [8]u32 = @splat(0) };
 
@@ -1145,7 +1146,7 @@ pub fn Processor(comptime options: Options) type {
             inline for (fits, 0..) |fit, at| {
                 const issue = (fit orelse continue).issue orelse continue;
                 if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (class) {
-                    inline else => |c| if (window and issue.fpu != null and (comptime float_classes.contains(c)) and r.code & 0xec00_0e00 == 0xec00_0a00 and !r.skipped) self.floated(issue, r, f, c, conditional) else self.dual(issue, r, f, c, conditional, false, window),
+                    inline else => |c| if (window and issue.fpu != null and (comptime (if (issue.fpu.?.lanes == null) float_classes else stacked_classes).contains(c)) and r.code & 0xec00_0e00 == 0xec00_0a00 and !r.skipped) self.floated(issue, r, f, c, conditional) else self.dual(issue, r, f, c, conditional, false, window),
                 }) +| (if (issue.targets == 0 or class != .branch) 0 else self.predict(issue, pc, r));
             }
             unreachable;
@@ -1240,7 +1241,7 @@ pub fn Processor(comptime options: Options) type {
                 return 0;
             }
             if (paired) return if (Waits != void and (loading or lookup)) @intCast((start + self.ported(false, f.words, start)) -| self.cycles) else 0;
-            const beats = if (issue.width == 0) 0 else ((if (r.skipped) 0 else f.words) + issue.width - 1) / issue.width;
+            const beats = if (issue.width == 0) 0 else @max((if (r.skipped) 0 else f.words) + issue.width - 1, if (paced != null and vfp) @min(f.words, 2) * issue.width else 0) / issue.width;
             const forward = if (store_lists.contains(last.class) and load_lists.contains(class)) issue.forward else 0;
             const flush = if (f.isb) issue.flush else 0;
             const table = if (class == .branch and issue.targets == 0 and f.table) issue.table else 0;
