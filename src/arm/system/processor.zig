@@ -1258,6 +1258,7 @@ pub fn Processor(comptime options: Options) type {
             const overlap = (issue.pipelined and last.class == .load and (class == .load or class == .store) and !late and (port < 0x2000_0000) == (last.port < 0x2000_0000) and !blocks) or hidden;
             const port_wait = if (Waits != void and (class == .load or stores or load_lists.contains(class) or lookup)) self.ported(stores, f.words, start - @intFromBool(overlap)) else 0;
             next.waited = port_wait != 0;
+            if (paced != null and M7 != void and Waits != void and block > 1) self.waits.pfu.hold((self.state.pc -% 4 & ~@as(u32, 7)) +% 8, start);
             const transfer: u8 = if (paced != null) (if (block > 1) block -| r.cycles else 0) else if (float) |x| switch (x.kind) {
                 .pair => issue.fpu.?.pair -| r.cycles,
                 .double => issue.fpu.?.double -| r.cycles,

@@ -39,6 +39,8 @@ pub const Stream = struct {
     table_at: u64 = 0,
     release: u64 = 0,
     entered: u64 = 0,
+    early: u32 = none,
+    early_at: u64 = 0,
 
     /// The cycles decode waits at `now` for the word at `word` from `hook`.
     pub fn fetch(self: *Stream, hook: anytype, word: u32, now: u64) u32 {
@@ -77,9 +79,18 @@ pub const Stream = struct {
                 if (passed and line == next) self.entered = now + landed;
             }
         } else if (!held) self.read(hook, line, index, if (line == next and self.ahead != never) self.sequel() else @max(self.done, now));
-        if (entering and !turning) self.entered = now + settle;
+        if (entering) {
+            if (!turning) self.entered = if (line == self.early) self.early_at else now + settle;
+            self.early = none;
+        }
         self.last = self.beats[index];
         return @intCast(self.beats[index] -| now);
+    }
+
+    pub fn hold(self: *Stream, word: u32, at: u64) void {
+        if (word >> 5 == self.decoding) return;
+        self.early = word >> 5;
+        self.early_at = at + settle;
     }
 
     /// A wrongly predicted taken branch issued at `at`: fetch reads on from `target`, or `onward` if held, until resolved.
