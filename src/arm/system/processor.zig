@@ -182,7 +182,7 @@ fn regarding(code: u32) bool {
 }
 
 fn Pipeline(comptime entries: u8, comptime facts_bits: comptime_int) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: Mode = .off, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0, fpu: FpUnit = .{} };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: Mode = .off, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0, fpu: FpUnit = .{}, caps: [4]Cap = @splat(.{}), pending: ?u2 = null, until: u64 = 0 };
 }
 
 const FpUnit = struct {
@@ -206,6 +206,8 @@ const FpUnit = struct {
 };
 
 const Mode = enum(u8) { off, on, window };
+
+const Cap = struct { word: u32 = 0, at: u64 = 0 };
 
 const Float = struct { kind: enum { move, arith, chain, iterate, pair, double } = .move, reads: u32 = 0, addend: u32 = 0, makes: u32 = 0 };
 
@@ -1032,28 +1034,29 @@ pub fn Processor(comptime options: Options) type {
             inline for (fits, 0..) |fit, at| {
                 const issue = (fit orelse continue).issue orelse continue;
                 if (fits.len == 1 or slotOf(self.spec.core) == at) return (switch (class) {
-                    inline else => |c| if (window and issue.fpu != null and (comptime float_classes.contains(c)) and r.code & 0xec00_0e00 == 0xec00_0a00 and !r.skipped) self.floated(issue, r, f, c, conditional) else self.dual(issue, r, f, c, conditional, false),
+                    inline else => |c| if (window and issue.fpu != null and (comptime float_classes.contains(c)) and r.code & 0xec00_0e00 == 0xec00_0a00 and !r.skipped) self.floated(issue, r, f, c, conditional) else self.dual(issue, r, f, c, conditional, false, window),
                 }) +| (if (issue.targets == 0 or class != .branch) 0 else self.predict(issue, pc, r));
             }
             unreachable;
         }
 
         noinline fn windowed(self: *Self, pc: u32, r: arch_step.Result, conditional: bool) u8 {
-            self.pipeline.issuing = .on;
-            return self.issued(pc, r, conditional, true);
+            const cost = self.issued(pc, r, conditional, true);
+            if (self.pipeline.pending == null and self.pipeline.until < self.cycles + cost) self.pipeline.issuing = .on;
+            return cost;
         }
 
         inline fn floated(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, class: Class, conditional: bool) u8 {
             const moved: Class = if (r.code & 0xff20_0f00 == 0xed00_0b00) (if (r.code & 1 << 20 != 0) .load_multiple else .store_multiple) else class;
             return switch (moved) {
-                inline else => |c| self.dual(issue, r, f, c, conditional, true),
+                inline else => |c| self.dual(issue, r, f, c, conditional, true, true),
             };
         }
 
-        inline fn dual(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, comptime class: Class, conditional: bool, comptime vfp: bool) u8 {
+        inline fn dual(self: *Self, comptime issue: core.Issue, r: arch_step.Result, f: Facts, comptime class: Class, conditional: bool, comptime vfp: bool, comptime window: bool) u8 {
             const shifted = f.shifted | if (conditional) f.written else 0;
             const last = self.pipeline.issued;
-            if (issue.fold and class == .system and last.folds and r.code >> 8 == 0xbf and r.code & 0xf != 0) return self.fetched(issue, r, 0);
+            if (issue.fold and class == .system and last.folds and r.code >> 8 == 0xbf and r.code & 0xf != 0) return self.fetched(issue, r, 0, self.pipeline.issued.start, vfp, window);
             const late = f.addressed & (if (issue.stack) ~@as(u16, 0) else ~sp_bit) & (if (last.blocks) last.loaded else last.written) != 0;
             const stalled = late and !(issue.targets != 0 and class == .branch) and issue.delays.contains(last.class);
             const reads = f.sources & last.written != 0;
@@ -1142,7 +1145,7 @@ pub fn Processor(comptime options: Options) type {
                 self.pipeline.axi_alu = 0;
                 self.pipeline.axi_at = self.cycles + cost - @intFromBool(last.blocks);
             }
-            return self.fetched(issue, r, cost);
+            return self.fetched(issue, r, cost, start - @intFromBool(overlap), vfp, window);
         }
 
         fn ported(self: *Self, stores: bool, words: u6, at: u64) u8 {
@@ -1164,7 +1167,7 @@ pub fn Processor(comptime options: Options) type {
             return self.waits.hook.wait(kind, address, at);
         }
 
-        inline fn fetched(self: *Self, comptime issue: core.Issue, r: arch_step.Result, cycles: u8) u8 {
+        inline fn fetched(self: *Self, comptime issue: core.Issue, r: arch_step.Result, cycles: u8, at: u64, comptime vfp: bool, comptime window: bool) u8 {
             if (issue.prefetch == 0) return cycles;
             const prefetch: i16 = issue.prefetch;
             const held = prefetch - self.pipeline.issued.behind;
@@ -1172,7 +1175,28 @@ pub fn Processor(comptime options: Options) type {
             const wait: u8 = if (held < length) @intCast(@divFloor(length - held + 3, 4)) else 0;
             const left = held + 4 * @as(i16, wait) - length - @as(i16, if (r.class() == .branch and !r.branched) 4 else 0);
             self.pipeline.issued.behind = if (r.branched) 0 else @max(prefetch - left - 4 * @as(i16, cycles), 0);
-            return cycles +| wait;
+            if (!window or issue.fpu == null) return cycles +| wait;
+            if (r.branched) {
+                self.pipeline.caps = @splat(.{});
+                self.pipeline.pending = null;
+                self.pipeline.until = 0;
+                return cycles +| wait;
+            }
+            if (self.pipeline.pending) |p| {
+                self.pipeline.caps[p].at = at + wait + issue.fpu.?.release;
+                self.pipeline.until = self.pipeline.caps[p].at;
+            }
+            self.pipeline.pending = null;
+            const word = (self.state.pc -% 1) >> 2;
+            const cap = self.pipeline.caps[word & 3];
+            const late: u8 = if (cap.word == word) @intCast(cap.at -| (at + wait)) else 0;
+            if (vfp) {
+                const done = (self.state.pc -% 4) >> 2;
+                self.pipeline.caps[done & 3] = .{ .word = done +% 4, .at = 0 };
+                self.pipeline.pending = @truncate(done);
+            }
+            self.pipeline.issued.start += late;
+            return cycles +| wait +| late;
         }
 
         fn predict(self: *Self, comptime issue: core.Issue, pc: u32, r: arch_step.Result) u8 {
