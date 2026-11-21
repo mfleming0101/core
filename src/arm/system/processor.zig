@@ -1154,6 +1154,7 @@ pub fn Processor(comptime options: Options) type {
                     const cost = switch (class) {
                         inline else => |c| if (window and issue.fpu != null and (comptime (if (issue.fpu.?.lanes == null) float_classes else stacked_classes).contains(c)) and r.code & 0xec00_0e00 == 0xec00_0a00 and !r.skipped) self.floated(issue, r, f, c, conditional) else self.dual(issue, r, f, c, conditional, false, window),
                     };
+                    if (M7 != void and Waits != void and issue.targets != 0 and class == .branch_link and @max(self.state.pc, pc) - @min(self.state.pc, pc) < issue.reach) self.waits.pfu.turned = true;
                     return if (issue.targets == 0 or class != .branch) cost else self.predict(issue, pc, r, cost, comptime fit.?.table.cycles.get(.branch) + fit.?.table.taken.get(.branch));
                 }
             }
