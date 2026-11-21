@@ -182,7 +182,7 @@ fn regarding(code: u32) bool {
 }
 
 fn Pipeline(comptime entries: u8, comptime facts_bits: comptime_int) type {
-    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: Mode = .off, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0, fpu: FpUnit = .{}, caps: [4]Cap = @splat(.{}), pending: ?u2 = null, until: u64 = 0 };
+    return struct { facts: [1 << facts_bits]Facts = @splat(.{}), issuing: Mode = .off, issued: Issued = .{}, targets: Targets(entries) = .{}, stream: u32 = 1, redirect: u64 = 0, ports: [2]u64 = @splat(0), data: u32 = 0, slowed: [17]u64 = @splat(0), axi: u16 = 0, axi_prev: u16 = 0, axi_alu: u16 = 0, axi_at: u64 = 0, extended: u32 = 0, fpu: FpUnit = .{}, caps: [4]Cap = @splat(.{}), pending: ?u2 = null, until: u64 = 0, parked: Parked = .{} };
 }
 
 const FpUnit = struct {
@@ -273,6 +273,8 @@ const FpUnit = struct {
 const Mode = enum(u8) { off, on, window };
 
 const Cap = struct { word: u32 = 0, at: u64 = 0 };
+
+const Parked = struct { pc: u32 = 0, r: arch_step.Result = .{}, conditional: bool = false };
 
 const Float = struct { kind: enum { move, arith, chain, iterate, pair, double } = .move, reads: u32 = 0, addend: u32 = 0, makes: u32 = 0, writes: u32 = 0, unit: Unit = .simple, fused: bool = false, pipe: bool = false, adds: bool = false, transfer: bool = false, into: bool = false, status: bool = false, stores: bool = false, alone: bool = false };
 
@@ -608,6 +610,8 @@ pub fn Processor(comptime options: Options) type {
         const asleep_due: u32 = 1 << 3;
 
         const bound_due: u32 = 1 << 5;
+
+        const parked_due: u32 = 1 << 6;
 
         const kept_due: u32 = asleep_due | reset_due | bound_due;
 
@@ -999,7 +1003,7 @@ pub fn Processor(comptime options: Options) type {
                 if (self.due != 0 and self.attend()) {
                     self.redirected = true;
                 } else {
-                    r = if (self.trace.recording()) self.perform(self.model, true, true) else self.perform(self.model, false, true);
+                    r = if (self.trace.recording()) self.perform(self.model, true, true, false) else self.perform(self.model, false, true, false);
                     self.redirected = r.branched;
                 }
             }
@@ -1026,7 +1030,7 @@ pub fn Processor(comptime options: Options) type {
             }
         }
 
-        fn perform(self: *Self, model: arch_step.Model, comptime tracing: bool, comptime issuing: bool) arch_step.Result {
+        fn perform(self: *Self, model: arch_step.Model, comptime tracing: bool, comptime issuing: bool, comptime parks: bool) arch_step.Result {
             if (tracing) self.forget();
             const pc = self.state.pc;
             if (abandoning) self.keep(pc);
@@ -1045,14 +1049,26 @@ pub fn Processor(comptime options: Options) type {
             if (r.executed) {
                 self.instructions += 1;
                 if (profile.enabled and self.instructions % profile.sample_every == 0) profile.sample(pc);
-                const cost = if (Issuing != void and issuing and self.pipeline.issuing == .on) self.issued(pc, r, conditional, false) else if (Issuing != void and floats and issuing and self.pipeline.issuing == .window) self.windowed(pc, r, conditional) else r.cycles;
-                if (Waits != void) self.cycles += self.fetchedAfter(pc, r, cost);
-                self.charge(cost);
-                if (stamped and Issuing != void) self.pipeline.issued.ended = self.cycles;
+                const cost = if (Issuing != void and issuing and self.pipeline.issuing == .on) self.issued(pc, r, conditional, false) else if (Issuing != void and floats and issuing and self.pipeline.issuing == .window) (if (parks) {
+                    self.pipeline.parked = .{ .pc = pc, .r = r, .conditional = conditional };
+                    self.due |= parked_due;
+                    return r;
+                } else self.windowed(pc, r, conditional)) else r.cycles;
+                self.priceAfter(pc, r, cost);
             }
+            self.conclude(r);
+            return r;
+        }
+
+        inline fn priceAfter(self: *Self, pc: u32, r: arch_step.Result, cost: u8) void {
+            if (Waits != void) self.cycles += self.fetchedAfter(pc, r, cost);
+            self.charge(cost);
+            if (stamped and Issuing != void) self.pipeline.issued.ended = self.cycles;
+        }
+
+        inline fn conclude(self: *Self, r: arch_step.Result) void {
             if (abandoning) self.kept.valid = r.executed and multiple(r.code) and self.due & returned_due == 0;
             self.stop = if (r.halted) self.settle(r.stop) else null;
-            return r;
         }
 
         inline fn keep(self: *Self, pc: u32) void {
@@ -1376,8 +1392,8 @@ pub fn Processor(comptime options: Options) type {
             port.* = @max(port.*, self.cycles) + issue.rmw;
         }
 
-        fn advance(self: *Self, model: arch_step.Model, comptime tracing: bool, comptime issuing: bool) ?Stop {
-            _ = @call(.always_inline, perform, .{ self, model, tracing, issuing });
+        fn advance(self: *Self, model: arch_step.Model, comptime tracing: bool, comptime issuing: bool, comptime parks: bool) ?Stop {
+            _ = @call(.always_inline, perform, .{ self, model, tracing, issuing, parks });
             return self.stop;
         }
 
@@ -1827,6 +1843,7 @@ pub fn Processor(comptime options: Options) type {
         }
 
         fn loop(self: *Self, limit: Limit, comptime tracing: bool, comptime timing: core.Timing) align(64) Run {
+            if (comptime floats and Issuing != void and timing == .fitted) return self.parking(limit, tracing, timing);
             if (limit.instructions == 0) return .{ .instructions = 0, .cycles = 0, .latency = 0, .stop = null, .ended = .budget };
             const model: arch_step.Model = if (timing == .fitted) self.model else if (gate != null) comptime .{ .decoding = decode.selectionOf(specs[0].architecture), .costs = one_each } else .{ .decoding = self.model.decoding, .costs = one_each };
             const instructions = self.instructions;
@@ -1849,7 +1866,7 @@ pub fn Processor(comptime options: Options) type {
                         continue;
                     }
                 }
-                stop = @call(.always_inline, advance, .{ self, model, tracing, timing == .fitted });
+                stop = @call(.always_inline, advance, .{ self, model, tracing, timing == .fitted, false });
                 if (stop != null) break;
             }
             if (self.due & returned_due != 0) {
@@ -1863,6 +1880,58 @@ pub fn Processor(comptime options: Options) type {
                 .stop = stop,
                 .ended = if (stop != null) .stopped else if (requested) .reset else if (self.due & ends & asleep_due != 0) .asleep else if (self.cycles >= self.deadline) .deadline else .budget,
             };
+        }
+
+        fn parking(self: *Self, limit: Limit, comptime tracing: bool, comptime timing: core.Timing) Run {
+            if (limit.instructions == 0) return .{ .instructions = 0, .cycles = 0, .latency = 0, .stop = null, .ended = .budget };
+            if (self.due & bound_due != 0) return .{ .instructions = 0, .cycles = 0, .latency = 0, .stop = null, .ended = .deadline };
+            self.leaveBreakpoint();
+            if (self.stop == .vector_catch) self.stop = null;
+            const base: Base = .{ .instructions = self.instructions, .cycles = self.cycles, .latency = self.latency };
+            return self.cycled(limit, tracing, timing, true, base, false, null);
+        }
+
+        const Base = struct { instructions: u64, cycles: u64, latency: u64 };
+
+        inline fn cycled(self: *Self, limit: Limit, comptime tracing: bool, comptime timing: core.Timing, comptime parks: bool, base: Base, was: bool, stopped_: ?Stop) Run {
+            const model: arch_step.Model = if (timing == .fitted) self.model else if (gate != null) comptime .{ .decoding = decode.selectionOf(specs[0].architecture), .costs = one_each } else .{ .decoding = self.model.decoding, .costs = one_each };
+            var stop: ?Stop = stopped_;
+            var requested = was;
+            const ends = bound_due | (if (limit.asleep) asleep_due else 0) | (if (parks) parked_due else 0);
+            if (stop == null) while (self.instructions - base.instructions < limit.instructions) {
+                if (builtin.mode == .Debug and !(parks and self.due & parked_due != 0)) self.agrees();
+                if (self.due != 0) {
+                    if (self.due & ends != 0) break;
+                    requested = self.due & reset_due != 0;
+                    if (self.attend()) {
+                        stop = self.stop;
+                        if (stop != null or requested) break;
+                        continue;
+                    }
+                }
+                stop = @call(.always_inline, advance, .{ self, model, tracing, timing == .fitted, parks });
+                if (stop != null) break;
+            };
+            if (parks and self.due & parked_due != 0) return self.unparked(limit, tracing, timing, base, requested);
+            if (self.due & returned_due != 0) {
+                self.finishReturn();
+                stop = self.stop;
+            }
+            return .{
+                .instructions = self.instructions - base.instructions,
+                .cycles = self.cycles - base.cycles,
+                .latency = self.latency - base.latency,
+                .stop = stop,
+                .ended = if (stop != null) .stopped else if (requested) .reset else if (self.due & ends & asleep_due != 0) .asleep else if (self.cycles >= self.deadline) .deadline else .budget,
+            };
+        }
+
+        noinline fn unparked(self: *Self, limit: Limit, comptime tracing: bool, comptime timing: core.Timing, base: Base, requested: bool) Run {
+            self.due &= ~parked_due;
+            const p = self.pipeline.parked;
+            self.priceAfter(p.pc, p.r, self.windowed(p.pc, p.r, p.conditional));
+            self.conclude(p.r);
+            return self.cycled(limit, tracing, timing, false, base, requested, self.stop);
         }
 
         /// Prints the stop, the last records, the fault, the status registers and any unreachable interrupt.
